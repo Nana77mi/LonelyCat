@@ -2,7 +2,7 @@
 
 setup:
 	python -m pip install --upgrade pip
-	python -m pip install -e "apps/core-api[test]" -e "apps/agent-worker[test]" -e "packages/protocol[test]" -e "packages/memory"
+	python -m pip install -e "apps/agent-worker[test]" -e "packages/protocol[test]" -e "packages/memory"
 	pnpm install
 
 test:

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -12,5 +12,6 @@ dependencies = [
     "pydantic>=2.6",
 ]
 
-[tool.setuptools]
-packages = ["memory"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["memory*"]
