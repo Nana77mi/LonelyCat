@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 
 from runtime.lane_queue import LaneQueue
+from runtime.memory_hook import MemoryHook
+from memory.facts import FactCandidate, FactRecord, FactsStore
 
 
 class LLMProtocol(Protocol):
@@ -49,11 +51,15 @@ class AgentLoop:
         tools: ToolRunnerProtocol,
         transcript: TranscriptStore,
         queue: LaneQueue,
+        memory_hook: Optional[MemoryHook] = None,
+        facts: Optional[FactsStore] = None,
     ) -> None:
         self._llm = llm
         self._tools = tools
         self._transcript = transcript
         self._queue = queue
+        self._memory_hook = memory_hook
+        self._facts = facts
 
     async def handle(self, session_id: str, user_text: str) -> str:
         async def run_loop() -> str:
@@ -66,6 +72,7 @@ class AgentLoop:
             if first.get("type") == "final":
                 assistant_event = {"role": "assistant", "content": first["content"]}
                 await self._transcript.append(session_id, assistant_event)
+                await self._run_memory_hook(session_id)
                 return first["content"]
 
             if first.get("type") != "tool_call":
@@ -96,6 +103,54 @@ class AgentLoop:
 
             assistant_event = {"role": "assistant", "content": second["content"]}
             await self._transcript.append(session_id, assistant_event)
+            await self._run_memory_hook(session_id)
             return second["content"]
 
         return await self._queue.submit(session_id, run_loop)
+
+    async def _run_memory_hook(self, session_id: str) -> None:
+        if self._memory_hook is None or self._facts is None:
+            return
+        transcript = await self._transcript.get(session_id)
+        candidates = await self._memory_hook.extract_candidates(session_id, transcript)
+        if not candidates:
+            return
+        for candidate in candidates:
+            await self._transcript.append(
+                session_id,
+                {
+                    "type": "memory_candidate",
+                    "candidate": self._candidate_summary(candidate),
+                },
+            )
+        committed: List[FactRecord] = []
+        for candidate in candidates:
+            committed.append(await self._facts.propose(candidate))
+        for record in committed:
+            await self._transcript.append(
+                session_id,
+                {
+                    "type": "memory_commit",
+                    "record": self._record_summary(record),
+                },
+            )
+        await self._memory_hook.on_committed(session_id, committed, transcript)
+
+    def _candidate_summary(self, candidate: FactCandidate) -> Dict[str, Any]:
+        return {
+            "subject": candidate.subject,
+            "predicate": candidate.predicate,
+            "object": candidate.object,
+            "confidence": candidate.confidence,
+            "source": dict(candidate.source),
+        }
+
+    def _record_summary(self, record: FactRecord) -> Dict[str, Any]:
+        return {
+            "id": record.id,
+            "subject": record.subject,
+            "predicate": record.predicate,
+            "object": record.object,
+            "confidence": record.confidence,
+            "source": dict(record.source),
+        }
