@@ -1,5 +1,2 @@
-from pydantic import BaseModel
-
-
-class Settings(BaseModel):
+class Settings:
     app_name: str = "LonelyCat Core API"

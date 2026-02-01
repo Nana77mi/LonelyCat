@@ -1,6 +1,6 @@
 from typing import List
 
-from pydantic import BaseModel
+from protocol.base import BaseModel
 
 
 class SkillManifest(BaseModel):

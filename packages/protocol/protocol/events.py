@@ -1,6 +1,6 @@
 from typing import Any, Dict
 
-from pydantic import BaseModel
+from protocol.base import BaseModel
 
 
 class InboundEvent(BaseModel):

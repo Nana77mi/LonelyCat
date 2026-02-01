@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "node --loader ts-node/esm src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
+    "test": "node --test \"tests/**/*.test.js\"",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write ."
   },
