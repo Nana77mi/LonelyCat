@@ -6,7 +6,6 @@ export type FactRecord = {
   predicate: string;
   object: unknown;
   confidence: number;
-  source: Record<string, unknown>;
   status: FactStatus;
   created_at: number;
   seq: number;
@@ -52,7 +51,17 @@ const buildUrl = (path: string, params?: Record<string, string | undefined>) => 
   return url.toString();
 };
 
-export const fetchFacts = async (params: FetchFactsParams = {}) => {
+type FetchFactsResponse = {
+  items: FactRecord[];
+};
+
+type FactChainResponse = {
+  root_id: string;
+  items: FactRecord[];
+  truncated: boolean;
+};
+
+export const fetchFacts = async (params: FetchFactsParams = {}): Promise<FetchFactsResponse> => {
   const url = buildUrl("/memory/facts", {
     subject: params.subject,
     status: params.status,
@@ -62,10 +71,10 @@ export const fetchFacts = async (params: FetchFactsParams = {}) => {
   if (!response.ok) {
     throw new Error(`Failed to fetch facts (${response.status})`);
   }
-  return (await response.json()) as { items: FactRecord[] };
+  return (await response.json()) as FetchFactsResponse;
 };
 
-export const proposeFact = async (candidate: FactCandidate) => {
+export const proposeFact = async (candidate: FactCandidate): Promise<FactRecord> => {
   const url = buildUrl("/memory/facts/propose");
   const response = await fetch(url, {
     method: "POST",
@@ -78,7 +87,7 @@ export const proposeFact = async (candidate: FactCandidate) => {
   return (await response.json()) as FactRecord;
 };
 
-export const retractFact = async (id: string, reason: string) => {
+export const retractFact = async (id: string, reason: string): Promise<FactRecord> => {
   const url = buildUrl(`/memory/facts/${id}/retract`);
   const response = await fetch(url, {
     method: "POST",
@@ -91,7 +100,7 @@ export const retractFact = async (id: string, reason: string) => {
   return (await response.json()) as FactRecord;
 };
 
-export const fetchFactChain = async (id: string, maxDepth = 20) => {
+export const fetchFactChain = async (id: string, maxDepth = 20): Promise<FactChainResponse> => {
   const url = buildUrl(`/memory/facts/${id}/chain`, {
     max_depth: String(maxDepth),
   });
@@ -99,9 +108,5 @@ export const fetchFactChain = async (id: string, maxDepth = 20) => {
   if (!response.ok) {
     throw new Error(`Failed to fetch fact chain (${response.status})`);
   }
-  return (await response.json()) as {
-    root_id: string;
-    items: FactRecord[];
-    truncated: boolean;
-  };
+  return (await response.json()) as FactChainResponse;
 };
