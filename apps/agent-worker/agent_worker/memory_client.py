@@ -10,9 +10,9 @@ class MemoryClient:
     def __init__(self, base_url: str | None = None) -> None:
         self._base_url = base_url or os.getenv("LONELYCAT_CORE_API_URL", "http://localhost:8000")
 
-    def propose(self, proposal: FactProposal) -> str:
+    def propose(self, proposal: FactProposal, source_note: str = "mvp-1") -> str:
         payload = asdict(proposal)
-        payload["source"] = {"type": "agent", "note": "mvp-1"}
+        payload["source"] = {"type": "agent", "note": source_note}
         url = f"{self._base_url}/memory/facts/propose"
         import httpx
 

@@ -17,8 +17,8 @@ class MemorySpy:
         self.calls = []
         self.response_id = "record-123"
 
-    def propose(self, candidate):
-        self.calls.append(candidate)
+    def propose(self, candidate, source_note: str = "mvp-1"):
+        self.calls.append({"proposal": candidate, "source_note": source_note})
         return self.response_id
 
 
@@ -26,7 +26,7 @@ def test_cli_no_fact(capsys):
     llm = FakeLLM("NO_FACT")
 
     class NoCallMemory:
-        def propose(self, candidate):
+        def propose(self, candidate, source_note: str = "mvp-1"):
             raise AssertionError("Memory client should not be called")
 
     main(["It is raining today"], llm=llm, memory_client=NoCallMemory())
