@@ -1,0 +1,28 @@
+version: "3.9"
+services:
+  core-api:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - ../apps/core-api:/app
+    command: ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "8000:8000"
+  agent-worker:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - ../apps/agent-worker:/app
+    command: ["python", "-m", "worker.main"]
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: lonelycat
+      POSTGRES_PASSWORD: lonelycat
+      POSTGRES_DB: lonelycat
+    ports:
+      - "5432:5432"

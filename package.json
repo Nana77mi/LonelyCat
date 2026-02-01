@@ -1,0 +1,10 @@
+{
+  "name": "lonelycat-root",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "test": "pnpm -r test && python -m pytest",
+    "lint": "pnpm -r lint",
+    "format": "pnpm -r format"
+  }
+}
