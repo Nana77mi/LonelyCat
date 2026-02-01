@@ -21,6 +21,13 @@ const defaultCandidate = {
   confidence: 0.8,
 };
 
+const renderObjectValue = (value: unknown) => {
+  if (typeof value === "string") {
+    return value;
+  }
+  return JSON.stringify(value, null, 2);
+};
+
 export const MemoryPage = () => {
   const [facts, setFacts] = useState<FactRecord[]>([]);
   const [status, setStatus] = useState<StatusFilter>("ALL");
@@ -61,6 +68,16 @@ export const MemoryPage = () => {
       setLoading(false);
     }
   }, [fetchParams]);
+
+  const sortedFacts = useMemo(() => {
+    return [...facts].sort((a, b) => {
+      const subjectCompare = a.subject.localeCompare(b.subject);
+      if (subjectCompare !== 0) {
+        return subjectCompare;
+      }
+      return a.seq - b.seq;
+    });
+  }, [facts]);
 
   useEffect(() => {
     void loadFacts();
@@ -198,16 +215,22 @@ export const MemoryPage = () => {
           </tr>
         </thead>
         <tbody>
-          {facts.length === 0 ? (
+          {sortedFacts.length === 0 ? (
             <tr>
               <td colSpan={6}>No facts yet.</td>
             </tr>
           ) : (
-            facts.map((fact) => (
+            sortedFacts.map((fact) => (
               <tr key={fact.id} onClick={() => setSelectedFactId(fact.id)}>
                 <td>{fact.predicate}</td>
-                <td>{typeof fact.object === "string" ? fact.object : JSON.stringify(fact.object)}</td>
-                <td>{fact.status.toUpperCase()}</td>
+                <td>
+                  {typeof fact.object === "string" ? (
+                    renderObjectValue(fact.object)
+                  ) : (
+                    <pre>{renderObjectValue(fact.object)}</pre>
+                  )}
+                </td>
+                <td>{fact.status}</td>
                 <td>{fact.seq}</td>
                 <td>{new Date(fact.created_at * 1000).toLocaleString()}</td>
                 <td>
@@ -215,12 +238,13 @@ export const MemoryPage = () => {
                     type="text"
                     placeholder="Reason"
                     value={retractReasons[fact.id] ?? ""}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      event.stopPropagation();
                       setRetractReasons((current) => ({
                         ...current,
                         [fact.id]: event.target.value,
-                      }))
-                    }
+                      }));
+                    }}
                     onClick={(event) => event.stopPropagation()}
                     disabled={fact.status === "RETRACTED"}
                   />
@@ -230,7 +254,11 @@ export const MemoryPage = () => {
                       event.stopPropagation();
                       void handleRetract(fact.id);
                     }}
-                    disabled={fact.status === "RETRACTED" || loading}
+                    disabled={
+                      fact.status === "RETRACTED" ||
+                      loading ||
+                      !(retractReasons[fact.id] ?? "").trim()
+                    }
                   >
                     Retract
                   </button>

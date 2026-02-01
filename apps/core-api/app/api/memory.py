@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
 from enum import Enum
 import json
 from functools import lru_cache
@@ -48,9 +47,20 @@ def _ensure_json_safe(value: Any) -> Any:
 
 
 def _serialize_record(record: FactRecord) -> Dict[str, Any]:
-    data = asdict(record)
-    data["status"] = record.status.name
-    data["object"] = _ensure_json_safe(record.object)
+    data: Dict[str, Any] = {
+        "id": record.id,
+        "subject": record.subject,
+        "predicate": record.predicate,
+        "object": _ensure_json_safe(record.object),
+        "confidence": record.confidence,
+        "status": record.status.name,
+        "created_at": record.created_at,
+        "seq": record.seq,
+    }
+    if record.status.name == "OVERRIDDEN":
+        data["overrides"] = record.overrides
+    if record.status.name == "RETRACTED":
+        data["retracted_reason"] = record.retracted_reason
     return data
 
 
@@ -114,6 +124,8 @@ async def retract_fact(
     record = await store.get(record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Fact not found")
+    if record.status.name == "RETRACTED":
+        raise HTTPException(status_code=400, detail="Fact already retracted")
     await store.retract(record_id, payload.reason)
     updated = await store.get(record_id)
     if updated is None:
@@ -140,6 +152,7 @@ async def get_fact_chain(
         visited.add(current_id)
         record = await store.get(current_id)
         if record is None:
+            truncated = True
             break
         items.append(_serialize_record(record))
         current_id = record.overrides
