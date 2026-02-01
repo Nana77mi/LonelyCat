@@ -1,0 +1,25 @@
+services:
+  core-api:
+    build:
+      context: .
+      dockerfile: apps/core-api/Dockerfile
+    container_name: lonelycat-core-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  web-console:
+    build:
+      context: .
+      dockerfile: apps/web-console/Dockerfile
+    container_name: lonelycat-web-console
+    ports:
+      - "5173:5173"
+    env_file:
+      - .env
+    depends_on:
+      - core-api
+    environment:
+      VITE_CORE_API_URL: ${VITE_CORE_API_URL:-http://core-api:8000}

@@ -28,7 +28,7 @@ export type FetchFactsParams = {
   predicate_contains?: string;
 };
 
-const baseUrl = import.meta.env.VITE_CORE_API_URL ?? "";
+const baseUrl = import.meta.env.VITE_CORE_API_URL ?? "http://localhost:8000";
 
 const joinBaseUrl = (base: string, path: string) => {
   if (!base) {
