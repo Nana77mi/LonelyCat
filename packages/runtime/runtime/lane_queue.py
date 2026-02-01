@@ -42,3 +42,11 @@ class LaneQueue:
                     future.set_exception(exc)
             finally:
                 queue.task_done()
+
+            if queue.empty():
+                async with self._state_lock:
+                    current_queue = self._lanes.get(lane_key)
+                    if current_queue is queue and queue.empty():
+                        self._lanes.pop(lane_key, None)
+                        self._workers.pop(lane_key, None)
+                        return

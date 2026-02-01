@@ -5,6 +5,15 @@ from typing import List
 from runtime.lane_queue import LaneQueue
 
 
+def test_submit_interface_returns_value() -> None:
+    async def run_test() -> None:
+        queue = LaneQueue()
+        result = await queue.submit("lane-a", lambda: 42)
+        assert result == 42
+
+    asyncio.run(run_test())
+
+
 def test_same_lane_is_serial_and_fifo() -> None:
     async def run_test() -> None:
         queue = LaneQueue(max_concurrency=3)
