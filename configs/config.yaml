@@ -1,0 +1,25 @@
+server:
+  host: "0.0.0.0"
+  port: 8000
+models:
+  default: "TODO"
+memory:
+  backend: "TODO"
+kb:
+  enabled: false
+tools:
+  enabled: []
+skills:
+  paths: []
+mcp:
+  servers: []
+security:
+  least_privilege: true
+  audit_logs: true
+connectors:
+  qq_onebot:
+    enabled: false
+  wechat:
+    enabled: false
+web_console:
+  enabled: true

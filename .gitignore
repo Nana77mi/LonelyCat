@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Node
+node_modules/
+.pnpm-store/
+
+# Build
+/dist/
+/build/
+
+# Logs
+*.log
+
+# Env
+.env
