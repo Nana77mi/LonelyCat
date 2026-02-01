@@ -3,6 +3,8 @@ from typing import Any, Dict, List
 
 from runtime.agent_loop import AgentLoop, TranscriptStore
 from runtime.lane_queue import LaneQueue
+from runtime.policy import PolicyEngine
+from runtime.tool_runner import ToolRunner
 
 
 class StubLLM:
@@ -21,19 +23,18 @@ class StubLLM:
         return {"type": "final", "content": f"result is {tool_result['content']}"}
 
 
-class StubToolRunner:
-    def __init__(self) -> None:
-        self.calls: List[Dict[str, Any]] = []
-
-    async def run(self, name: str, arguments: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
-        self.calls.append({"name": name, "arguments": arguments, "ctx": ctx})
-        return {"content": "MEOW"}
-
-
 def test_agent_loop_tool_call_path() -> None:
     async def run_test() -> None:
         llm = StubLLM()
-        tools = StubToolRunner()
+        policy = PolicyEngine(allow={"search": True})
+        tools = ToolRunner(policy)
+        tool_calls: List[Dict[str, Any]] = []
+
+        async def stub_search(arguments: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
+            tool_calls.append({"name": "search", "arguments": arguments, "ctx": ctx})
+            return {"content": "MEOW"}
+
+        tools.register("search", stub_search)
         transcript = TranscriptStore()
         queue = LaneQueue(max_concurrency=2)
         loop = AgentLoop(llm=llm, tools=tools, transcript=transcript, queue=queue)
@@ -47,7 +48,7 @@ def test_agent_loop_tool_call_path() -> None:
             {"type": "tool_result", "name": "search", "content": "MEOW"},
             {"role": "assistant", "content": "result is MEOW"},
         ]
-        assert len(tools.calls) == 1
+        assert len(tool_calls) == 1
 
     asyncio.run(run_test())
 
@@ -58,13 +59,14 @@ def test_agent_loop_direct_final_path() -> None:
             async def generate(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
                 return {"type": "final", "content": "done"}
 
-        class NoopTools:
+        class NoopTools(ToolRunner):
             def __init__(self) -> None:
+                super().__init__(PolicyEngine())
                 self.called = False
 
             async def run(self, name: str, arguments: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
                 self.called = True
-                return {"content": "unused"}
+                return await super().run(name, arguments, ctx)
 
         llm = FinalLLM()
         tools = NoopTools()
@@ -98,9 +100,12 @@ def test_agent_loop_serializes_same_session() -> None:
                 self.running -= 1
                 return {"type": "final", "content": "ok"}
 
-        class NoopTools:
+        class NoopTools(ToolRunner):
+            def __init__(self) -> None:
+                super().__init__(PolicyEngine())
+
             async def run(self, name: str, arguments: Dict[str, Any], ctx: Dict[str, Any]) -> Dict[str, Any]:
-                return {"content": "unused"}
+                return await super().run(name, arguments, ctx)
 
         llm = SlowLLM()
         tools = NoopTools()
