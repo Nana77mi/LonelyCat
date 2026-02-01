@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lonelycat-memory"
+version = "0.1.0"
+description = "Memory and knowledge storage abstractions."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pydantic>=2.6",
+]
+
+[tool.setuptools]
+packages = ["memory"]
