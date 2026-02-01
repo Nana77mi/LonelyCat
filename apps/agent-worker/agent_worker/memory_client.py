@@ -24,3 +24,25 @@ class MemoryClient:
         if not record_id:
             raise ValueError("Missing record id in response")
         return record_id
+
+    def list_facts(self, subject: str = "user", status: str = "ACTIVE") -> list[dict]:
+        url = f"{self._base_url}/memory/facts"
+        params = {"subject": subject, "status": status}
+        import httpx
+
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(url, params=params)
+            response.raise_for_status()
+            data = response.json()
+        if not isinstance(data, list):
+            raise ValueError("Expected list response from memory facts API")
+        return data
+
+    def retract(self, record_id: str, reason: str) -> None:
+        url = f"{self._base_url}/memory/facts/{record_id}/retract"
+        payload = {"reason": reason}
+        import httpx
+
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(url, json=payload)
+            response.raise_for_status()
