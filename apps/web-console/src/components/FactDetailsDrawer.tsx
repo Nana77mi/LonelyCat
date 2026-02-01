@@ -19,6 +19,9 @@ const formatObject = (value: unknown) =>
 const renderObject = (value: unknown) =>
   typeof value === "string" ? <span>{value}</span> : <pre>{formatObject(value)}</pre>;
 
+const formatTimestamp = (value: number | null | undefined) =>
+  typeof value === "number" ? new Date(value * 1000).toLocaleString() : "Unknown";
+
 export const FactDetailsDrawer = ({ factId, onClose }: FactDetailsDrawerProps) => {
   const [chain, setChain] = useState<FactChainResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -31,32 +34,26 @@ export const FactDetailsDrawer = ({ factId, onClose }: FactDetailsDrawerProps) =
       setLoading(false);
       return;
     }
-    let cancelled = false;
+    const controller = new AbortController();
     const load = async () => {
       setChain(null);
       setError(null);
       setLoading(true);
       try {
-        const response = await fetchFactChain(factId);
-        if (cancelled) {
-          return;
-        }
+        const response = await fetchFactChain(factId, 20, controller.signal);
         setChain(response);
       } catch (err) {
-        if (cancelled) {
+        if (err instanceof Error && err.name === "AbortError") {
           return;
         }
         setError(err instanceof Error ? err.message : "Failed to load chain");
       } finally {
-        if (cancelled) {
-          return;
-        }
         setLoading(false);
       }
     };
     void load();
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, [factId]);
 
@@ -86,8 +83,8 @@ export const FactDetailsDrawer = ({ factId, onClose }: FactDetailsDrawerProps) =
           </div>
           <div>{renderObject(root.object)}</div>
           <p>Status: {root.status}</p>
-          <p>Sequence: {root.seq}</p>
-          <p>Created: {new Date(root.created_at * 1000).toLocaleString()}</p>
+          <p>Sequence: {root.seq ?? "Unknown"}</p>
+          <p>Created: {formatTimestamp(root.created_at)}</p>
           {rootOverrides ? <p>Overrides: {rootOverrides}</p> : null}
           {root.retracted_reason ? <p>Retracted reason: {root.retracted_reason}</p> : null}
         </div>
@@ -104,15 +101,16 @@ export const FactDetailsDrawer = ({ factId, onClose }: FactDetailsDrawerProps) =
               const overrides =
                 item.overrides ?? (item.status === "ACTIVE" ? chain.items[index + 1]?.id ?? null : null);
               return (
-                <li key={item.id}>
+                <li key={item.id ?? `fact-${index}`}>
                   <div>
                     <div>
-                      <strong>{item.status}</strong> · seq {item.seq} · {item.id.slice(0, 8)}
+                      <strong>{item.status ?? "UNKNOWN"}</strong> · seq {item.seq ?? "Unknown"} ·{" "}
+                      {(item.id ?? "unknown").slice(0, 8)}
                     </div>
                     <div>
-                      {item.predicate}: {renderObject(item.object)}
+                      {item.predicate ?? "Unknown"}: {renderObject(item.object)}
                     </div>
-                    <div>{new Date(item.created_at * 1000).toLocaleString()}</div>
+                    <div>{formatTimestamp(item.created_at)}</div>
                     {overriddenBy ? <div>Overridden by: {overriddenBy}</div> : null}
                     {overrides ? <div>Overrides: {overrides}</div> : null}
                     {item.retracted_reason ? (

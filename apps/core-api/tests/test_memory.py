@@ -8,22 +8,19 @@ from memory.facts import FactsStore
 
 
 def assert_fact_schema(record: dict, status: str) -> None:
-    base_keys = {
+    expected = {
         "id",
         "subject",
         "predicate",
         "object",
         "confidence",
+        "source",
         "status",
         "created_at",
         "seq",
+        "overrides",
+        "retracted_reason",
     }
-    if status == "OVERRIDDEN":
-        expected = base_keys | {"overrides"}
-    elif status == "RETRACTED":
-        expected = base_keys | {"retracted_reason"}
-    else:
-        expected = base_keys
     assert set(record.keys()) == expected
     assert record["status"] == status
 
@@ -140,6 +137,27 @@ def test_retract_already_retracted_raises() -> None:
     assert excinfo.value.status_code == 400
 
 
+def test_retract_requires_reason() -> None:
+    store = FactsStore()
+    candidate = memory.FactCandidateIn(
+        subject="user",
+        predicate="tool",
+        object="git",
+        confidence=0.9,
+        source={"type": "test"},
+    )
+    record = asyncio.run(memory.propose_fact(candidate, store=store))
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(
+            memory.retract_fact(
+                record["id"],
+                memory.RetractRequest(reason="  "),
+                store=store,
+            )
+        )
+    assert excinfo.value.status_code == 400
+
+
 def test_non_json_object_is_stringified() -> None:
     store = FactsStore()
 
@@ -184,11 +202,9 @@ def test_propose_twice_overrides_previous() -> None:
 
     response = asyncio.run(memory.list_facts(store=store))
     assert len(response["items"]) == 2
-    assert response["items"][0]["id"] == first_record["id"]
-    assert response["items"][1]["id"] == second_record["id"]
-    overridden = response["items"][0]
-    assert overridden["status"] == "OVERRIDDEN"
-    assert_fact_schema(overridden, "OVERRIDDEN")
+    items_by_id = {item["id"]: item for item in response["items"]}
+    assert items_by_id[first_record["id"]]["status"] == "RETRACTED"
+    assert_fact_schema(items_by_id[first_record["id"]], "RETRACTED")
 
 
 def test_chain_endpoint_returns_root_and_overrides() -> None:
@@ -219,7 +235,7 @@ def test_chain_endpoint_returns_root_and_overrides() -> None:
     assert chain["items"][1]["id"] == first_record["id"]
     assert chain["truncated"] is False
     assert_fact_schema(chain["items"][0], "ACTIVE")
-    assert_fact_schema(chain["items"][1], "OVERRIDDEN")
+    assert_fact_schema(chain["items"][1], "RETRACTED")
 
 
 def test_chain_endpoint_max_depth_truncates() -> None:

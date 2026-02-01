@@ -1,4 +1,4 @@
-export type FactStatus = "ACTIVE" | "OVERRIDDEN" | "RETRACTED";
+export type FactStatus = "ACTIVE" | "RETRACTED";
 
 export type FactRecord = {
   id: string;
@@ -6,11 +6,12 @@ export type FactRecord = {
   predicate: string;
   object: unknown;
   confidence: number;
+  source: Record<string, unknown> | null;
   status: FactStatus;
   created_at: number;
   seq: number;
-  overrides?: string | null;
-  retracted_reason?: string | null;
+  overrides: string | null;
+  retracted_reason: string | null;
 };
 
 export type FactCandidate = {
@@ -23,7 +24,7 @@ export type FactCandidate = {
 
 export type FetchFactsParams = {
   subject?: string;
-  status?: "ALL" | "ACTIVE" | "OVERRIDDEN" | "RETRACTED";
+  status?: "ALL" | "ACTIVE" | "RETRACTED";
   predicate_contains?: string;
 };
 
@@ -61,6 +62,16 @@ type FactChainResponse = {
   truncated: boolean;
 };
 
+const parseJson = async <T>(response: Response): Promise<T> => {
+  try {
+    return (await response.json()) as T;
+  } catch (error) {
+    throw new Error(
+      error instanceof Error ? `Failed to parse response: ${error.message}` : "Failed to parse response"
+    );
+  }
+};
+
 export const fetchFacts = async (params: FetchFactsParams = {}): Promise<FetchFactsResponse> => {
   const url = buildUrl("/memory/facts", {
     subject: params.subject,
@@ -71,7 +82,7 @@ export const fetchFacts = async (params: FetchFactsParams = {}): Promise<FetchFa
   if (!response.ok) {
     throw new Error(`Failed to fetch facts (${response.status})`);
   }
-  return (await response.json()) as FetchFactsResponse;
+  return await parseJson<FetchFactsResponse>(response);
 };
 
 export const proposeFact = async (candidate: FactCandidate): Promise<FactRecord> => {
@@ -84,7 +95,7 @@ export const proposeFact = async (candidate: FactCandidate): Promise<FactRecord>
   if (!response.ok) {
     throw new Error(`Failed to propose fact (${response.status})`);
   }
-  return (await response.json()) as FactRecord;
+  return await parseJson<FactRecord>(response);
 };
 
 export const retractFact = async (id: string, reason: string): Promise<FactRecord> => {
@@ -97,16 +108,20 @@ export const retractFact = async (id: string, reason: string): Promise<FactRecor
   if (!response.ok) {
     throw new Error(`Failed to retract fact (${response.status})`);
   }
-  return (await response.json()) as FactRecord;
+  return await parseJson<FactRecord>(response);
 };
 
-export const fetchFactChain = async (id: string, maxDepth = 20): Promise<FactChainResponse> => {
+export const fetchFactChain = async (
+  id: string,
+  maxDepth = 20,
+  signal?: AbortSignal
+): Promise<FactChainResponse> => {
   const url = buildUrl(`/memory/facts/${id}/chain`, {
     max_depth: String(maxDepth),
   });
-  const response = await fetch(url);
+  const response = await fetch(url, { signal });
   if (!response.ok) {
     throw new Error(`Failed to fetch fact chain (${response.status})`);
   }
-  return (await response.json()) as FactChainResponse;
+  return await parseJson<FactChainResponse>(response);
 };

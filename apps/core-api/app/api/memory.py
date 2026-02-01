@@ -9,14 +9,13 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from pydantic import BaseModel, Field
 
-from memory.facts import FactCandidate, FactRecord, FactsStore
+from memory.facts import FactCandidate, FactRecord, FactStatus, FactsStore
 
 router = APIRouter()
 
 
 class FactStatusFilter(str, Enum):
     ACTIVE = "ACTIVE"
-    OVERRIDDEN = "OVERRIDDEN"
     RETRACTED = "RETRACTED"
     ALL = "ALL"
 
@@ -46,6 +45,10 @@ def _ensure_json_safe(value: Any) -> Any:
     return value
 
 
+def _status_string(record: FactRecord) -> str:
+    return "ACTIVE" if record.status == FactStatus.ACTIVE else "RETRACTED"
+
+
 def _serialize_record(record: FactRecord) -> Dict[str, Any]:
     data: Dict[str, Any] = {
         "id": record.id,
@@ -53,14 +56,13 @@ def _serialize_record(record: FactRecord) -> Dict[str, Any]:
         "predicate": record.predicate,
         "object": _ensure_json_safe(record.object),
         "confidence": record.confidence,
-        "status": record.status.name,
+        "status": _status_string(record),
         "created_at": record.created_at,
         "seq": record.seq,
+        "source": record.source,
+        "overrides": record.overrides,
+        "retracted_reason": record.retracted_reason,
     }
-    if record.status.name == "OVERRIDDEN":
-        data["overrides"] = record.overrides
-    if record.status.name == "RETRACTED":
-        data["retracted_reason"] = record.retracted_reason
     return data
 
 
@@ -71,7 +73,7 @@ def _filter_records(
 ) -> list[FactRecord]:
     filtered = list(records)
     if status != FactStatusFilter.ALL:
-        filtered = [record for record in filtered if record.status.name == status.value]
+        filtered = [record for record in filtered if _status_string(record) == status.value]
     if predicate_contains:
         needle = predicate_contains.lower()
         filtered = [record for record in filtered if needle in record.predicate.lower()]
@@ -124,9 +126,12 @@ async def retract_fact(
     record = await store.get(record_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Fact not found")
-    if record.status.name == "RETRACTED":
+    if record.status == FactStatus.RETRACTED:
         raise HTTPException(status_code=400, detail="Fact already retracted")
-    await store.retract(record_id, payload.reason)
+    reason = payload.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Retraction reason required")
+    await store.retract(record_id, reason)
     updated = await store.get(record_id)
     if updated is None:
         raise HTTPException(status_code=404, detail="Fact not found")
