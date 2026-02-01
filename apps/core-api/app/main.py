@@ -21,16 +21,21 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in offline tests
 
             return decorator
 
+        def include_router(self, router, prefix: str | None = None, tags: list[str] | None = None) -> None:
+            return None
+
         def websocket(self, path: str):
             def decorator(func):
                 return func
 
             return decorator
 
+from app.api.memory import router as memory_router
 from app.settings import Settings
 
 settings = Settings()
 app = FastAPI(title=settings.app_name)
+app.include_router(memory_router, prefix="/memory", tags=["memory"])
 
 
 @app.get("/health")
