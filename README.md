@@ -31,39 +31,46 @@ python -m pytest
 Run dev servers (examples):
 
 ```bash
-# Core API
-python -m uvicorn app.main:app --app-dir apps/core-api --reload
+# Core API (端口 5173)
+python -m uvicorn app.main:app --app-dir apps/core-api --reload --port 5173
 
-# Web console (uses /api proxy by default)
-# Requests to /api/* are proxied to http://127.0.0.1:8000/* (via Vite dev server)
-pnpm --filter @lonelycat/web-console dev
+# Web console (端口 8000, uses /api proxy by default)
+# Requests to /api/* are proxied to http://127.0.0.1:5173/* (via Vite dev server)
+pnpm --filter @lonelycat/web-console dev --port 8000
+```
+
+或者使用一键启动：
+
+```bash
+make up
 ```
 
 ## Demo script (30s)
 
 ```bash
-# Start dependencies + services
+# 一键启动所有服务（核心 API + 用户界面）
 make up
-
-# In another terminal, open the web console
-pnpm --filter @lonelycat/web-console dev
 ```
 
-1. Open the console at `http://localhost:5173` and navigate to **Memory**.
-2. In a separate terminal, create a proposal with the agent worker:
+启动后：
+
+1. 打开浏览器访问 `http://localhost:8000` 查看用户界面
+2. 点击右上角设置按钮，进入 Memory 管理页面
+3. 在另一个终端中，使用 agent worker 创建一个提案：
    ```bash
    python -m agent_worker.chat "Remember that I like matcha."
    ```
-3. Back in the console, review the new proposal and click **Accept**.
-4. Verify the accepted proposal now appears in **Facts** as `ACTIVE`.
+4. 回到控制台，查看新的提案并点击 **Accept**
+5. 验证已接受的提案现在在 **Facts** 中显示为 `ACTIVE`
 
-> **Development setup**: The web console runs on port 5173 and proxies `/api/*` requests to the Core API
-> at `http://127.0.0.1:8000` (via Vite dev server). This means `/api/memory/proposals` becomes
-> `http://127.0.0.1:8000/memory/proposals` automatically.
+> **开发环境设置**: 
+> - 用户界面运行在端口 **8000** (`http://localhost:8000`)
+> - 核心 API 运行在端口 **5173** (`http://localhost:5173`)
+> - 用户界面通过 Vite 代理将 `/api/*` 请求转发到 `http://127.0.0.1:5173/*`
+> - 这意味着 `/api/memory/proposals` 会自动变为 `http://127.0.0.1:5173/memory/proposals`
 >
-> **Production**: To point the console at a different API origin, set `VITE_CORE_API_URL` (or `VITE_API_BASE_URL`)
-> before building (e.g., `VITE_CORE_API_URL=http://api.example.com pnpm build`). The default is `/api` which
-> works with a reverse proxy setup.
+> **生产环境**: 要指向不同的 API 源，请在构建前设置 `VITE_CORE_API_URL`（或 `VITE_API_BASE_URL`）
+> （例如：`VITE_CORE_API_URL=http://api.example.com pnpm build`）。默认为 `/api`，适用于反向代理设置。
 
 ## Proposal workflow (quick reference)
 

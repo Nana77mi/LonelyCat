@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 
 import { FactRecord, fetchFactChain } from "../api/memory";
+import "./FactDetailsDrawer.css";
 
 type FactChainResponse = {
   root_id: string;
@@ -67,63 +68,92 @@ export const FactDetailsDrawer = ({ factId, onClose }: FactDetailsDrawerProps) =
   const hasItems = Boolean(chain?.items?.length);
 
   return (
-    <aside>
-      <div>
-        <h3>Fact Details</h3>
-        <button type="button" onClick={onClose}>
-          Close
-        </button>
+    <aside className="fact-drawer-overlay" onClick={onClose}>
+      <div className="fact-drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="fact-drawer-header">
+          <h3>Fact Details</h3>
+          <button type="button" className="fact-drawer-close" onClick={onClose} aria-label="关闭">
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path
+                d="M15 5L5 15M5 5l10 10"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        </div>
+        <div className="fact-drawer-content">
+          {loading ? <div className="fact-drawer-loading">加载中…</div> : null}
+          {error ? <div className="fact-drawer-error" role="alert">{error}</div> : null}
+          {root ? (
+            <div className="fact-drawer-root">
+              <div className="fact-drawer-predicate">
+                <strong>{root.predicate}</strong>
+              </div>
+              <div className="fact-drawer-object">{renderObject(root.object)}</div>
+              <div className="fact-drawer-meta">
+                <span>Status: {root.status}</span>
+                <span>Sequence: {root.seq ?? "Unknown"}</span>
+                <span>Created: {formatTimestamp(root.created_at)}</span>
+              </div>
+              {rootOverrides ? (
+                <div className="fact-drawer-field">
+                  <strong>Overrides:</strong> {rootOverrides}
+                </div>
+              ) : null}
+              {root.retracted_reason ? (
+                <div className="fact-drawer-field">
+                  <strong>Retracted reason:</strong> {root.retracted_reason}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          {chain && !hasItems ? (
+            <div className="fact-drawer-empty">No facts available for this chain.</div>
+          ) : null}
+
+          {chain && hasItems ? (
+            <div className="fact-drawer-chain">
+              <h4>Overrides chain</h4>
+              <div className="fact-chain-list">
+                {chain.items.map((item, index) => {
+                  const overriddenBy = chain.items[index - 1]?.id ?? null;
+                  const overrides =
+                    item.overrides ??
+                    (item.status === "ACTIVE" ? chain.items[index + 1]?.id ?? null : null);
+                  return (
+                    <div key={item.id ?? `fact-${index}`} className="fact-chain-item">
+                      <div className="fact-chain-header">
+                        <strong>{item.status ?? "UNKNOWN"}</strong>
+                        <span>seq {item.seq ?? "Unknown"}</span>
+                        <span className="fact-chain-id">#{(item.id ?? "unknown").slice(0, 8)}</span>
+                      </div>
+                      <div className="fact-chain-content">
+                        {item.predicate ?? "Unknown"}: {renderObject(item.object)}
+                      </div>
+                      <div className="fact-chain-meta">
+                        <span>{formatTimestamp(item.created_at)}</span>
+                        {overriddenBy ? <span>Overridden by: {overriddenBy}</span> : null}
+                        {overrides ? <span>Overrides: {overrides}</span> : null}
+                      </div>
+                      {item.retracted_reason ? (
+                        <div className="fact-chain-retracted">
+                          Retracted reason: {item.retracted_reason}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+              {chain.truncated ? (
+                <div className="fact-drawer-truncated">Chain truncated.</div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </div>
-      {loading ? <p>Loading…</p> : null}
-      {error ? <p role="alert">{error}</p> : null}
-      {root ? (
-        <div>
-          <div>
-            <strong>{root.predicate}</strong> →
-          </div>
-          <div>{renderObject(root.object)}</div>
-          <p>Status: {root.status}</p>
-          <p>Sequence: {root.seq ?? "Unknown"}</p>
-          <p>Created: {formatTimestamp(root.created_at)}</p>
-          {rootOverrides ? <p>Overrides: {rootOverrides}</p> : null}
-          {root.retracted_reason ? <p>Retracted reason: {root.retracted_reason}</p> : null}
-        </div>
-      ) : null}
-
-      {chain && !hasItems ? <p>No facts available for this chain.</p> : null}
-
-      {chain && hasItems ? (
-        <div>
-          <h4>Overrides chain</h4>
-          <ul>
-            {chain.items.map((item, index) => {
-              const overriddenBy = chain.items[index - 1]?.id ?? null;
-              const overrides =
-                item.overrides ?? (item.status === "ACTIVE" ? chain.items[index + 1]?.id ?? null : null);
-              return (
-                <li key={item.id ?? `fact-${index}`}>
-                  <div>
-                    <div>
-                      <strong>{item.status ?? "UNKNOWN"}</strong> · seq {item.seq ?? "Unknown"} ·{" "}
-                      {(item.id ?? "unknown").slice(0, 8)}
-                    </div>
-                    <div>
-                      {item.predicate ?? "Unknown"}: {renderObject(item.object)}
-                    </div>
-                    <div>{formatTimestamp(item.created_at)}</div>
-                    {overriddenBy ? <div>Overridden by: {overriddenBy}</div> : null}
-                    {overrides ? <div>Overrides: {overrides}</div> : null}
-                    {item.retracted_reason ? (
-                      <div>Retracted reason: {item.retracted_reason}</div>
-                    ) : null}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-          {chain.truncated ? <p>Chain truncated.</p> : null}
-        </div>
-      ) : null}
     </aside>
   );
 };
