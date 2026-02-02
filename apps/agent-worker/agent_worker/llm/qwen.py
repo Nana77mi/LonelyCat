@@ -8,7 +8,7 @@ import httpx
 from agent_worker.llm.base import BaseLLM
 
 
-class OpenAIChatLLM(BaseLLM):
+class QwenChatLLM(BaseLLM):
     def __init__(
         self,
         *,
@@ -43,7 +43,7 @@ class OpenAIChatLLM(BaseLLM):
         try:
             return data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError("openai response missing expected content") from exc
+            raise RuntimeError("qwen response missing expected content") from exc
 
     def _post_with_retry(
         self,
@@ -61,17 +61,17 @@ class OpenAIChatLLM(BaseLLM):
                     response = client.post(url, json=payload, headers=headers)
             except httpx.TimeoutException:
                 if attempt >= self._max_retries:
-                    raise RuntimeError("openai request timed out")
+                    raise RuntimeError("qwen request timed out")
                 self._sleep_backoff(attempt)
                 attempt += 1
                 continue
             except httpx.HTTPError as exc:
-                raise RuntimeError(f"openai request failed: {exc}") from exc
+                raise RuntimeError(f"qwen request failed: {exc}") from exc
 
             if response.status_code == 429 or response.status_code >= 500:
                 if attempt >= self._max_retries:
                     raise RuntimeError(
-                        f"openai request failed with status {response.status_code}"
+                        f"qwen request failed with status {response.status_code}"
                     )
                 self._sleep_backoff(attempt)
                 attempt += 1
@@ -82,13 +82,13 @@ class OpenAIChatLLM(BaseLLM):
                 if response.status_code == 404:
                     hint = "check model name or base url"
                 raise ValueError(
-                    f"openai error status={response.status_code} hint={hint}"
+                    f"qwen error status={response.status_code} hint={hint}"
                 )
 
             try:
                 return response.json()
             except ValueError as exc:
-                raise RuntimeError("openai response was not valid JSON") from exc
+                raise RuntimeError("qwen response was not valid JSON") from exc
 
     def _sleep_backoff(self, attempt: int) -> None:
         delay = self._retry_backoff_s * (2**attempt)

@@ -4,7 +4,7 @@ import sys
 from typing import Sequence
 
 from agent_worker.fact_agent import FactProposal
-from agent_worker.llm import BaseLLM, build_llm_from_env
+from agent_worker.llm import BaseLLM, JsonOnlyLLMWrapper, build_gate_llm_from_env
 from agent_worker.memory_client import MemoryClient
 from agent_worker.router import (
     NoActionDecision,
@@ -26,9 +26,11 @@ Or JSON with one of:
 
 def _coerce_llm(llm: object | None) -> BaseLLM:
     if llm is None:
-        return build_llm_from_env()
+        return build_gate_llm_from_env()
     if hasattr(llm, "generate"):
-        return llm  # type: ignore[return-value]
+        if isinstance(llm, BaseLLM):
+            return JsonOnlyLLMWrapper(llm)
+        return JsonOnlyLLMWrapper(llm)  # type: ignore[return-value]
     raise ValueError("LLM must implement generate(prompt)")
 
 
@@ -141,11 +143,14 @@ def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> 
     text = args[0]
 
     llm = _coerce_llm(llm)
-    raw_output = llm.generate(text)
-    if not isinstance(raw_output, str):
-        raw_output = str(raw_output)
-    decision = parse_llm_output(raw_output)
-    status = execute_decision(decision, memory_client)
+    try:
+        raw_output = llm.generate(text)
+        if not isinstance(raw_output, str):
+            raw_output = str(raw_output)
+        decision = parse_llm_output(raw_output)
+        status = execute_decision(decision, memory_client)
+    except Exception:
+        status = "NO_ACTION"
     print(status)
 
 

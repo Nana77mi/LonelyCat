@@ -8,11 +8,10 @@ import httpx
 from agent_worker.llm.base import BaseLLM
 
 
-class OpenAIChatLLM(BaseLLM):
+class OllamaLLM(BaseLLM):
     def __init__(
         self,
         *,
-        api_key: str,
         model: str,
         base_url: str,
         timeout_s: float = 30.0,
@@ -22,7 +21,6 @@ class OpenAIChatLLM(BaseLLM):
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         super().__init__(max_prompt_chars=max_prompt_chars)
-        self._api_key = api_key
         self._model = model
         self._base_url = base_url.rstrip("/")
         self._timeout_s = timeout_s
@@ -31,64 +29,57 @@ class OpenAIChatLLM(BaseLLM):
         self._transport = transport
 
     def generate(self, prompt: str) -> str:
-        url = f"{self._base_url}/chat/completions"
+        url = f"{self._base_url}/api/chat"
         prompt = self._trim_prompt(prompt)
         payload = {
             "model": self._model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0,
+            "stream": False,
         }
-        headers = {"Authorization": f"Bearer {self._api_key}"}
-        data = self._post_with_retry(url, payload, headers=headers)
+        data = self._post_with_retry(url, payload)
         try:
-            return data["choices"][0]["message"]["content"]
+            return data["message"]["content"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError("openai response missing expected content") from exc
+            raise RuntimeError("ollama response missing expected content") from exc
 
-    def _post_with_retry(
-        self,
-        url: str,
-        payload: dict[str, Any],
-        *,
-        headers: dict[str, str],
-    ) -> dict[str, Any]:
+    def _post_with_retry(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         attempt = 0
         while True:
             try:
                 with httpx.Client(
                     timeout=self._timeout_s, transport=self._transport
                 ) as client:
-                    response = client.post(url, json=payload, headers=headers)
+                    response = client.post(url, json=payload)
             except httpx.TimeoutException:
                 if attempt >= self._max_retries:
-                    raise RuntimeError("openai request timed out")
+                    raise RuntimeError("ollama request timed out")
                 self._sleep_backoff(attempt)
                 attempt += 1
                 continue
             except httpx.HTTPError as exc:
-                raise RuntimeError(f"openai request failed: {exc}") from exc
+                raise RuntimeError(f"ollama request failed: {exc}") from exc
 
             if response.status_code == 429 or response.status_code >= 500:
                 if attempt >= self._max_retries:
                     raise RuntimeError(
-                        f"openai request failed with status {response.status_code}"
+                        f"ollama request failed with status {response.status_code}"
                     )
                 self._sleep_backoff(attempt)
                 attempt += 1
                 continue
 
             if 400 <= response.status_code < 500:
-                hint = "check api key"
+                hint = "check model name"
                 if response.status_code == 404:
                     hint = "check model name or base url"
                 raise ValueError(
-                    f"openai error status={response.status_code} hint={hint}"
+                    f"ollama error status={response.status_code} hint={hint}"
                 )
 
             try:
                 return response.json()
             except ValueError as exc:
-                raise RuntimeError("openai response was not valid JSON") from exc
+                raise RuntimeError("ollama response was not valid JSON") from exc
 
     def _sleep_backoff(self, attempt: int) -> None:
         delay = self._retry_backoff_s * (2**attempt)
