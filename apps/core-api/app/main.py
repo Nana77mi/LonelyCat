@@ -40,7 +40,11 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in offline tests
 
 from app.api.conversations import router as conversations_router
 from app.api.memory import router as memory_router
+from app.db import init_db as init_core_db
 from app.settings import Settings
+
+# 初始化数据库（包括 conversations 和 messages 表）
+init_core_db()
 
 settings = Settings()
 app = FastAPI(title=settings.app_name)

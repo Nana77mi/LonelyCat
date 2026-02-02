@@ -9,11 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from memory.db import ConversationModel, MessageModel, SessionLocal, init_db
-from memory.schemas import MessageRole
-
-# 初始化数据库
-init_db()
+from app.db import ConversationModel, MessageModel, MessageRole, SessionLocal
 
 router = APIRouter()
 

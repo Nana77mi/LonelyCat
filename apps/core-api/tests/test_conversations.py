@@ -9,8 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import sessionmaker
 
 from app.api import conversations
-from memory.db import Base, ConversationModel, MessageModel
-from memory.schemas import MessageRole
+from app.db import Base, ConversationModel, MessageModel, MessageRole
 from sqlalchemy import create_engine
 
 

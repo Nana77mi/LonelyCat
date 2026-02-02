@@ -12,18 +12,16 @@ from sqlalchemy import (
     Enum as SQLEnum,
     Float,
     ForeignKey,
-    Index,
     Integer,
     String,
     Text,
     create_engine,
 )
-from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker
 
 from memory.schemas import (
     AuditEventType,
     FactStatus,
-    MessageRole,
     ProposalStatus,
     Scope,
     SourceKind,
@@ -115,45 +113,6 @@ class KeyPolicyModel(Base):
     strategy = Column(String, nullable=False)  # "overwrite_latest" | "keep_both"
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-class ConversationModel(Base):
-    """Conversation 数据库模型"""
-    __tablename__ = "conversations"
-
-    id = Column(String, primary_key=True, index=True)
-    title = Column(String, nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-    # 关系
-    messages = relationship("MessageModel", back_populates="conversation", cascade="all, delete-orphan")
-
-    # 索引：用于按 updated_at 排序查询对话列表
-    __table_args__ = (
-        Index("idx_conversations_updated_at", "updated_at"),
-    )
-
-
-class MessageModel(Base):
-    """Message 数据库模型"""
-    __tablename__ = "messages"
-
-    id = Column(String, primary_key=True, index=True)
-    conversation_id = Column(String, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
-    role = Column(SQLEnum(MessageRole), nullable=False, index=True)
-    content = Column(Text, nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    source_ref = Column(JSON, nullable=True)
-    meta_json = Column(JSON, nullable=True)
-
-    # 关系
-    conversation = relationship("ConversationModel", back_populates="messages")
-
-    # 复合索引：用于查询某个对话的消息并按 created_at 排序
-    __table_args__ = (
-        Index("idx_messages_conversation_created", "conversation_id", "created_at"),
-    )
 
 
 def init_db() -> None:
