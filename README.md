@@ -47,6 +47,24 @@ LLM_PROVIDER=qwen QWEN_API_KEY=... python -m agent_worker.chat "hi"
 LLM_PROVIDER=ollama OLLAMA_BASE_URL=... python -m agent_worker.chat "hi"
 ```
 
+### Qwen gate test commands
+
+Run responder + gate end-to-end:
+
+```bash
+LLM_PROVIDER=qwen QWEN_API_KEY=YOUR_KEY \
+python -m agent_worker.chat "I really love cats. Please remember this."
+```
+
+With trace enabled:
+
+```bash
+LONELYCAT_TRACE=1 LLM_PROVIDER=qwen QWEN_API_KEY=YOUR_KEY \
+python -m agent_worker.chat "I don't like cats anymore." --persona lonelycat
+```
+
+If the memory backend is not running, `list_facts` errors are handled as a fallback and do not block gate/response execution.
+
 ## Security Note
 
 LonelyCat defaults to **least privilege** access, sandboxed workspaces in `data/workspaces`, and audit-friendly design. Any tool execution or connector should enforce explicit allowlists and produce audit logs.

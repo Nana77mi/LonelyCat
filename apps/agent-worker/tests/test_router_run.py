@@ -177,6 +177,34 @@ def test_router_parses_code_fences():
     assert decision.confidence == payload["confidence"]
 
 
+def test_router_prefers_last_valid_json_block():
+    first_payload = {
+        "action": "PROPOSE",
+        "subject": "user",
+        "predicate": "likes",
+        "object": "cats",
+        "confidence": 0.7,
+    }
+    second_payload = {
+        "action": "PROPOSE",
+        "subject": "user",
+        "predicate": "likes",
+        "object": "dogs",
+        "confidence": 0.8,
+    }
+    response = (
+        "Some explanation "
+        f"{json.dumps(first_payload)} "
+        "more text "
+        f"{json.dumps(second_payload)}"
+    )
+
+    decision = parse_llm_output(response)
+
+    assert isinstance(decision, ProposeDecision)
+    assert decision.object == "dogs"
+
+
 def test_router_invalid_json_is_no_action():
     decision = parse_llm_output("```json not-json```")
     assert decision.action == "NO_ACTION"
