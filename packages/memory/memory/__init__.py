@@ -1,17 +1,15 @@
-from memory.facts import (
-    FactCandidate,
-    FactRecord,
+from memory.facts import MemoryStore
+from memory.schemas import (
+    Fact,
     FactStatus,
-    FactsStore,
     Proposal,
     ProposalStatus,
 )
 
 __all__ = [
-    "FactCandidate",
-    "FactRecord",
+    "Fact",
     "FactStatus",
-    "FactsStore",
+    "MemoryStore",
     "Proposal",
     "ProposalStatus",
 ]
