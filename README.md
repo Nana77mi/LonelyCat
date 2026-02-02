@@ -35,6 +35,7 @@ Run dev servers (examples):
 python -m uvicorn app.main:app --app-dir apps/core-api --reload
 
 # Web console (uses /api proxy by default)
+# Requests to /api/* are proxied to http://127.0.0.1:8000/* (via Vite dev server)
 pnpm --filter @lonelycat/web-console dev
 ```
 
@@ -56,9 +57,13 @@ pnpm --filter @lonelycat/web-console dev
 3. Back in the console, review the new proposal and click **Accept**.
 4. Verify the accepted proposal now appears in **Facts** as `ACTIVE`.
 
-> To point the console at a different API origin, set `VITE_API_BASE_URL` before running the dev server
-> (for example, `VITE_API_BASE_URL=http://127.0.0.1:8000 ...`). The default is `/api` with a Vite
-> proxy to `http://localhost:8000`.
+> **Development setup**: The web console runs on port 5173 and proxies `/api/*` requests to the Core API
+> at `http://127.0.0.1:8000` (via Vite dev server). This means `/api/memory/proposals` becomes
+> `http://127.0.0.1:8000/memory/proposals` automatically.
+>
+> **Production**: To point the console at a different API origin, set `VITE_CORE_API_URL` (or `VITE_API_BASE_URL`)
+> before building (e.g., `VITE_CORE_API_URL=http://api.example.com pnpm build`). The default is `/api` which
+> works with a reverse proxy setup.
 
 ## Proposal workflow (quick reference)
 
