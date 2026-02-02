@@ -78,17 +78,15 @@ def _format_not_found_update(decision: UpdateDecision) -> str:
     return f"NOT_FOUND_OLD predicate={decision.predicate} old_object={decision.old_object}"
 
 
-def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> None:
-    args = list(argv or sys.argv[1:])
-    if not args:
-        raise SystemExit("Usage: python -m agent_worker.run \"text\"")
-    text = args[0]
-
-    llm = llm or build_llm()
-    decision = parse_llm_output(llm.decide(text))
+def execute_decision(
+    decision,
+    memory_client: MemoryClient | None = None,
+    *,
+    propose_source_note: str = "mvp-1",
+    update_source_note: str = "update",
+) -> str:
     if isinstance(decision, NoActionDecision):
-        print("NO_ACTION")
-        return
+        return "NO_ACTION"
 
     memory_client = memory_client or MemoryClient()
     if isinstance(decision, ProposeDecision):
@@ -98,9 +96,8 @@ def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> 
             object=decision.object,
             confidence=decision.confidence,
         )
-        record_id = memory_client.propose(proposal, source_note="mvp-1")
-        print(_format_proposed(record_id, decision))
-        return
+        record_id = memory_client.propose(proposal, source_note=propose_source_note)
+        return _format_proposed(record_id, decision)
 
     if isinstance(decision, RetractDecision):
         facts = memory_client.list_facts(subject=decision.subject, status="ACTIVE")
@@ -114,12 +111,10 @@ def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> 
             None,
         )
         if not match:
-            print(_format_not_found_retract(decision))
-            return
+            return _format_not_found_retract(decision)
         record_id = str(match.get("id"))
         memory_client.retract(record_id, decision.reason)
-        print(_format_retracted(record_id, decision))
-        return
+        return _format_retracted(record_id, decision)
 
     if isinstance(decision, UpdateDecision):
         facts = memory_client.list_facts(subject=decision.subject, status="ACTIVE")
@@ -133,8 +128,7 @@ def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> 
             None,
         )
         if not match:
-            print(_format_not_found_update(decision))
-            return
+            return _format_not_found_update(decision)
         old_id = str(match.get("id"))
         memory_client.retract(old_id, decision.reason)
         proposal = FactProposal(
@@ -143,11 +137,22 @@ def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> 
             object=decision.new_object,
             confidence=decision.confidence,
         )
-        new_id = memory_client.propose(proposal, source_note="update")
-        print(_format_updated(old_id, new_id, decision))
-        return
+        new_id = memory_client.propose(proposal, source_note=update_source_note)
+        return _format_updated(old_id, new_id, decision)
 
-    print("NO_ACTION")
+    return "NO_ACTION"
+
+
+def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> None:
+    args = list(argv or sys.argv[1:])
+    if not args:
+        raise SystemExit("Usage: python -m agent_worker.run \"text\"")
+    text = args[0]
+
+    llm = llm or build_llm()
+    decision = parse_llm_output(llm.decide(text))
+    status = execute_decision(decision, memory_client)
+    print(status)
 
 
 if __name__ == "__main__":
