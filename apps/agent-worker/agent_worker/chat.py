@@ -41,7 +41,7 @@ Memory safety guardrails:
 Decide on memory actions conservatively: store stable preferences/goals, retract when negated,
 update when the user explicitly changes a preference. Use NO_ACTION otherwise.
 """
-RETURN_ONLY_JSON = "Return only JSON with no extra text."
+RETURN_ONLY_JSON = "Return only JSON."
 
 
 def _coerce_llm(llm: object | None) -> BaseLLM:

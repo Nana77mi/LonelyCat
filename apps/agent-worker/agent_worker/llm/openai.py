@@ -8,7 +8,7 @@ import httpx
 from agent_worker.llm.base import BaseLLM
 
 
-class OpenAILLM(BaseLLM):
+class OpenAIChatLLM(BaseLLM):
     def __init__(self, api_key: str, model: str = "gpt-4o-mini") -> None:
         self._api_key = api_key
         self._model = model
@@ -19,10 +19,7 @@ class OpenAILLM(BaseLLM):
         url = f"{self._base_url.rstrip('/')}/chat/completions"
         payload = {
             "model": self._model,
-            "messages": [
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": prompt},
-            ],
+            "messages": [{"role": "user", "content": prompt}],
             "temperature": 0,
         }
         headers = {"Authorization": f"Bearer {self._api_key}"}
