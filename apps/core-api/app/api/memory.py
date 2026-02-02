@@ -242,6 +242,17 @@ async def list_proposals(
     return {"items": [_serialize_proposal(proposal) for proposal in proposals]}
 
 
+@router.get("/proposals/{proposal_id}")
+async def get_proposal(
+    proposal_id: str,
+    store: FactsStore = Depends(get_facts_store),
+) -> Dict[str, Any]:
+    proposal = await store.get_proposal(proposal_id)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    return _serialize_proposal(proposal)
+
+
 @router.post("/proposals/{proposal_id}/accept")
 async def accept_proposal(
     proposal_id: str,

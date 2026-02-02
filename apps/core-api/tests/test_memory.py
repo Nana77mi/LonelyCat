@@ -321,6 +321,30 @@ def test_proposal_appears_in_pending_list() -> None:
     assert proposals["items"][0]["status"] == "PENDING"
 
 
+def test_get_proposal_by_id() -> None:
+    store = FactsStore()
+    candidate = memory.FactCandidateIn(
+        subject="user",
+        predicate="reads",
+        object="manga",
+        confidence=0.6,
+        source={"type": "test"},
+    )
+    proposal_response = asyncio.run(memory.propose_fact(candidate, store=store))
+    proposal_id = proposal_response["proposal"]["id"]
+
+    proposal = asyncio.run(memory.get_proposal(proposal_id, store=store))
+    assert proposal["id"] == proposal_id
+    assert proposal["status"] == "PENDING"
+
+
+def test_get_proposal_missing_raises() -> None:
+    store = FactsStore()
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(memory.get_proposal("missing", store=store))
+    assert excinfo.value.status_code == 404
+
+
 def test_accept_updates_proposal_and_creates_fact() -> None:
     store = FactsStore()
     candidate = memory.FactCandidateIn(

@@ -35,8 +35,29 @@ Run dev servers (examples):
 python -m uvicorn app.main:app --app-dir apps/core-api --reload
 
 # Web console
-pnpm --filter @lonelycat/web-console dev
+VITE_API_BASE_URL=http://localhost:8000 pnpm --filter @lonelycat/web-console dev
 ```
+
+## Demo script (30s)
+
+```bash
+# Start dependencies + services
+make up
+
+# In another terminal, open the web console
+VITE_API_BASE_URL=http://localhost:8000 pnpm --filter @lonelycat/web-console dev
+```
+
+1. Open the console at `http://localhost:5173` and navigate to **Memory**.
+2. In a separate terminal, create a proposal with the agent worker:
+   ```bash
+   python -m agent_worker.chat "Remember that I like matcha."
+   ```
+3. Back in the console, review the new proposal and click **Accept**.
+4. Verify the accepted proposal now appears in **Facts** as `ACTIVE`.
+
+> To point the console at a different API origin, set `VITE_API_BASE_URL` before running the dev server
+> (for example, `VITE_API_BASE_URL=http://127.0.0.1:8000 ...`).
 
 ## Memory review workflow
 
