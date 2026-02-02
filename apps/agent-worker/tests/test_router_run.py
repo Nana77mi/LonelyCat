@@ -8,7 +8,7 @@ class FakeLLM:
     def __init__(self, response: str) -> None:
         self.response = response
 
-    def decide(self, text: str) -> str:
+    def generate(self, prompt: str) -> str:
         return self.response
 
 

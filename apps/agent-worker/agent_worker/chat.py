@@ -4,8 +4,9 @@ import json
 import os
 import re
 import sys
-from typing import Protocol, Sequence
+from typing import Sequence
 
+from agent_worker.llm import BaseLLM, build_llm_from_env
 from agent_worker.router import NoActionDecision, parse_llm_output
 from agent_worker.run import execute_decision
 from agent_worker.memory_client import MemoryClient
@@ -32,7 +33,6 @@ POLICY_PROMPT = """You will receive:
 Respond with a single JSON object with EXACTLY these keys:
 - assistant_reply (string)
 - memory ("NO_ACTION" or an action JSON matching the router schema)
-Return only JSON with no extra text.
 
 Memory safety guardrails:
 - Do not store sensitive personal data (addresses, phone numbers, IDs, financial details).
@@ -41,49 +41,19 @@ Memory safety guardrails:
 Decide on memory actions conservatively: store stable preferences/goals, retract when negated,
 update when the user explicitly changes a preference. Use NO_ACTION otherwise.
 """
+RETURN_ONLY_JSON = "Return only JSON."
 
 
-class LLM(Protocol):
-    def generate(self, prompt: str) -> str:
-        raise NotImplementedError
-
-
-class DecideLLM(Protocol):
-    def decide(self, text: str) -> str:
-        raise NotImplementedError
-
-
-class StubLLM:
-    def generate(self, prompt: str) -> str:
-        return json.dumps({"action": "NO_ACTION"})
-
-
-class ChatLLMAdapter:
-    def __init__(self, llm: DecideLLM) -> None:
-        self._llm = llm
-
-    def generate(self, prompt: str) -> str:
-        return self._llm.decide(prompt)
-
-
-def build_chat_llm() -> LLM:
-    mode = os.getenv("LONELYCAT_CHAT_LLM_MODE", "stub").lower()
-    if mode == "stub":
-        return StubLLM()
-    return StubLLM()
-
-
-def _coerce_llm(llm: object | None) -> LLM:
+def _coerce_llm(llm: object | None) -> BaseLLM:
     if llm is None:
-        return build_chat_llm()
+        return build_llm_from_env()
     if hasattr(llm, "generate"):
         return llm  # type: ignore[return-value]
-    if hasattr(llm, "decide"):
-        return ChatLLMAdapter(llm)  # type: ignore[arg-type]
-    raise ValueError("LLM must implement generate(prompt) or decide(text)")
+    raise ValueError("LLM must implement generate(prompt)")
 
 
 def _extract_json_block(text: str) -> str | None:
+    # Chat-specific helper: extracts a JSON object from the model output without changing routing logic.
     fence_match = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
     if fence_match:
         text = fence_match.group(1).strip()
@@ -98,6 +68,8 @@ def _extract_json_block(text: str) -> str | None:
 def _parse_chat_output(raw_text: str | None):
     if raw_text is None:
         return "", NoActionDecision()
+    if not isinstance(raw_text, str):
+        raw_text = str(raw_text)
     stripped = raw_text.strip()
     candidate_text = _extract_json_block(stripped)
     if not candidate_text:
@@ -134,6 +106,7 @@ def _build_prompt(user_message: str, facts: list[dict], *, persona_key: str | No
         f"{POLICY_PROMPT}\n"
         f"user_message: {user_message}\n"
         f"active_facts: {facts_json}\n"
+        f"{RETURN_ONLY_JSON}\n"
     )
 
 
