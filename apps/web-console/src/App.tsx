@@ -1,58 +1,104 @@
-import { useState, useCallback } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { useState, useCallback, useEffect } from "react";
+import { Routes, Route, Navigate, useParams, useNavigate } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPage } from "./components/ChatPage";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { MemoryPage } from "./pages/MemoryPage";
+import { listConversations, createConversation, listMessages } from "./api/conversations";
 import type { Conversation, Message } from "./api/conversations";
 import "./App.css";
 
 const App = () => {
+  const navigate = useNavigate();
+  const { conversationId } = useParams<{ conversationId?: string }>();
+  
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [currentConversationId, setCurrentConversationId] = useState<string | null>(null);
+  const [conversationsLoading, setConversationsLoading] = useState(false);
+  const [conversationsError, setConversationsError] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const handleNewConversation = useCallback(() => {
-    // TODO: 调用 createConversation API
-    // 这里暂时使用本地生成的 ID，后续会替换为 API 调用
-    const newId = `conv-${Date.now()}`;
-    const now = new Date().toISOString();
-    const newConversation: Conversation = {
-      id: newId,
-      title: "新对话",
-      created_at: now,
-      updated_at: now,
+  // A2.1: 加载对话列表
+  useEffect(() => {
+    const loadConversations = async () => {
+      setConversationsLoading(true);
+      setConversationsError(null);
+      try {
+        const response = await listConversations();
+        setConversations(response.items);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "加载对话列表失败";
+        setConversationsError(errorMessage);
+        console.error("Failed to load conversations:", error);
+      } finally {
+        setConversationsLoading(false);
+      }
     };
-    setConversations((prev) => [newConversation, ...prev]);
-    setCurrentConversationId(newId);
-    setMessages([]);
+    loadConversations();
   }, []);
 
+  // A2.3: 根据 URL 中的 conversationId 加载消息
+  useEffect(() => {
+    if (!conversationId) {
+      setMessages([]);
+      return;
+    }
+
+    const loadMessages = async () => {
+      setMessagesLoading(true);
+      try {
+        const response = await listMessages(conversationId);
+        setMessages(response.items);
+      } catch (error) {
+        console.error("Failed to load messages:", error);
+        setMessages([]);
+      } finally {
+        setMessagesLoading(false);
+      }
+    };
+    loadMessages();
+  }, [conversationId]);
+
+  const handleNewConversation = useCallback(async () => {
+    try {
+      const newConversation = await createConversation("新对话");
+      // 重新加载对话列表以确保顺序正确
+      const response = await listConversations();
+      setConversations(response.items);
+      // 导航到新对话
+      navigate(`/chat/${newConversation.id}`);
+      setMessages([]);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "创建对话失败";
+      console.error("Failed to create conversation:", error);
+      alert(errorMessage);
+    }
+  }, [navigate]);
+
   const handleSelectConversation = useCallback((id: string) => {
-    setCurrentConversationId(id);
-    // TODO: 从存储中加载对话消息
-    // 这里暂时使用空消息列表
-    setMessages([]);
-  }, []);
+    // URL 驱动：导航到对应路由，消息加载由 useEffect 处理
+    navigate(`/chat/${id}`);
+  }, [navigate]);
 
   const handleDeleteConversation = useCallback((id: string) => {
     setConversations((prev) => prev.filter((conv) => conv.id !== id));
-    if (currentConversationId === id) {
-      setCurrentConversationId(null);
+    if (conversationId === id) {
+      // 如果删除的是当前对话，导航到首页
+      navigate("/");
       setMessages([]);
     }
-  }, [currentConversationId]);
+  }, [conversationId, navigate]);
 
   const handleSendMessage = useCallback(
     async (content: string) => {
-      if (!currentConversationId) {
+      if (!conversationId) {
         // 如果没有当前对话，创建一个新对话
-        handleNewConversation();
-        // 等待状态更新
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await handleNewConversation();
+        // 等待导航完成
+        return;
       }
 
       setLoading(true);
@@ -65,7 +111,7 @@ const App = () => {
         const now = new Date().toISOString();
         const userMessage: Message = {
           id: `msg-${Date.now()}-user`,
-          conversation_id: currentConversationId!,
+          conversation_id: conversationId!,
           role: "user",
           content,
           created_at: now,
@@ -73,7 +119,7 @@ const App = () => {
 
         const assistantMessage: Message = {
           id: `msg-${Date.now()}-assistant`,
-          conversation_id: currentConversationId!,
+          conversation_id: conversationId!,
           role: "assistant",
           content: `这是对 "${content}" 的回复。实际功能需要连接后端API。`,
           created_at: now,
@@ -85,7 +131,7 @@ const App = () => {
         if (messages.length === 0) {
           setConversations((prev) =>
             prev.map((conv) =>
-              conv.id === currentConversationId
+              conv.id === conversationId
                 ? { ...conv, title: content.slice(0, 30), updated_at: now }
                 : conv
             )
@@ -93,7 +139,7 @@ const App = () => {
         } else {
           setConversations((prev) =>
             prev.map((conv) =>
-              conv.id === currentConversationId ? { ...conv, updated_at: now } : conv
+              conv.id === conversationId ? { ...conv, updated_at: now } : conv
             )
           );
         }
@@ -102,7 +148,7 @@ const App = () => {
         const now = new Date().toISOString();
         const errorMessage: Message = {
           id: `msg-${Date.now()}-error`,
-          conversation_id: currentConversationId!,
+          conversation_id: conversationId!,
           role: "assistant",
           content: "抱歉，发送消息时出现错误。",
           created_at: now,
@@ -112,7 +158,7 @@ const App = () => {
         setLoading(false);
       }
     },
-    [currentConversationId, messages.length, handleNewConversation]
+    [conversationId, messages.length, handleNewConversation]
   );
 
   return (
@@ -121,15 +167,23 @@ const App = () => {
         sidebar={
           <Sidebar
             conversations={conversations}
-            currentConversationId={currentConversationId}
+            currentConversationId={conversationId || null}
             onNewConversation={handleNewConversation}
             onSelectConversation={handleSelectConversation}
             onDeleteConversation={handleDeleteConversation}
+            loading={conversationsLoading}
+            error={conversationsError}
           />
         }
         mainContent={
           <div className="main-content-wrapper">
             <Routes>
+              <Route
+                path="/chat/:conversationId"
+                element={
+                  <ChatPage messages={messages} onSendMessage={handleSendMessage} loading={loading || messagesLoading} />
+                }
+              />
               <Route
                 path="/"
                 element={
