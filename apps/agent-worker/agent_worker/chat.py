@@ -33,7 +33,6 @@ POLICY_PROMPT = """You will receive:
 Respond with a single JSON object with EXACTLY these keys:
 - assistant_reply (string)
 - memory ("NO_ACTION" or an action JSON matching the router schema)
-Return only JSON with no extra text.
 
 Memory safety guardrails:
 - Do not store sensitive personal data (addresses, phone numbers, IDs, financial details).
@@ -42,6 +41,7 @@ Memory safety guardrails:
 Decide on memory actions conservatively: store stable preferences/goals, retract when negated,
 update when the user explicitly changes a preference. Use NO_ACTION otherwise.
 """
+RETURN_ONLY_JSON = "Return only JSON with no extra text."
 
 
 def _coerce_llm(llm: object | None) -> BaseLLM:
@@ -53,6 +53,7 @@ def _coerce_llm(llm: object | None) -> BaseLLM:
 
 
 def _extract_json_block(text: str) -> str | None:
+    # Chat-specific helper: extracts a JSON object from the model output without changing routing logic.
     fence_match = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
     if fence_match:
         text = fence_match.group(1).strip()
@@ -105,6 +106,7 @@ def _build_prompt(user_message: str, facts: list[dict], *, persona_key: str | No
         f"{POLICY_PROMPT}\n"
         f"user_message: {user_message}\n"
         f"active_facts: {facts_json}\n"
+        f"{RETURN_ONLY_JSON}\n"
     )
 
 
