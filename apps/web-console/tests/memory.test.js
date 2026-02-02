@@ -18,6 +18,9 @@ test("memory api helpers are defined", async () => {
   assert.match(content, /export const fetchFacts/);
   assert.match(content, /export const proposeFact/);
   assert.match(content, /export const retractFact/);
+  assert.match(content, /export const fetchProposals/);
+  assert.match(content, /export const acceptProposal/);
+  assert.match(content, /export const rejectProposal/);
   assert.match(content, /export const fetchFactChain/);
 });
 
