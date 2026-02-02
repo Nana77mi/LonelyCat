@@ -17,3 +17,16 @@ node_modules/
 
 # Env
 .env
+
+# Config files with sensitive data
+configs/config.yaml
+
+# IDE
+.vscode/
+.idea/
+
+# PIDs
+.pids/
+
+# Lock files (optional - some projects prefer to commit these)
+# pnpm-lock.yaml

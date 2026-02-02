@@ -17,8 +17,8 @@ CORE_API_DIR := apps/core-api
 WEB_CONSOLE_DIR := apps/web-console
 
 API_HOST := 127.0.0.1
-API_PORT := 8000
-WEB_PORT := 5173
+API_PORT := 5173
+WEB_PORT := 8000
 
 export PYTHONPATH := packages
 
@@ -40,7 +40,7 @@ help:
 	@echo ""
 	@echo "After 'make up':"
 	@echo "  core-api:     http://localhost:$(API_PORT)/docs"
-	@echo "  web-console:  http://localhost:$(WEB_PORT)/memory"
+	@echo "  web-console:  http://localhost:$(WEB_PORT)"
 	@echo ""
 	@echo "Agent worker LLM examples:"
 	@echo "  LLM_PROVIDER=stub python -m agent_worker.chat \"hi\""
@@ -77,15 +77,27 @@ setup-web:
 # -------------------------
 .PHONY: up
 up: up-api
+	@echo ""
+	@echo "=========================================="
+	@echo "  LonelyCat 服务启动中..."
+	@echo "=========================================="
+	@echo ""
+	@echo "✓ 核心 API 已启动: http://localhost:$(API_PORT)"
+	@echo "  - API 文档: http://localhost:$(API_PORT)/docs"
+	@echo "  - 健康检查: http://localhost:$(API_PORT)/health"
+	@echo ""
+	@echo "正在启动用户界面..."
+	@echo ""
 	@$(MAKE) up-web
 
 .PHONY: up-api
 up-api: setup-py
 	@mkdir -p $(PID_DIR)
 	@if [ -f $(API_PID) ] && kill -0 $$(cat $(API_PID)) 2>/dev/null; then \
-		echo "core-api already running (pid=$$(cat $(API_PID)))"; \
+		echo "⚠️  core-api 已在运行 (pid=$$(cat $(API_PID)))"; \
+		echo "   访问地址: http://localhost:$(API_PORT)"; \
 	else \
-		echo "Starting core-api on http://localhost:$(API_PORT) ..."; \
+		echo "🚀 启动核心 API (端口 $(API_PORT))..."; \
 		nohup env PYTHONPATH=$(PYTHONPATH) $(PY) -m uvicorn app.main:app \
 			--reload \
 			--host $(API_HOST) \
@@ -93,12 +105,29 @@ up-api: setup-py
 			--app-dir $(CORE_API_DIR) \
 			> $(PID_DIR)/core-api.log 2>&1 & \
 		echo $$! > $(API_PID); \
-		echo "core-api pid=$$(cat $(API_PID)) (logs: $(PID_DIR)/core-api.log)"; \
+		sleep 2; \
+		if kill -0 $$(cat $(API_PID)) 2>/dev/null; then \
+			echo "✓ core-api 启动成功 (pid=$$(cat $(API_PID)))"; \
+			echo "  日志文件: $(PID_DIR)/core-api.log"; \
+		else \
+			echo "✗ core-api 启动失败，请查看日志: $(PID_DIR)/core-api.log"; \
+			exit 1; \
+		fi; \
 	fi
 
 .PHONY: up-web
 up-web: setup-web
-	@echo "Starting web-console on http://localhost:$(WEB_PORT) ..."
+	@echo "🚀 启动用户界面 (端口 $(WEB_PORT))..."
+	@echo ""
+	@echo "=========================================="
+	@echo "  ✨ LonelyCat 已就绪！"
+	@echo "=========================================="
+	@echo ""
+	@echo "📱 用户界面: http://localhost:$(WEB_PORT)"
+	@echo "🔧 API 文档: http://localhost:$(API_PORT)/docs"
+	@echo ""
+	@echo "按 Ctrl+C 停止服务"
+	@echo ""
 	@cd $(WEB_CONSOLE_DIR) && pnpm dev --host 0.0.0.0 --port $(WEB_PORT)
 
 # -------------------------
@@ -106,19 +135,21 @@ up-web: setup-web
 # -------------------------
 .PHONY: down
 down:
+	@echo "🛑 正在停止服务..."
 	@if [ -f $(API_PID) ]; then \
 		PID=$$(cat $(API_PID)); \
 		if kill -0 $$PID 2>/dev/null; then \
-			echo "Stopping core-api (pid=$$PID)"; \
+			echo "✓ 停止 core-api (pid=$$PID)"; \
 			kill $$PID || true; \
 		else \
-			echo "core-api not running (stale pid file)"; \
+			echo "⚠️  core-api 未运行 (pid 文件已过期)"; \
 		fi; \
 		rm -f $(API_PID); \
 	else \
-		echo "No core-api pid file found."; \
+		echo "⚠️  未找到 core-api pid 文件"; \
 	fi
-	@echo "Note: web-console runs in foreground. Stop it with Ctrl+C in its terminal."
+	@echo ""
+	@echo "注意: web-console 在前台运行，请在运行它的终端中按 Ctrl+C 停止"
 
 # -------------------------
 # Tests

@@ -11,6 +11,6 @@ RUN pip install --no-cache-dir \
 
 COPY apps/core-api/app ./app
 
-EXPOSE 8000
+EXPOSE 5173
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "5173"]
