@@ -7,7 +7,7 @@ export default defineConfig({
     port: 8000,
     proxy: {
       "/api": {
-        target: "http://127.0.0.1:5173",
+        target: process.env.VITE_CORE_API_URL || "http://127.0.0.1:5173",
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, ""),
       },
@@ -16,5 +16,7 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     setupFiles: "./vitest.setup.ts",
+    include: ["tests/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}"],
+    globals: true,
   },
 });

@@ -1,18 +1,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Proposal,
-  FactRecord,
+  Fact,
   acceptProposal,
   fetchFacts,
   fetchProposals,
   proposeFact,
   rejectProposal,
-  retractFact,
+  revokeFact,
 } from "../api/memory";
 import { FactDetailsDrawer } from "./FactDetailsDrawer";
 import "./SettingsPanel.css";
 
-const STATUS_OPTIONS = ["ALL", "ACTIVE", "OVERRIDDEN", "RETRACTED"] as const;
+const STATUS_OPTIONS = ["all", "active", "revoked", "archived"] as const;
 
 type StatusFilter = (typeof STATUS_OPTIONS)[number];
 
@@ -39,9 +39,9 @@ type SettingsPanelProps = {
 };
 
 export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
-  const [facts, setFacts] = useState<FactRecord[]>([]);
+  const [facts, setFacts] = useState<Fact[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [status, setStatus] = useState<StatusFilter>("ALL");
+  const [status, setStatus] = useState<StatusFilter>("all");
   const [predicateContains, setPredicateContains] = useState("");
   const [candidate, setCandidate] = useState(defaultCandidate);
   const [retractReasons, setRetractReasons] = useState<RetractReasonMap>({});
@@ -53,11 +53,10 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
 
   const fetchParams = useMemo(
     () => ({
-      subject: candidate.subject || "user",
-      status,
-      predicate_contains: predicateContains || undefined,
+      scope: "global" as const,
+      status: status === "all" ? undefined : status as "active" | "revoked" | "archived",
     }),
-    [candidate.subject, status, predicateContains]
+    [status]
   );
 
   const loadFacts = useCallback(async () => {
@@ -85,7 +84,7 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
   const loadProposals = useCallback(async () => {
     try {
       setProposalsError(null);
-      const response = await fetchProposals("PENDING");
+      const response = await fetchProposals({ status: "pending" });
       setProposals(response.items);
       setRejectReasons((current) => {
         const next: RejectReasonMap = {};
@@ -111,11 +110,11 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
 
   const sortedFacts = useMemo(() => {
     return [...facts].sort((a, b) => {
-      const subjectCompare = a.subject.localeCompare(b.subject);
-      if (subjectCompare !== 0) {
-        return subjectCompare;
+      const keyCompare = a.key.localeCompare(b.key);
+      if (keyCompare !== 0) {
+        return keyCompare;
       }
-      return a.seq - b.seq;
+      return b.version - a.version; // Sort by version descending
     });
   }, [facts]);
 
@@ -134,12 +133,25 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
     }
     setError(null);
     try {
+      // Build key from subject.predicate format
+      const key = candidate.subject === "user" 
+        ? candidate.predicate.trim()
+        : `${candidate.subject}.${candidate.predicate.trim()}`;
+      
       await proposeFact({
-        subject: candidate.subject || "user",
-        predicate: candidate.predicate.trim(),
-        object: candidate.object,
+        payload: {
+          key,
+          value: candidate.object,
+          tags: [],
+          ttl_seconds: null,
+        },
+        source_ref: {
+          kind: "manual",
+          ref_id: "web-console",
+          excerpt: null,
+        },
         confidence: candidate.confidence,
-        source: { type: "web-console" },
+        scope_hint: "global",
       });
       setCandidate(defaultCandidate);
       await loadFacts();
@@ -157,7 +169,8 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
     }
     setError(null);
     try {
-      await retractFact(id, reason.trim());
+      // Note: Backend API doesn't support reason parameter yet
+      await revokeFact(id);
       setRetractReasons((current) => ({ ...current, [id]: "" }));
       await loadFacts();
     } catch (err) {
@@ -234,30 +247,25 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
                     </div>
                     <div className="proposal-content">
                       <div className="proposal-field">
-                        <strong>Subject:</strong> {proposal.candidate.subject}
+                        <strong>Key:</strong> {proposal.payload.key}
                       </div>
                       <div className="proposal-field">
-                        <strong>Predicate:</strong> {proposal.candidate.predicate}
-                      </div>
-                      <div className="proposal-field">
-                        <strong>Object:</strong>{" "}
-                        {typeof proposal.candidate.object === "string" ? (
-                          proposal.candidate.object
+                        <strong>Value:</strong>{" "}
+                        {typeof proposal.payload.value === "string" ? (
+                          proposal.payload.value
                         ) : (
-                          <pre className="object-pre">{renderObjectValue(proposal.candidate.object)}</pre>
+                          <pre className="object-pre">{renderObjectValue(proposal.payload.value)}</pre>
                         )}
                       </div>
                       <div className="proposal-field">
-                        <strong>Confidence:</strong> {proposal.candidate.confidence.toFixed(2)}
+                        <strong>Confidence:</strong> {proposal.confidence?.toFixed(2) ?? "—"}
                       </div>
-                      {proposal.source_note && (
-                        <div className="proposal-field">
-                          <strong>Source:</strong> {proposal.source_note}
-                        </div>
-                      )}
+                      <div className="proposal-field">
+                        <strong>Source:</strong> {proposal.source_ref.kind}: {proposal.source_ref.ref_id}
+                      </div>
                       <div className="proposal-field">
                         <strong>Created:</strong>{" "}
-                        {new Date(proposal.created_at * 1000).toLocaleString()}
+                        {new Date(proposal.created_at).toLocaleString()}
                       </div>
                     </div>
                     <div className="proposal-actions">
@@ -400,21 +408,21 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
                     onClick={() => setSelectedFactId(fact.id)}
                   >
                     <div className="fact-header">
-                      <span className="fact-predicate">{fact.predicate}</span>
+                      <span className="fact-predicate">{fact.key}</span>
                       <span className={`fact-status ${fact.status.toLowerCase()}`}>
                         {fact.status}
                       </span>
                     </div>
                     <div className="fact-content">
-                      {typeof fact.object === "string" ? (
-                        fact.object
+                      {typeof fact.value === "string" ? (
+                        fact.value
                       ) : (
-                        <pre className="object-pre">{renderObjectValue(fact.object)}</pre>
+                        <pre className="object-pre">{renderObjectValue(fact.value)}</pre>
                       )}
                     </div>
                     <div className="fact-meta">
-                      <span>Seq: {fact.seq}</span>
-                      <span>{new Date(fact.created_at * 1000).toLocaleString()}</span>
+                      <span>Version: {fact.version}</span>
+                      <span>{new Date(fact.created_at).toLocaleString()}</span>
                     </div>
                     <div
                       className="fact-retract"
@@ -431,7 +439,7 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
                             [fact.id]: event.target.value,
                           }));
                         }}
-                        disabled={fact.status === "RETRACTED"}
+                        disabled={fact.status === "revoked"}
                       />
                       <button
                         type="button"
@@ -441,7 +449,7 @@ export const SettingsPanel = ({ isOpen, onClose }: SettingsPanelProps) => {
                           void handleRetract(fact.id);
                         }}
                         disabled={
-                          fact.status === "RETRACTED" ||
+                          fact.status === "revoked" ||
                           loading ||
                           !(retractReasons[fact.id] ?? "").trim()
                         }

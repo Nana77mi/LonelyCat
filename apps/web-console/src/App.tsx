@@ -1,8 +1,10 @@
 import { useState, useCallback } from "react";
+import { Routes, Route, Navigate } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Sidebar, Conversation } from "./components/Sidebar";
 import { ChatPage, Message } from "./components/ChatPage";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { MemoryPage } from "./pages/MemoryPage";
 import "./App.css";
 
 const App = () => {
@@ -118,7 +120,16 @@ const App = () => {
         }
         mainContent={
           <div className="main-content-wrapper">
-            <ChatPage messages={messages} onSendMessage={handleSendMessage} loading={loading} />
+            <Routes>
+              <Route
+                path="/"
+                element={
+                  <ChatPage messages={messages} onSendMessage={handleSendMessage} loading={loading} />
+                }
+              />
+              <Route path="/memory" element={<MemoryPage />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
           </div>
         }
         onSettingsClick={() => setSettingsOpen(true)}
