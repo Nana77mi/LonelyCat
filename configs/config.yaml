@@ -2,7 +2,29 @@ server:
   host: "0.0.0.0"
   port: 8000
 models:
-  default: "TODO"
+  # 默认使用的模型提供商: openai, qwen, ollama, stub
+  provider: "stub"
+  # 默认模型名称
+  default: "stub"
+  # OpenAI 配置
+  openai:
+    api_key: ""  # 在此填入你的 OpenAI API Key，或通过 OPENAI_API_KEY 环境变量设置
+    base_url: "https://api.openai.com/v1"  # 可选，默认使用官方 API
+    model: "gpt-4o-mini"  # 默认模型
+  # Qwen 配置
+  qwen:
+    api_key: ""  # 在此填入你的 Qwen API Key，或通过 QWEN_API_KEY 环境变量设置
+    base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1"  # 可选，默认使用官方 API
+    model: "qwen-plus"  # 默认模型
+  # Ollama 配置（本地模型）
+  ollama:
+    base_url: "http://localhost:11434"  # Ollama 服务地址
+    model: "llama3:8b"  # 默认模型
+  # 通用配置
+  timeout_s: 30.0  # 请求超时时间（秒）
+  max_retries: 2  # 最大重试次数
+  retry_backoff_s: 0.8  # 重试退避时间（秒）
+  max_prompt_chars: 20000  # 最大提示字符数
 memory:
   backend: "TODO"
 kb:
