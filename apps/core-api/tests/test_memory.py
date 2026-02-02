@@ -44,7 +44,8 @@ def test_propose_then_list() -> None:
     assert proposal_response["status"] == "PENDING"
     proposal_id = proposal_response["proposal"]["id"]
 
-    record = asyncio.run(memory.accept_proposal(proposal_id, store=store))
+    accepted = asyncio.run(memory.accept_proposal(proposal_id, store=store))
+    record = accepted["record"]
     assert record["predicate"] == "likes"
     assert record["status"] == "ACTIVE"
     assert_fact_schema(record, "ACTIVE")
@@ -65,7 +66,8 @@ def test_get_by_id() -> None:
         source={"type": "test"},
     )
     proposal_response = asyncio.run(memory.propose_fact(candidate, store=store))
-    record = asyncio.run(memory.accept_proposal(proposal_response["proposal"]["id"], store=store))
+    accepted = asyncio.run(memory.accept_proposal(proposal_response["proposal"]["id"], store=store))
+    record = accepted["record"]
 
     fetched = asyncio.run(memory.get_fact(record["id"], store=store))
     assert fetched["id"] == record["id"]
@@ -83,7 +85,8 @@ def test_retract() -> None:
         source={"type": "test"},
     )
     proposal_response = asyncio.run(memory.propose_fact(candidate, store=store))
-    record = asyncio.run(memory.accept_proposal(proposal_response["proposal"]["id"], store=store))
+    accepted = asyncio.run(memory.accept_proposal(proposal_response["proposal"]["id"], store=store))
+    record = accepted["record"]
 
     retracted = asyncio.run(
         memory.retract_fact(
@@ -125,7 +128,8 @@ def test_retract_already_retracted_raises() -> None:
         source={"type": "test"},
     )
     proposal_response = asyncio.run(memory.propose_fact(candidate, store=store))
-    record = asyncio.run(memory.accept_proposal(proposal_response["proposal"]["id"], store=store))
+    accepted = asyncio.run(memory.accept_proposal(proposal_response["proposal"]["id"], store=store))
+    record = accepted["record"]
     asyncio.run(
         memory.retract_fact(
             record["id"],
@@ -154,7 +158,7 @@ def test_retract_requires_reason() -> None:
         source={"type": "test"},
     )
     proposal_response = asyncio.run(memory.propose_fact(candidate, store=store))
-    record = asyncio.run(memory.accept_proposal(proposal_response["proposal"]["id"], store=store))
+    record = asyncio.run(memory.accept_proposal(proposal_response["proposal"]["id"], store=store))["record"]
     with pytest.raises(HTTPException) as excinfo:
         asyncio.run(
             memory.retract_fact(
@@ -182,7 +186,7 @@ def test_non_json_object_is_stringified() -> None:
     )
 
     proposal_response = asyncio.run(memory.propose_fact(candidate, store=store))
-    record = asyncio.run(memory.accept_proposal(proposal_response["proposal"]["id"], store=store))
+    record = asyncio.run(memory.accept_proposal(proposal_response["proposal"]["id"], store=store))["record"]
     assert isinstance(record["object"], str)
     assert_fact_schema(record, "ACTIVE")
 
@@ -205,8 +209,8 @@ def test_propose_twice_overrides_previous() -> None:
     )
     first_response = asyncio.run(memory.propose_fact(first, store=store))
     second_response = asyncio.run(memory.propose_fact(second, store=store))
-    first_record = asyncio.run(memory.accept_proposal(first_response["proposal"]["id"], store=store))
-    second_record = asyncio.run(memory.accept_proposal(second_response["proposal"]["id"], store=store))
+    first_record = asyncio.run(memory.accept_proposal(first_response["proposal"]["id"], store=store))["record"]
+    second_record = asyncio.run(memory.accept_proposal(second_response["proposal"]["id"], store=store))["record"]
 
     assert second_record["status"] == "ACTIVE"
     assert_fact_schema(second_record, "ACTIVE")
@@ -214,8 +218,8 @@ def test_propose_twice_overrides_previous() -> None:
     response = asyncio.run(memory.list_facts(store=store))
     assert len(response["items"]) == 2
     items_by_id = {item["id"]: item for item in response["items"]}
-    assert items_by_id[first_record["id"]]["status"] == "RETRACTED"
-    assert_fact_schema(items_by_id[first_record["id"]], "RETRACTED")
+    assert items_by_id[first_record["id"]]["status"] == "OVERRIDDEN"
+    assert_fact_schema(items_by_id[first_record["id"]], "OVERRIDDEN")
 
 
 def test_chain_endpoint_returns_root_and_overrides() -> None:
@@ -236,8 +240,8 @@ def test_chain_endpoint_returns_root_and_overrides() -> None:
     )
     first_response = asyncio.run(memory.propose_fact(first, store=store))
     second_response = asyncio.run(memory.propose_fact(second, store=store))
-    first_record = asyncio.run(memory.accept_proposal(first_response["proposal"]["id"], store=store))
-    second_record = asyncio.run(memory.accept_proposal(second_response["proposal"]["id"], store=store))
+    first_record = asyncio.run(memory.accept_proposal(first_response["proposal"]["id"], store=store))["record"]
+    second_record = asyncio.run(memory.accept_proposal(second_response["proposal"]["id"], store=store))["record"]
 
     chain = asyncio.run(
         memory.get_fact_chain(second_record["id"], max_depth=20, store=store)
@@ -248,7 +252,7 @@ def test_chain_endpoint_returns_root_and_overrides() -> None:
     assert chain["items"][1]["id"] == first_record["id"]
     assert chain["truncated"] is False
     assert_fact_schema(chain["items"][0], "ACTIVE")
-    assert_fact_schema(chain["items"][1], "RETRACTED")
+    assert_fact_schema(chain["items"][1], "OVERRIDDEN")
 
 
 def test_chain_endpoint_max_depth_truncates() -> None:
@@ -263,7 +267,7 @@ def test_chain_endpoint_max_depth_truncates() -> None:
             source={"type": "test"},
         )
         response = asyncio.run(memory.propose_fact(candidate, store=store))
-        last_record = asyncio.run(memory.accept_proposal(response["proposal"]["id"], store=store))
+        last_record = asyncio.run(memory.accept_proposal(response["proposal"]["id"], store=store))["record"]
     assert last_record is not None
 
     chain = asyncio.run(
@@ -291,8 +295,8 @@ def test_chain_cycle_is_detected_and_truncated() -> None:
     )
     first_response = asyncio.run(memory.propose_fact(first, store=store))
     second_response = asyncio.run(memory.propose_fact(second, store=store))
-    first_record = asyncio.run(memory.accept_proposal(first_response["proposal"]["id"], store=store))
-    second_record = asyncio.run(memory.accept_proposal(second_response["proposal"]["id"], store=store))
+    first_record = asyncio.run(memory.accept_proposal(first_response["proposal"]["id"], store=store))["record"]
+    second_record = asyncio.run(memory.accept_proposal(second_response["proposal"]["id"], store=store))["record"]
 
     store._records[first_record["id"]].overrides = second_record["id"]
 
@@ -321,6 +325,30 @@ def test_proposal_appears_in_pending_list() -> None:
     assert proposals["items"][0]["status"] == "PENDING"
 
 
+def test_get_proposal_by_id() -> None:
+    store = FactsStore()
+    candidate = memory.FactCandidateIn(
+        subject="user",
+        predicate="reads",
+        object="manga",
+        confidence=0.6,
+        source={"type": "test"},
+    )
+    proposal_response = asyncio.run(memory.propose_fact(candidate, store=store))
+    proposal_id = proposal_response["proposal"]["id"]
+
+    proposal = asyncio.run(memory.get_proposal(proposal_id, store=store))
+    assert proposal["id"] == proposal_id
+    assert proposal["status"] == "PENDING"
+
+
+def test_get_proposal_missing_raises() -> None:
+    store = FactsStore()
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(memory.get_proposal("missing", store=store))
+    assert excinfo.value.status_code == 404
+
+
 def test_accept_updates_proposal_and_creates_fact() -> None:
     store = FactsStore()
     candidate = memory.FactCandidateIn(
@@ -333,8 +361,10 @@ def test_accept_updates_proposal_and_creates_fact() -> None:
     proposal_response = asyncio.run(memory.propose_fact(candidate, store=store))
     proposal_id = proposal_response["proposal"]["id"]
 
-    record = asyncio.run(memory.accept_proposal(proposal_id, store=store))
+    accepted = asyncio.run(memory.accept_proposal(proposal_id, store=store))
+    record = accepted["record"]
     assert record["status"] == "ACTIVE"
+    assert accepted["proposal"]["status"] == "ACCEPTED"
 
     proposals = asyncio.run(
         memory.list_proposals(status=memory.ProposalStatusFilter.ALL, store=store)

@@ -1,5 +1,6 @@
 try:
     from fastapi import FastAPI, WebSocket
+    from fastapi.middleware.cors import CORSMiddleware
 except ModuleNotFoundError:  # pragma: no cover - exercised in offline tests
     class WebSocket:  # type: ignore[no-redef]
         async def accept(self) -> None:
@@ -24,17 +25,31 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in offline tests
         def include_router(self, router, prefix: str | None = None, tags: list[str] | None = None) -> None:
             return None
 
+        def add_middleware(self, middleware, **kwargs) -> None:
+            return None
+
         def websocket(self, path: str):
             def decorator(func):
                 return func
 
             return decorator
 
+    class CORSMiddleware:  # type: ignore[no-redef]
+        def __init__(self, app, **kwargs) -> None:
+            self.app = app
+
 from app.api.memory import router as memory_router
 from app.settings import Settings
 
 settings = Settings()
 app = FastAPI(title=settings.app_name)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 app.include_router(memory_router, prefix="/memory", tags=["memory"])
 
 

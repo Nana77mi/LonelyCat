@@ -4,18 +4,19 @@ import json
 import re
 
 from agent_worker.llm import BaseLLM
-from agent_worker.router import Decision, NoActionDecision, parse_llm_output
+from agent_worker.router import Decision, NoActionDecision, parse_llm_output_with_error
 from agent_worker.trace import TraceCollector
 
 MEMORY_GATE_MARKER = "### MEMORY_GATE ###"
-MEMORY_POLICY = """You are a memory gatekeeper deciding whether to store, retract, or update a user fact.
-Only store long-term preferences, goals, or stable facts.
-Do not store sensitive personal data (addresses, phone numbers, IDs, financial details).
-If the user negates a stored fact, RETRACT it.
-If the user explicitly changes a fact, UPDATE it.
-If uncertain, choose NO_ACTION.
+MEMORY_POLICY = """Decide if the message implies a long-term, non-sensitive user fact.
+Return ONLY a JSON object with an action:
+PROPOSE: { "action":"PROPOSE","subject":"user","predicate":"...","object":"...","confidence":0.0-1.0 }
+RETRACT: { "action":"RETRACT","subject":"user","predicate":"...","object":"...","reason":"..." }
+UPDATE: { "action":"UPDATE","subject":"user","predicate":"...","old_object":"...","new_object":"...","confidence":0.0-1.0,"reason":"..." }
+Or { "action":"NO_ACTION" } when unsure.
+Never include assistant_reply or extra keys.
 """
-RETURN_GATE_JSON = "Return only JSON matching the router schema or NO_ACTION."
+RETURN_GATE_JSON = "Return ONLY the JSON object."
 
 
 def build_prompt(
@@ -34,22 +35,27 @@ def build_prompt(
 
 
 def parse_gate_output(raw: str | None) -> Decision:
+    decision, _error = parse_gate_output_with_error(raw)
+    return decision
+
+
+def parse_gate_output_with_error(raw: str | None) -> tuple[Decision, str | None]:
     if raw is None:
-        return NoActionDecision()
+        return NoActionDecision(), "no_json_found"
     if not isinstance(raw, str):
         raw = str(raw)
     stripped = raw.strip()
     if not stripped:
-        return NoActionDecision()
+        return NoActionDecision(), "no_json_found"
     candidate_text = _extract_json_block(stripped)
     if candidate_text:
         try:
             data = json.loads(candidate_text)
         except json.JSONDecodeError:
-            return NoActionDecision()
+            data = None
         if isinstance(data, dict) and "assistant_reply" in data:
-            return NoActionDecision()
-    return parse_llm_output(stripped)
+            return NoActionDecision(), "assistant_reply_payload"
+    return parse_llm_output_with_error(stripped)
 
 
 def _extract_json_block(text: str) -> str | None:
@@ -80,4 +86,7 @@ class MemoryGate:
         raw = self._llm.generate(prompt)
         if trace:
             trace.record("gate.response", str(raw))
-        return parse_gate_output(raw)
+        decision, error = parse_gate_output_with_error(raw)
+        if trace and error:
+            trace.record("gate.parse_error", error)
+        return decision

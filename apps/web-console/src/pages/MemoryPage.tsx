@@ -12,7 +12,7 @@ import {
 } from "../api/memory";
 import { FactDetailsDrawer } from "../components/FactDetailsDrawer";
 
-const STATUS_OPTIONS = ["ALL", "ACTIVE", "RETRACTED"] as const;
+const STATUS_OPTIONS = ["ALL", "ACTIVE", "OVERRIDDEN", "RETRACTED"] as const;
 
 type StatusFilter = (typeof STATUS_OPTIONS)[number];
 
@@ -44,6 +44,7 @@ export const MemoryPage = () => {
   const [selectedFactId, setSelectedFactId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [proposalsError, setProposalsError] = useState<string | null>(null);
 
   const fetchParams = useMemo(
     () => ({
@@ -78,6 +79,7 @@ export const MemoryPage = () => {
 
   const loadProposals = useCallback(async () => {
     try {
+      setProposalsError(null);
       const response = await fetchProposals("PENDING");
       setProposals(response.items);
       setRejectReasons((current) => {
@@ -90,7 +92,15 @@ export const MemoryPage = () => {
         return next;
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load proposals");
+      if (err instanceof Error) {
+        const requestUrl = (err as Error & { requestUrl?: string }).requestUrl;
+        if (requestUrl) {
+          console.log(`Proposals request failed: ${requestUrl}`);
+        }
+        setProposalsError(err.message);
+      } else {
+        setProposalsError("Failed to load proposals");
+      }
     }
   }, []);
 
@@ -172,9 +182,86 @@ export const MemoryPage = () => {
 
   return (
     <section>
-      <h2>Memory: Facts</h2>
-      <p>View and manage long-term facts stored for the assistant.</p>
+      <h2>Memory</h2>
+      <p>Review proposals and manage long-term facts stored for the assistant.</p>
 
+      {error ? <p role="alert">{error}</p> : null}
+      {loading ? <p>Loading…</p> : null}
+
+      <h3>Proposals</h3>
+      <p>Review incoming memory proposals before accepting them into active facts.</p>
+      <button type="button" onClick={() => void loadProposals()}>
+        Refresh Proposals
+      </button>
+      {proposalsError ? <p role="alert">{proposalsError}</p> : null}
+      <table>
+        <thead>
+          <tr>
+            <th>Proposal ID</th>
+            <th>Subject</th>
+            <th>Predicate</th>
+            <th>Object</th>
+            <th>Confidence</th>
+            <th>Source Note</th>
+            <th>Status</th>
+            <th>Created</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {proposalsError ? (
+            <tr>
+              <td colSpan={9}>Unable to load proposals.</td>
+            </tr>
+          ) : proposals.length === 0 ? (
+            <tr>
+              <td colSpan={9}>No pending proposals.</td>
+            </tr>
+          ) : (
+            proposals.map((proposal) => (
+              <tr key={proposal.id}>
+                <td>{proposal.id}</td>
+                <td>{proposal.candidate.subject}</td>
+                <td>{proposal.candidate.predicate}</td>
+                <td>
+                  {typeof proposal.candidate.object === "string" ? (
+                    renderObjectValue(proposal.candidate.object)
+                  ) : (
+                    <pre>{renderObjectValue(proposal.candidate.object)}</pre>
+                  )}
+                </td>
+                <td>{proposal.candidate.confidence.toFixed(2)}</td>
+                <td>{proposal.source_note || "—"}</td>
+                <td>{proposal.status}</td>
+                <td>{new Date(proposal.created_at * 1000).toLocaleString()}</td>
+                <td>
+                  <input
+                    type="text"
+                    placeholder="Reject reason (optional)"
+                    value={rejectReasons[proposal.id] ?? ""}
+                    onChange={(event) =>
+                      setRejectReasons((current) => ({
+                        ...current,
+                        [proposal.id]: event.target.value,
+                      }))
+                    }
+                  />
+                  <div>
+                    <button type="button" onClick={() => void handleAcceptProposal(proposal.id)}>
+                      Accept
+                    </button>
+                    <button type="button" onClick={() => void handleRejectProposal(proposal.id)}>
+                      Reject
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+
+      <h3>Facts</h3>
       <div>
         <label>
           Status
@@ -249,9 +336,6 @@ export const MemoryPage = () => {
         </button>
       </form>
 
-      {error ? <p role="alert">{error}</p> : null}
-      {loading ? <p>Loading…</p> : null}
-
       <table>
         <thead>
           <tr>
@@ -311,65 +395,6 @@ export const MemoryPage = () => {
                   >
                     Retract
                   </button>
-                </td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-
-      <h3>Pending Proposals</h3>
-      <p>Review incoming memory proposals before accepting them into active facts.</p>
-      <table>
-        <thead>
-          <tr>
-            <th>Predicate</th>
-            <th>Object</th>
-            <th>Confidence</th>
-            <th>Source</th>
-            <th>Reason</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {proposals.length === 0 ? (
-            <tr>
-              <td colSpan={6}>No pending proposals.</td>
-            </tr>
-          ) : (
-            proposals.map((proposal) => (
-              <tr key={proposal.id}>
-                <td>{proposal.candidate.predicate}</td>
-                <td>
-                  {typeof proposal.candidate.object === "string" ? (
-                    renderObjectValue(proposal.candidate.object)
-                  ) : (
-                    <pre>{renderObjectValue(proposal.candidate.object)}</pre>
-                  )}
-                </td>
-                <td>{proposal.candidate.confidence.toFixed(2)}</td>
-                <td>{proposal.source_note}</td>
-                <td>{proposal.reason ?? "—"}</td>
-                <td>
-                  <input
-                    type="text"
-                    placeholder="Reject reason (optional)"
-                    value={rejectReasons[proposal.id] ?? ""}
-                    onChange={(event) =>
-                      setRejectReasons((current) => ({
-                        ...current,
-                        [proposal.id]: event.target.value,
-                      }))
-                    }
-                  />
-                  <div>
-                    <button type="button" onClick={() => void handleAcceptProposal(proposal.id)}>
-                      Accept
-                    </button>
-                    <button type="button" onClick={() => void handleRejectProposal(proposal.id)}>
-                      Reject
-                    </button>
-                  </div>
                 </td>
               </tr>
             ))

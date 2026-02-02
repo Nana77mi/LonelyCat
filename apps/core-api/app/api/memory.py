@@ -24,6 +24,7 @@ router = APIRouter()
 
 class FactStatusFilter(str, Enum):
     ACTIVE = "ACTIVE"
+    OVERRIDDEN = "OVERRIDDEN"
     RETRACTED = "RETRACTED"
     ALL = "ALL"
 
@@ -92,7 +93,11 @@ def _ensure_json_safe(value: Any) -> Any:
 
 
 def _status_string(record: FactRecord) -> str:
-    return "ACTIVE" if record.status == FactStatus.ACTIVE else "RETRACTED"
+    if record.status == FactStatus.ACTIVE:
+        return "ACTIVE"
+    if record.status == FactStatus.OVERRIDDEN:
+        return "OVERRIDDEN"
+    return "RETRACTED"
 
 
 def _serialize_record(record: FactRecord) -> Dict[str, Any]:
@@ -242,6 +247,18 @@ async def list_proposals(
     return {"items": [_serialize_proposal(proposal) for proposal in proposals]}
 
 
+@router.get("/proposals/{proposal_id}")
+async def get_proposal(
+    proposal_id: str,
+    store: FactsStore = Depends(get_facts_store),
+) -> Dict[str, Any]:
+    proposal = await store.get_proposal(proposal_id)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="Proposal not found")
+    return _serialize_proposal(proposal)
+
+
+# Response shape: {"proposal": Proposal, "record": FactRecord} to keep proposal+fact consistent.
 @router.post("/proposals/{proposal_id}/accept")
 async def accept_proposal(
     proposal_id: str,
@@ -253,8 +270,8 @@ async def accept_proposal(
         if proposal is None:
             raise HTTPException(status_code=404, detail="Proposal not found")
         raise HTTPException(status_code=400, detail="Proposal already resolved")
-    _, record = accepted
-    return _serialize_record(record)
+    proposal, record = accepted
+    return {"proposal": _serialize_proposal(proposal), "record": _serialize_record(record)}
 
 
 @router.post("/proposals/{proposal_id}/reject")

@@ -44,53 +44,90 @@ Decision = Union[NoActionDecision, ProposeDecision, RetractDecision, UpdateDecis
 
 
 def parse_llm_output(text: str | None) -> Decision:
+    decision, _error = parse_llm_output_with_error(text)
+    return decision
+
+
+def parse_llm_output_with_error(text: str | None) -> tuple[Decision, str | None]:
     if text is None:
-        return NoActionDecision()
+        return NoActionDecision(), "no_json_found"
     stripped = text.strip()
+    if not stripped:
+        return NoActionDecision(), "no_json_found"
     if stripped == "NO_ACTION":
-        return NoActionDecision()
-    candidate_text = _extract_json_block(stripped)
-    if not candidate_text:
-        return NoActionDecision()
-    try:
-        data = json.loads(candidate_text)
-    except json.JSONDecodeError:
-        return NoActionDecision()
-    if not isinstance(data, dict):
-        return NoActionDecision()
-    action = data.get("action")
-    if action == "PROPOSE":
-        decision = _parse_propose(data)
-    elif action == "RETRACT":
-        decision = _parse_retract(data)
-    elif action == "UPDATE":
-        decision = _parse_update(data)
+        return NoActionDecision(), None
+    candidates = _extract_json_objects(stripped)
+    if not candidates:
+        return NoActionDecision(), "no_json_found"
+
+    action_payload = None
+    for _, payload in candidates:
+        if isinstance(payload, dict) and isinstance(payload.get("action"), str):
+            action_payload = payload
+            break
+    if action_payload is None:
+        return NoActionDecision(), "missing_action"
+
+    action = str(action_payload.get("action", "")).strip()
+    action_upper = action.upper()
+    if action_upper == "NO_ACTION":
+        return NoActionDecision(), None
+    if action_upper == "PROPOSE":
+        decision = _parse_propose(action_payload)
+    elif action_upper == "RETRACT":
+        decision = _parse_retract(action_payload)
+    elif action_upper == "UPDATE":
+        decision = _parse_update(action_payload)
     else:
-        decision = None
-    return decision or NoActionDecision()
+        return NoActionDecision(), "invalid_action"
+    if decision is None:
+        return NoActionDecision(), "missing_fields"
+    return decision, None
 
 
-def _extract_json_block(text: str) -> str | None:
-    fence_match = re.search(r"```(?:json)?\s*(.*?)```", text, re.DOTALL)
-    if fence_match:
-        text = fence_match.group(1).strip()
-    if text.startswith("{") and text.endswith("}"):
-        return text
-    json_match = re.search(r"\{.*\}", text, re.DOTALL)
-    if json_match:
-        return json_match.group(0)
-    return None
+def _extract_json_objects(text: str) -> list[tuple[int, dict]]:
+    candidates: list[tuple[int, dict]] = []
+    for match in re.finditer(r"```(?:json)?\s*(.*?)```", text, re.DOTALL):
+        candidate_text = match.group(1).strip()
+        try:
+            payload = json.loads(candidate_text)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            candidates.append((match.start(), payload))
+
+    decoder = json.JSONDecoder()
+    idx = 0
+    while idx < len(text):
+        start = text.find("{", idx)
+        if start == -1:
+            break
+        try:
+            payload, end = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            idx = start + 1
+            continue
+        if isinstance(payload, dict):
+            candidates.append((start, payload))
+        idx = start + end
+    candidates.sort(key=lambda item: item[0])
+    return candidates
 
 
-def _coerce_confidence(data: dict, default: float = 0.7) -> float | None:
-    confidence = data.get("confidence", default)
+def _coerce_confidence(data: dict) -> float | None:
+    if "confidence" not in data:
+        return None
+    confidence = data.get("confidence")
     if not isinstance(confidence, (int, float)):
         return None
-    return max(0.0, min(1.0, float(confidence)))
+    value = float(confidence)
+    if not 0.0 <= value <= 1.0:
+        return None
+    return value
 
 
 def _parse_propose(data: dict) -> ProposeDecision | None:
-    required = {"subject", "predicate", "object"}
+    required = {"subject", "predicate", "object", "confidence"}
     if not required.issubset(data):
         return None
     confidence = _coerce_confidence(data)
@@ -130,7 +167,7 @@ def _parse_retract(data: dict) -> RetractDecision | None:
 
 
 def _parse_update(data: dict) -> UpdateDecision | None:
-    required = {"subject", "predicate", "old_object", "new_object", "reason"}
+    required = {"subject", "predicate", "old_object", "new_object", "confidence", "reason"}
     if not required.issubset(data):
         return None
     confidence = _coerce_confidence(data)

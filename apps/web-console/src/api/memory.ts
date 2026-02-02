@@ -1,4 +1,4 @@
-export type FactStatus = "ACTIVE" | "RETRACTED";
+export type FactStatus = "ACTIVE" | "OVERRIDDEN" | "RETRACTED";
 export type ProposalStatus = "PENDING" | "ACCEPTED" | "REJECTED";
 
 export type FactRecord = {
@@ -36,11 +36,11 @@ export type Proposal = {
 
 export type FetchFactsParams = {
   subject?: string;
-  status?: "ALL" | "ACTIVE" | "RETRACTED";
+  status?: "ALL" | "ACTIVE" | "OVERRIDDEN" | "RETRACTED";
   predicate_contains?: string;
 };
 
-const baseUrl = import.meta.env.VITE_CORE_API_URL ?? "http://localhost:8000";
+const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
 const joinBaseUrl = (base: string, path: string) => {
   if (!base) {
@@ -94,6 +94,34 @@ const parseJson = async <T>(response: Response): Promise<T> => {
   }
 };
 
+const readErrorBody = async (response: Response): Promise<string> => {
+  const contentType = response.headers.get("content-type") ?? "";
+  let body = "";
+  try {
+    if (contentType.includes("application/json")) {
+      const data = await response.json();
+      body = JSON.stringify(data);
+    } else {
+      body = await response.text();
+    }
+  } catch {
+    body = "";
+  }
+  const trimmed = body.replace(/\s+/g, " ").trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.length > 200 ? `${trimmed.slice(0, 200)}…` : trimmed;
+};
+
+const buildErrorMessage = async (prefix: string, response: Response): Promise<string> => {
+  const detail = await readErrorBody(response);
+  if (!detail) {
+    return `${prefix} (${response.status})`;
+  }
+  return `${prefix} (${response.status}): ${detail}`;
+};
+
 export const fetchFacts = async (params: FetchFactsParams = {}): Promise<FetchFactsResponse> => {
   const url = buildUrl("/memory/facts", {
     subject: params.subject,
@@ -102,7 +130,7 @@ export const fetchFacts = async (params: FetchFactsParams = {}): Promise<FetchFa
   });
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`Failed to fetch facts (${response.status})`);
+    throw new Error(await buildErrorMessage("Failed to fetch facts", response));
   }
   return await parseJson<FetchFactsResponse>(response);
 };
@@ -115,7 +143,7 @@ export const proposeFact = async (candidate: FactCandidate): Promise<ProposeFact
     body: JSON.stringify(candidate),
   });
   if (!response.ok) {
-    throw new Error(`Failed to propose fact (${response.status})`);
+    throw new Error(await buildErrorMessage("Failed to propose fact", response));
   }
   return await parseJson<ProposeFactResponse>(response);
 };
@@ -124,18 +152,27 @@ export const fetchProposals = async (status?: ProposalStatus | "ALL"): Promise<F
   const url = buildUrl("/memory/proposals", { status });
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`Failed to fetch proposals (${response.status})`);
+    const detail = await readErrorBody(response);
+    const message = `Failed to fetch proposals: ${response.status} ${url}${detail ? ` ${detail}` : ""}`;
+    const error = new Error(message) as Error & { requestUrl?: string };
+    error.requestUrl = url;
+    throw error;
   }
   return await parseJson<FetchProposalsResponse>(response);
 };
 
-export const acceptProposal = async (id: string): Promise<FactRecord> => {
+export type AcceptProposalResponse = {
+  proposal: Proposal;
+  record: FactRecord;
+};
+
+export const acceptProposal = async (id: string): Promise<AcceptProposalResponse> => {
   const url = buildUrl(`/memory/proposals/${id}/accept`);
   const response = await fetch(url, { method: "POST" });
   if (!response.ok) {
-    throw new Error(`Failed to accept proposal (${response.status})`);
+    throw new Error(await buildErrorMessage("Failed to accept proposal", response));
   }
-  return await parseJson<FactRecord>(response);
+  return await parseJson<AcceptProposalResponse>(response);
 };
 
 export const rejectProposal = async (id: string, reason?: string): Promise<Proposal> => {
@@ -146,7 +183,7 @@ export const rejectProposal = async (id: string, reason?: string): Promise<Propo
     body: JSON.stringify({ reason }),
   });
   if (!response.ok) {
-    throw new Error(`Failed to reject proposal (${response.status})`);
+    throw new Error(await buildErrorMessage("Failed to reject proposal", response));
   }
   return await parseJson<Proposal>(response);
 };
@@ -159,7 +196,7 @@ export const retractFact = async (id: string, reason: string): Promise<FactRecor
     body: JSON.stringify({ reason }),
   });
   if (!response.ok) {
-    throw new Error(`Failed to retract fact (${response.status})`);
+    throw new Error(await buildErrorMessage("Failed to retract fact", response));
   }
   return await parseJson<FactRecord>(response);
 };
@@ -174,7 +211,7 @@ export const fetchFactChain = async (
   });
   const response = await fetch(url, { signal });
   if (!response.ok) {
-    throw new Error(`Failed to fetch fact chain (${response.status})`);
+    throw new Error(await buildErrorMessage("Failed to fetch fact chain", response));
   }
   return await parseJson<FactChainResponse>(response);
 };
