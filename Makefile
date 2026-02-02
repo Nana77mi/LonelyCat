@@ -13,7 +13,7 @@ PIP  := $(VENV)/bin/pip
 PID_DIR := .pids
 API_PID := $(PID_DIR)/core-api.pid
 
-CORE_API_DIR := apps/core/api
+CORE_API_DIR := apps/core-api
 WEB_CONSOLE_DIR := apps/web-console
 
 API_HOST := 127.0.0.1
@@ -58,6 +58,7 @@ setup: setup-py setup-web
 setup-py:
 	@test -d $(VENV) || python3 -m venv $(VENV)
 	$(PY) -m pip install --upgrade pip
+	$(PIP) install setuptools wheel
 	# Install python libraries in editable mode (monorepo packages)
 	@if [ -f packages/memory/pyproject.toml ]; then $(PIP) install -e packages/memory; fi
 	@if [ -f packages/runtime/pyproject.toml ]; then $(PIP) install -e packages/runtime; fi
