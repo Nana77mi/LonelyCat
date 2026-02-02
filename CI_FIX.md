@@ -1,10 +1,18 @@
 # CI 修复说明
 
-## 问题
+## 问题 1：缺少 sqlalchemy 依赖
 CI 失败，错误：`ModuleNotFoundError: No module named 'sqlalchemy'`
 
-## 原因
+### 原因
 CI 配置中没有安装 `packages/memory` 包，而该包现在依赖 `sqlalchemy`。
+
+---
+
+## 问题 2：packages/runtime 安装失败
+CI 失败，错误：`ERROR: file:///.../packages/runtime does not appear to be a Python project: neither 'setup.py' nor 'pyproject.toml' found.`
+
+### 原因
+`packages/runtime` 目录没有 `pyproject.toml` 或 `setup.py` 文件，不是一个可安装的 Python 包。它通过 `conftest.py` 添加到 `sys.path`，不需要作为包安装。
 
 ## 解决方案
 
@@ -18,14 +26,42 @@ CI 配置中没有安装 `packages/memory` 包，而该包现在依赖 `sqlalche
 python -m pip install -e "apps/core-api[test]" -e "apps/agent-worker[test]" -e "packages/protocol[test]"
 ```
 
-### 需要改为：
+### 需要改为（问题 1 修复）：
 ```yaml
 python -m pip install -e "packages/memory" -e "packages/runtime" -e "packages/protocol[test]" -e "apps/core-api[test]" -e "apps/agent-worker[test]"
 ```
 
-## 手动修复步骤（必须在 GitHub Web 界面操作）
+### 最终版本（问题 2 修复后）：
+```yaml
+python -m pip install -e "packages/memory" -e "packages/protocol[test]" -e "apps/core-api[test]" -e "apps/agent-worker[test]"
+```
+注意：移除了 `packages/runtime`，因为它没有 `pyproject.toml`，不需要作为包安装。
 
-由于 GitHub 权限限制，无法自动推送 workflow 文件更改，**必须在 GitHub Web 界面手动添加**：
+## ✅ 问题已解决
+
+CI 文件已成功推送到远程分支。通过配置 GitHub CLI 并添加 `workflow` scope，现在可以正常推送 workflow 文件了。
+
+### 配置 GitHub Token 的步骤（已完成）
+
+1. 使用 GitHub CLI 刷新认证并添加 `workflow` scope：
+   ```bash
+   gh auth refresh --hostname github.com -s workflow
+   ```
+2. 验证 token 包含所需 scope：
+   ```bash
+   gh auth status
+   ```
+   应该看到：`Token scopes: 'gist', 'read:org', 'repo', 'workflow'`
+3. 推送更改：
+   ```bash
+   git push
+   ```
+
+---
+
+## 手动修复步骤（已不需要，保留作为参考）
+
+~~由于 GitHub 权限限制，无法自动推送 workflow 文件更改，**必须在 GitHub Web 界面手动添加**：~~
 
 ### 步骤：
 
@@ -76,9 +112,16 @@ jobs:
 
 ## 已完成的修复
 
+### 问题 1 修复：
 - ✅ 更新了 `apps/core-api/pyproject.toml`，添加了对 `lonelycat-memory` 的依赖声明
 - ✅ 本地已准备好 CI 配置的修复代码（第 18 行已更新）
-- ✅ 已提交修复（commit 1a878c9），但由于权限限制无法推送到远程
+- ✅ 已提交修复（commit 1a878c9）
+- ✅ **已成功推送 CI 文件到远程**（commit 5ff6ac8）
+- ✅ **已配置 GitHub token 并添加 `workflow` scope**，现在可以推送 workflow 文件了
+
+### 问题 2 修复：
+- ✅ **移除了 `packages/runtime` 从 CI 安装命令**（commit 0a3fb58）
+- ✅ `packages/runtime` 通过 `conftest.py` 添加到 `sys.path`，pytest 会自动加载，不需要作为包安装
 
 ## 验证
 
