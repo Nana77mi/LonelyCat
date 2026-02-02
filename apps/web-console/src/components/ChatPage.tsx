@@ -1,12 +1,6 @@
 import { useState, useRef, useEffect } from "react";
+import type { Message } from "../api/conversations";
 import "./ChatPage.css";
-
-export type Message = {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-  timestamp: number;
-};
 
 type ChatPageProps = {
   messages: Message[];
@@ -91,6 +85,7 @@ export const ChatPage = ({ messages, onSendMessage, loading }: ChatPageProps) =>
                     />
                   </svg>
                 ) : (
+                  // assistant 或 system 消息使用相同的图标
                   <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
                     <path
                       d="M10 0C4.48 0 0 4.48 0 10C0 15.52 4.48 20 10 20C15.52 20 20 15.52 20 10C20 4.48 15.52 0 10 0ZM10 18C5.59 18 2 14.41 2 10C2 5.59 5.59 2 10 2C14.41 2 18 5.59 18 10C18 14.41 14.41 18 10 18ZM9 5H11V11H9V5ZM9 13H11V15H9V13Z"
@@ -102,7 +97,7 @@ export const ChatPage = ({ messages, onSendMessage, loading }: ChatPageProps) =>
               <div className="message-content">
                 <div className="message-text">{message.content}</div>
                 <div className="message-time">
-                  {new Date(message.timestamp).toLocaleTimeString("zh-CN", {
+                  {new Date(message.created_at).toLocaleTimeString("zh-CN", {
                     hour: "2-digit",
                     minute: "2-digit",
                   })}

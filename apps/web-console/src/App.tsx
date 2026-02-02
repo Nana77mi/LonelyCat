@@ -1,10 +1,11 @@
 import { useState, useCallback } from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import { Layout } from "./components/Layout";
-import { Sidebar, Conversation } from "./components/Sidebar";
-import { ChatPage, Message } from "./components/ChatPage";
+import { Sidebar } from "./components/Sidebar";
+import { ChatPage } from "./components/ChatPage";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { MemoryPage } from "./pages/MemoryPage";
+import type { Conversation, Message } from "./api/conversations";
 import "./App.css";
 
 const App = () => {
@@ -15,11 +16,15 @@ const App = () => {
   const [loading, setLoading] = useState(false);
 
   const handleNewConversation = useCallback(() => {
+    // TODO: 调用 createConversation API
+    // 这里暂时使用本地生成的 ID，后续会替换为 API 调用
     const newId = `conv-${Date.now()}`;
+    const now = new Date().toISOString();
     const newConversation: Conversation = {
       id: newId,
       title: "新对话",
-      updatedAt: Date.now(),
+      created_at: now,
+      updated_at: now,
     };
     setConversations((prev) => [newConversation, ...prev]);
     setCurrentConversationId(newId);
@@ -50,53 +55,57 @@ const App = () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       }
 
-      const userMessage: Message = {
-        id: `msg-${Date.now()}-user`,
-        role: "user",
-        content,
-        timestamp: Date.now(),
-      };
-
-      setMessages((prev) => [...prev, userMessage]);
       setLoading(true);
 
       try {
-        // TODO: 调用实际的API发送消息
-        // 这里模拟一个延迟响应
+        // TODO: 调用 sendMessage API
+        // 这里暂时模拟响应，后续会替换为实际的 API 调用
         await new Promise((resolve) => setTimeout(resolve, 1000));
+
+        const now = new Date().toISOString();
+        const userMessage: Message = {
+          id: `msg-${Date.now()}-user`,
+          conversation_id: currentConversationId!,
+          role: "user",
+          content,
+          created_at: now,
+        };
 
         const assistantMessage: Message = {
           id: `msg-${Date.now()}-assistant`,
+          conversation_id: currentConversationId!,
           role: "assistant",
           content: `这是对 "${content}" 的回复。实际功能需要连接后端API。`,
-          timestamp: Date.now(),
+          created_at: now,
         };
 
-        setMessages((prev) => [...prev, assistantMessage]);
+        setMessages((prev) => [...prev, userMessage, assistantMessage]);
 
         // 更新对话标题（使用第一条用户消息）
         if (messages.length === 0) {
           setConversations((prev) =>
             prev.map((conv) =>
               conv.id === currentConversationId
-                ? { ...conv, title: content.slice(0, 30), updatedAt: Date.now() }
+                ? { ...conv, title: content.slice(0, 30), updated_at: now }
                 : conv
             )
           );
         } else {
           setConversations((prev) =>
             prev.map((conv) =>
-              conv.id === currentConversationId ? { ...conv, updatedAt: Date.now() } : conv
+              conv.id === currentConversationId ? { ...conv, updated_at: now } : conv
             )
           );
         }
       } catch (error) {
         console.error("Failed to send message:", error);
+        const now = new Date().toISOString();
         const errorMessage: Message = {
           id: `msg-${Date.now()}-error`,
+          conversation_id: currentConversationId!,
           role: "assistant",
           content: "抱歉，发送消息时出现错误。",
-          timestamp: Date.now(),
+          created_at: now,
         };
         setMessages((prev) => [...prev, errorMessage]);
       } finally {

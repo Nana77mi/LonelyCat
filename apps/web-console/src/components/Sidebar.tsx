@@ -1,12 +1,9 @@
 import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
+import type { Conversation } from "../api/conversations";
 import "./Sidebar.css";
 
-export type Conversation = {
-  id: string;
-  title: string;
-  updatedAt: number;
-};
+export type { Conversation };
 
 type SidebarProps = {
   conversations: Conversation[];
@@ -85,7 +82,7 @@ export const Sidebar = ({
               <div className="conversation-content">
                 <span className="conversation-title">{conv.title}</span>
                 <span className="conversation-time">
-                  {formatTime(conv.updatedAt)}
+                  {formatTime(new Date(conv.updated_at).getTime())}
                 </span>
               </div>
               {hoveredId === conv.id && onDeleteConversation && (
