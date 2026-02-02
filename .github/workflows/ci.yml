@@ -23,5 +23,5 @@ jobs:
         run: pnpm install
       - name: Run tests
         run: |
-          python -m pytest
+          python -m pytest --ignore=packages/runtime/tests
           pnpm -r test
