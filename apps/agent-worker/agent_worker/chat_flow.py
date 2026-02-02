@@ -67,7 +67,7 @@ def chat_flow(
         try:
             trace.record("memory.list_facts.start")
             active_facts = memory_client_in_use.list_facts(
-                subject="user", status="ACTIVE"
+                scope="global", status="active"
             )
             trace.record("memory.list_facts.finish")
         except Exception:

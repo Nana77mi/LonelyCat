@@ -1,71 +1,53 @@
 import { useEffect, useState } from "react";
 
-import { FactRecord, fetchFactChain } from "../api/memory";
+import { Fact, getFact } from "../api/memory";
 import "./FactDetailsDrawer.css";
-
-type FactChainResponse = {
-  root_id: string;
-  items: FactRecord[];
-  truncated: boolean;
-};
 
 type FactDetailsDrawerProps = {
   factId: string | null;
   onClose: () => void;
 };
 
-const formatObject = (value: unknown) =>
+const formatValue = (value: unknown) =>
   typeof value === "string" ? value : JSON.stringify(value, null, 2);
 
-const renderObject = (value: unknown) =>
-  typeof value === "string" ? <span>{value}</span> : <pre>{formatObject(value)}</pre>;
+const renderValue = (value: unknown) =>
+  typeof value === "string" ? <span>{value}</span> : <pre>{formatValue(value)}</pre>;
 
-const formatTimestamp = (value: number | null | undefined) =>
-  typeof value === "number" ? new Date(value * 1000).toLocaleString() : "Unknown";
+const formatTimestamp = (value: string | null | undefined) =>
+  value ? new Date(value).toLocaleString() : "Unknown";
 
 export const FactDetailsDrawer = ({ factId, onClose }: FactDetailsDrawerProps) => {
-  const [chain, setChain] = useState<FactChainResponse | null>(null);
+  const [fact, setFact] = useState<Fact | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!factId) {
-      setChain(null);
+      setFact(null);
       setError(null);
       setLoading(false);
       return;
     }
-    const controller = new AbortController();
     const load = async () => {
-      setChain(null);
+      setFact(null);
       setError(null);
       setLoading(true);
       try {
-        const response = await fetchFactChain(factId, 20, controller.signal);
-        setChain(response);
+        const response = await getFact(factId);
+        setFact(response);
       } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") {
-          return;
-        }
-        setError(err instanceof Error ? err.message : "Failed to load chain");
+        setError(err instanceof Error ? err.message : "Failed to load fact");
       } finally {
         setLoading(false);
       }
     };
     void load();
-    return () => {
-      controller.abort();
-    };
   }, [factId]);
 
   if (!factId) {
     return null;
   }
-
-  const root = chain?.items?.[0];
-  const rootOverrides =
-    root?.overrides ?? (root?.status === "ACTIVE" ? chain?.items?.[1]?.id ?? null : null);
-  const hasItems = Boolean(chain?.items?.length);
 
   return (
     <aside className="fact-drawer-overlay" onClick={onClose}>
@@ -86,70 +68,46 @@ export const FactDetailsDrawer = ({ factId, onClose }: FactDetailsDrawerProps) =
         <div className="fact-drawer-content">
           {loading ? <div className="fact-drawer-loading">加载中…</div> : null}
           {error ? <div className="fact-drawer-error" role="alert">{error}</div> : null}
-          {root ? (
+          {fact ? (
             <div className="fact-drawer-root">
-              <div className="fact-drawer-predicate">
-                <strong>{root.predicate}</strong>
+              <div className="fact-drawer-field">
+                <strong>Key:</strong> {fact.key}
               </div>
-              <div className="fact-drawer-object">{renderObject(root.object)}</div>
+              <div className="fact-drawer-field">
+                <strong>Value:</strong> {renderValue(fact.value)}
+              </div>
               <div className="fact-drawer-meta">
-                <span>Status: {root.status}</span>
-                <span>Sequence: {root.seq ?? "Unknown"}</span>
-                <span>Created: {formatTimestamp(root.created_at)}</span>
+                <span>Status: {fact.status}</span>
+                <span>Scope: {fact.scope}</span>
+                <span>Version: {fact.version}</span>
               </div>
-              {rootOverrides ? (
+              {fact.project_id ? (
                 <div className="fact-drawer-field">
-                  <strong>Overrides:</strong> {rootOverrides}
+                  <strong>Project ID:</strong> {fact.project_id}
                 </div>
               ) : null}
-              {root.retracted_reason ? (
+              {fact.session_id ? (
                 <div className="fact-drawer-field">
-                  <strong>Retracted reason:</strong> {root.retracted_reason}
+                  <strong>Session ID:</strong> {fact.session_id}
                 </div>
               ) : null}
-            </div>
-          ) : null}
-
-          {chain && !hasItems ? (
-            <div className="fact-drawer-empty">No facts available for this chain.</div>
-          ) : null}
-
-          {chain && hasItems ? (
-            <div className="fact-drawer-chain">
-              <h4>Overrides chain</h4>
-              <div className="fact-chain-list">
-                {chain.items.map((item, index) => {
-                  const overriddenBy = chain.items[index - 1]?.id ?? null;
-                  const overrides =
-                    item.overrides ??
-                    (item.status === "ACTIVE" ? chain.items[index + 1]?.id ?? null : null);
-                  return (
-                    <div key={item.id ?? `fact-${index}`} className="fact-chain-item">
-                      <div className="fact-chain-header">
-                        <strong>{item.status ?? "UNKNOWN"}</strong>
-                        <span>seq {item.seq ?? "Unknown"}</span>
-                        <span className="fact-chain-id">#{(item.id ?? "unknown").slice(0, 8)}</span>
-                      </div>
-                      <div className="fact-chain-content">
-                        {item.predicate ?? "Unknown"}: {renderObject(item.object)}
-                      </div>
-                      <div className="fact-chain-meta">
-                        <span>{formatTimestamp(item.created_at)}</span>
-                        {overriddenBy ? <span>Overridden by: {overriddenBy}</span> : null}
-                        {overrides ? <span>Overrides: {overrides}</span> : null}
-                      </div>
-                      {item.retracted_reason ? (
-                        <div className="fact-chain-retracted">
-                          Retracted reason: {item.retracted_reason}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
+              <div className="fact-drawer-field">
+                <strong>Source:</strong> {fact.source_ref.kind} - {fact.source_ref.ref_id}
               </div>
-              {chain.truncated ? (
-                <div className="fact-drawer-truncated">Chain truncated.</div>
+              {fact.source_ref.excerpt ? (
+                <div className="fact-drawer-field">
+                  <strong>Source Excerpt:</strong> {fact.source_ref.excerpt}
+                </div>
               ) : null}
+              {fact.confidence !== null ? (
+                <div className="fact-drawer-field">
+                  <strong>Confidence:</strong> {fact.confidence.toFixed(2)}
+                </div>
+              ) : null}
+              <div className="fact-drawer-meta">
+                <span>Created: {formatTimestamp(fact.created_at)}</span>
+                <span>Updated: {formatTimestamp(fact.updated_at)}</span>
+              </div>
             </div>
           ) : null}
         </div>

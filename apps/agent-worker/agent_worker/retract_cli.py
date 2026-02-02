@@ -34,13 +34,15 @@ def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> 
         return
 
     memory_client = memory_client or MemoryClient()
-    facts = memory_client.list_facts(subject=request.subject, status="ACTIVE")
+    # 构建 key（从 subject.predicate 转换为 key）
+    key = f"{request.subject}.{request.predicate}" if request.subject != "user" else request.predicate
+    facts = memory_client.list_facts(scope="global", status="active")
     match = next(
         (
             record
             for record in facts
-            if record.get("predicate") == request.predicate
-            and record.get("object") == request.object
+            if record.get("key") == key
+            and record.get("value") == request.object
         ),
         None,
     )
@@ -48,7 +50,7 @@ def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> 
         print(_format_not_found(request))
         return
     record_id = str(match.get("id"))
-    memory_client.retract(record_id, request.reason)
+    memory_client.revoke(record_id)
     print(_format_retracted(record_id, request))
 
 

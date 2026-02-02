@@ -2,31 +2,46 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   Proposal,
-  FactRecord,
+  Fact,
+  Scope,
+  SourceKind,
   acceptProposal,
   fetchFacts,
   fetchProposals,
   proposeFact,
   rejectProposal,
-  retractFact,
+  expireProposal,
+  revokeFact,
+  archiveFact,
+  reactivateFact,
+  ProposalCreateRequest,
 } from "../api/memory";
 import { FactDetailsDrawer } from "../components/FactDetailsDrawer";
 
-const STATUS_OPTIONS = ["ALL", "ACTIVE", "OVERRIDDEN", "RETRACTED"] as const;
+const STATUS_OPTIONS = ["all", "active", "revoked", "archived"] as const;
+const SCOPE_OPTIONS: Scope[] = ["global", "project", "session"];
 
 type StatusFilter = (typeof STATUS_OPTIONS)[number];
 
-type RetractReasonMap = Record<string, string>;
 type RejectReasonMap = Record<string, string>;
 
-const defaultCandidate = {
-  subject: "user",
-  predicate: "",
-  object: "",
+const defaultProposal: ProposalCreateRequest = {
+  payload: {
+    key: "",
+    value: "",
+    tags: [],
+    ttl_seconds: null,
+  },
+  source_ref: {
+    kind: "manual",
+    ref_id: "web-console",
+    excerpt: null,
+  },
   confidence: 0.8,
+  scope_hint: "global",
 };
 
-const renderObjectValue = (value: unknown) => {
+const renderValue = (value: unknown) => {
   if (typeof value === "string") {
     return value;
   }
@@ -34,12 +49,11 @@ const renderObjectValue = (value: unknown) => {
 };
 
 export const MemoryPage = () => {
-  const [facts, setFacts] = useState<FactRecord[]>([]);
+  const [facts, setFacts] = useState<Fact[]>([]);
   const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [status, setStatus] = useState<StatusFilter>("ALL");
-  const [predicateContains, setPredicateContains] = useState("");
-  const [candidate, setCandidate] = useState(defaultCandidate);
-  const [retractReasons, setRetractReasons] = useState<RetractReasonMap>({});
+  const [status, setStatus] = useState<StatusFilter>("all");
+  const [scope, setScope] = useState<Scope | "">("");
+  const [proposal, setProposal] = useState<ProposalCreateRequest>(defaultProposal);
   const [rejectReasons, setRejectReasons] = useState<RejectReasonMap>({});
   const [selectedFactId, setSelectedFactId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -48,11 +62,10 @@ export const MemoryPage = () => {
 
   const fetchParams = useMemo(
     () => ({
-      subject: candidate.subject || "user",
-      status,
-      predicate_contains: predicateContains || undefined,
+      scope: scope || undefined,
+      status: status === "all" ? undefined : status,
     }),
-    [candidate.subject, status, predicateContains]
+    [scope, status]
   );
 
   const loadFacts = useCallback(async () => {
@@ -61,15 +74,6 @@ export const MemoryPage = () => {
     try {
       const response = await fetchFacts(fetchParams);
       setFacts(response.items);
-      setRetractReasons((current) => {
-        const next: RetractReasonMap = {};
-        response.items.forEach((item) => {
-          if (current[item.id]) {
-            next[item.id] = current[item.id];
-          }
-        });
-        return next;
-      });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load facts");
     } finally {
@@ -80,7 +84,7 @@ export const MemoryPage = () => {
   const loadProposals = useCallback(async () => {
     try {
       setProposalsError(null);
-      const response = await fetchProposals("PENDING");
+      const response = await fetchProposals({ status: "pending" });
       setProposals(response.items);
       setRejectReasons((current) => {
         const next: RejectReasonMap = {};
@@ -106,11 +110,11 @@ export const MemoryPage = () => {
 
   const sortedFacts = useMemo(() => {
     return [...facts].sort((a, b) => {
-      const subjectCompare = a.subject.localeCompare(b.subject);
-      if (subjectCompare !== 0) {
-        return subjectCompare;
+      const keyCompare = a.key.localeCompare(b.key);
+      if (keyCompare !== 0) {
+        return keyCompare;
       }
-      return a.seq - b.seq;
+      return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
   }, [facts]);
 
@@ -119,42 +123,50 @@ export const MemoryPage = () => {
     void loadProposals();
   }, [loadFacts, loadProposals]);
 
-  const handleAddFact = async (event: React.FormEvent<HTMLFormElement>) => {
+  const handleAddProposal = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!candidate.predicate.trim() || !String(candidate.object).trim()) {
-      setError("Predicate and object are required.");
+    if (!proposal.payload.key.trim() || !String(proposal.payload.value).trim()) {
+      setError("Key and value are required.");
       return;
     }
     setError(null);
     try {
-      await proposeFact({
-        subject: candidate.subject || "user",
-        predicate: candidate.predicate.trim(),
-        object: candidate.object,
-        confidence: candidate.confidence,
-        source: { type: "web-console" },
-      });
-      setCandidate(defaultCandidate);
+      await proposeFact(proposal);
+      setProposal(defaultProposal);
       await loadFacts();
       await loadProposals();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to add fact");
+      setError(err instanceof Error ? err.message : "Failed to add proposal");
     }
   };
 
-  const handleRetract = async (id: string) => {
-    const reason = retractReasons[id] || "";
-    if (!reason.trim()) {
-      setError("Provide a reason to retract.");
-      return;
-    }
+  const handleRevokeFact = async (id: string) => {
     setError(null);
     try {
-      await retractFact(id, reason.trim());
-      setRetractReasons((current) => ({ ...current, [id]: "" }));
+      await revokeFact(id);
       await loadFacts();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to retract fact");
+      setError(err instanceof Error ? err.message : "Failed to revoke fact");
+    }
+  };
+
+  const handleArchiveFact = async (id: string) => {
+    setError(null);
+    try {
+      await archiveFact(id);
+      await loadFacts();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to archive fact");
+    }
+  };
+
+  const handleReactivateFact = async (id: string) => {
+    setError(null);
+    try {
+      await reactivateFact(id);
+      await loadFacts();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reactivate fact");
     }
   };
 
@@ -180,6 +192,16 @@ export const MemoryPage = () => {
     }
   };
 
+  const handleExpireProposal = async (id: string) => {
+    setError(null);
+    try {
+      await expireProposal(id);
+      await loadProposals();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to expire proposal");
+    }
+  };
+
   return (
     <section>
       <h2>Memory</h2>
@@ -198,11 +220,11 @@ export const MemoryPage = () => {
         <thead>
           <tr>
             <th>Proposal ID</th>
-            <th>Subject</th>
-            <th>Predicate</th>
-            <th>Object</th>
+            <th>Key</th>
+            <th>Value</th>
             <th>Confidence</th>
-            <th>Source Note</th>
+            <th>Scope Hint</th>
+            <th>Source</th>
             <th>Status</th>
             <th>Created</th>
             <th>Actions</th>
@@ -218,40 +240,45 @@ export const MemoryPage = () => {
               <td colSpan={9}>No pending proposals.</td>
             </tr>
           ) : (
-            proposals.map((proposal) => (
-              <tr key={proposal.id}>
-                <td>{proposal.id}</td>
-                <td>{proposal.candidate.subject}</td>
-                <td>{proposal.candidate.predicate}</td>
+            proposals.map((p) => (
+              <tr key={p.id}>
+                <td>{p.id.slice(0, 8)}...</td>
+                <td>{p.payload.key}</td>
                 <td>
-                  {typeof proposal.candidate.object === "string" ? (
-                    renderObjectValue(proposal.candidate.object)
+                  {typeof p.payload.value === "string" ? (
+                    renderValue(p.payload.value)
                   ) : (
-                    <pre>{renderObjectValue(proposal.candidate.object)}</pre>
+                    <pre>{renderValue(p.payload.value)}</pre>
                   )}
                 </td>
-                <td>{proposal.candidate.confidence.toFixed(2)}</td>
-                <td>{proposal.source_note || "—"}</td>
-                <td>{proposal.status}</td>
-                <td>{new Date(proposal.created_at * 1000).toLocaleString()}</td>
+                <td>{p.confidence?.toFixed(2) ?? "—"}</td>
+                <td>{p.scope_hint ?? "—"}</td>
+                <td>
+                  {p.source_ref.kind}: {p.source_ref.ref_id}
+                </td>
+                <td>{p.status}</td>
+                <td>{new Date(p.created_at).toLocaleString()}</td>
                 <td>
                   <input
                     type="text"
                     placeholder="Reject reason (optional)"
-                    value={rejectReasons[proposal.id] ?? ""}
+                    value={rejectReasons[p.id] ?? ""}
                     onChange={(event) =>
                       setRejectReasons((current) => ({
                         ...current,
-                        [proposal.id]: event.target.value,
+                        [p.id]: event.target.value,
                       }))
                     }
                   />
                   <div>
-                    <button type="button" onClick={() => void handleAcceptProposal(proposal.id)}>
+                    <button type="button" onClick={() => void handleAcceptProposal(p.id)}>
                       Accept
                     </button>
-                    <button type="button" onClick={() => void handleRejectProposal(proposal.id)}>
+                    <button type="button" onClick={() => void handleRejectProposal(p.id)}>
                       Reject
+                    </button>
+                    <button type="button" onClick={() => void handleExpireProposal(p.id)}>
+                      Expire
                     </button>
                   </div>
                 </td>
@@ -264,6 +291,18 @@ export const MemoryPage = () => {
       <h3>Facts</h3>
       <div>
         <label>
+          Scope
+          <select value={scope} onChange={(event) => setScope(event.target.value as Scope | "")}>
+            <option value="">All</option>
+            {SCOPE_OPTIONS.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
           Status
           <select value={status} onChange={(event) => setStatus(event.target.value as StatusFilter)}>
             {STATUS_OPTIONS.map((option) => (
@@ -274,45 +313,37 @@ export const MemoryPage = () => {
           </select>
         </label>
 
-        <label>
-          Predicate contains
-          <input
-            type="text"
-            value={predicateContains}
-            onChange={(event) => setPredicateContains(event.target.value)}
-            placeholder="search predicate"
-          />
-        </label>
-
         <button type="button" onClick={() => void loadFacts()} disabled={loading}>
           Refresh
         </button>
       </div>
 
-      <form onSubmit={handleAddFact}>
-        <h3>Add Fact</h3>
+      <form onSubmit={handleAddProposal}>
+        <h3>Add Proposal</h3>
         <label>
-          Subject
+          Key
           <input
             type="text"
-            value={candidate.subject}
-            onChange={(event) => setCandidate({ ...candidate, subject: event.target.value })}
+            value={proposal.payload.key}
+            onChange={(event) =>
+              setProposal({
+                ...proposal,
+                payload: { ...proposal.payload, key: event.target.value },
+              })
+            }
           />
         </label>
         <label>
-          Predicate
+          Value
           <input
             type="text"
-            value={candidate.predicate}
-            onChange={(event) => setCandidate({ ...candidate, predicate: event.target.value })}
-          />
-        </label>
-        <label>
-          Object
-          <input
-            type="text"
-            value={String(candidate.object)}
-            onChange={(event) => setCandidate({ ...candidate, object: event.target.value })}
+            value={String(proposal.payload.value)}
+            onChange={(event) =>
+              setProposal({
+                ...proposal,
+                payload: { ...proposal.payload, value: event.target.value },
+              })
+            }
           />
         </label>
         <label>
@@ -322,79 +353,112 @@ export const MemoryPage = () => {
             min={0}
             max={1}
             step={0.01}
-            value={candidate.confidence}
+            value={proposal.confidence ?? 0.8}
             onChange={(event) =>
-              setCandidate({
-                ...candidate,
+              setProposal({
+                ...proposal,
                 confidence: Number.parseFloat(event.target.value || "0"),
               })
             }
           />
         </label>
+        <label>
+          Scope Hint
+          <select
+            value={proposal.scope_hint ?? "global"}
+            onChange={(event) =>
+              setProposal({
+                ...proposal,
+                scope_hint: event.target.value as Scope,
+              })
+            }
+          >
+            {SCOPE_OPTIONS.map((opt) => (
+              <option key={opt} value={opt}>
+                {opt}
+              </option>
+            ))}
+          </select>
+        </label>
         <button type="submit" disabled={loading}>
-          Add Fact
+          Add Proposal
         </button>
       </form>
 
       <table>
         <thead>
           <tr>
-            <th>Predicate</th>
-            <th>Object</th>
+            <th>Key</th>
+            <th>Value</th>
+            <th>Scope</th>
             <th>Status</th>
-            <th>Seq</th>
+            <th>Version</th>
+            <th>Source</th>
             <th>Created</th>
-            <th>Retract</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
           {sortedFacts.length === 0 ? (
             <tr>
-              <td colSpan={6}>No facts yet.</td>
+              <td colSpan={8}>No facts yet.</td>
             </tr>
           ) : (
             sortedFacts.map((fact) => (
               <tr key={fact.id} onClick={() => setSelectedFactId(fact.id)}>
-                <td>{fact.predicate}</td>
+                <td>{fact.key}</td>
                 <td>
-                  {typeof fact.object === "string" ? (
-                    renderObjectValue(fact.object)
+                  {typeof fact.value === "string" ? (
+                    renderValue(fact.value)
                   ) : (
-                    <pre>{renderObjectValue(fact.object)}</pre>
+                    <pre>{renderValue(fact.value)}</pre>
                   )}
                 </td>
+                <td>{fact.scope}</td>
                 <td>{fact.status}</td>
-                <td>{fact.seq}</td>
-                <td>{new Date(fact.created_at * 1000).toLocaleString()}</td>
+                <td>{fact.version}</td>
                 <td>
-                  <input
-                    type="text"
-                    placeholder="Reason"
-                    value={retractReasons[fact.id] ?? ""}
-                    onChange={(event) => {
-                      event.stopPropagation();
-                      setRetractReasons((current) => ({
-                        ...current,
-                        [fact.id]: event.target.value,
-                      }));
-                    }}
-                    onClick={(event) => event.stopPropagation()}
-                    disabled={fact.status === "RETRACTED"}
-                  />
-                  <button
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void handleRetract(fact.id);
-                    }}
-                    disabled={
-                      fact.status === "RETRACTED" ||
-                      loading ||
-                      !(retractReasons[fact.id] ?? "").trim()
-                    }
-                  >
-                    Retract
-                  </button>
+                  {fact.source_ref.kind}: {fact.source_ref.ref_id}
+                </td>
+                <td>{new Date(fact.created_at).toLocaleString()}</td>
+                <td>
+                  <div>
+                    {fact.status === "active" ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleRevokeFact(fact.id);
+                          }}
+                          disabled={loading}
+                        >
+                          Revoke
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleArchiveFact(fact.id);
+                          }}
+                          disabled={loading}
+                        >
+                          Archive
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleReactivateFact(fact.id);
+                        }}
+                        disabled={loading}
+                      >
+                        Reactivate
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))
