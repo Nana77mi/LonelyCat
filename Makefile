@@ -128,7 +128,7 @@ up-web: setup-web
 	@echo ""
 	@echo "按 Ctrl+C 停止服务"
 	@echo ""
-	@cd $(WEB_CONSOLE_DIR) && pnpm dev --host 0.0.0.0 --port $(WEB_PORT)
+	@cd $(WEB_CONSOLE_DIR) && CORE_API_PORT=$(API_PORT) pnpm dev --host 0.0.0.0 --port $(WEB_PORT)
 
 # -------------------------
 # Stop

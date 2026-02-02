@@ -35,8 +35,9 @@ Run dev servers (examples):
 python -m uvicorn app.main:app --app-dir apps/core-api --reload --port 5173
 
 # Web console (端口 8000, uses /api proxy by default)
-# Requests to /api/* are proxied to http://127.0.0.1:5173/* (via Vite dev server)
-pnpm --filter @lonelycat/web-console dev --port 8000
+# Requests to /api/* are proxied to http://127.0.0.1:<CORE_API_PORT>/* (via Vite dev server)
+# CORE_API_PORT defaults to 5173, can be overridden via environment variable
+CORE_API_PORT=5173 pnpm --filter @lonelycat/web-console dev --port 8000
 ```
 
 或者使用一键启动：
@@ -65,9 +66,10 @@ make up
 
 > **开发环境设置**: 
 > - 用户界面运行在端口 **8000** (`http://localhost:8000`)
-> - 核心 API 运行在端口 **5173** (`http://localhost:5173`)
-> - 用户界面通过 Vite 代理将 `/api/*` 请求转发到 `http://127.0.0.1:5173/*`
-> - 这意味着 `/api/memory/proposals` 会自动变为 `http://127.0.0.1:5173/memory/proposals`
+> - 核心 API 运行在端口 **5173**（默认，可通过 `CORE_API_PORT` 环境变量修改）
+> - 用户界面通过 Vite 代理将 `/api/*` 请求转发到 `http://127.0.0.1:<CORE_API_PORT>/*`
+> - 这意味着 `/api/memory/proposals` 会自动变为 `http://127.0.0.1:<CORE_API_PORT>/memory/proposals`
+> - 如果 core-api 端口被占用（如 8000），可以设置 `CORE_API_PORT=8001` 来使用其他端口
 >
 > **生产环境**: 要指向不同的 API 源，请在构建前设置 `VITE_CORE_API_URL`（或 `VITE_API_BASE_URL`）
 > （例如：`VITE_CORE_API_URL=http://api.example.com pnpm build`）。默认为 `/api`，适用于反向代理设置。
