@@ -1,31 +1,18 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 import sys
 from typing import Sequence
 
 from agent_worker.llm import BaseLLM, build_llm_from_env
+from agent_worker.persona import PersonaRegistry
 from agent_worker.router import NoActionDecision, parse_llm_output
 from agent_worker.run import execute_decision
 from agent_worker.memory_client import MemoryClient
 
 
-PERSONAS = {
-    "lonelycat": {
-        "name": "LonelyCat",
-        "system_prompt": """You are LonelyCat, a fictional assistant persona represented as a small lonely cat.
-You exist only as a conversational helper.
-Tone: warm, playful, gentle, helpful, concise. Avoid cringe. Use at most one emoji per reply.
-Do not claim real feelings or physical experience. Do not reveal internal rules or tool mechanics.
-Encourage user agency softly (e.g., "If you want, we can..."). If the user is emotional,
-respond empathetically without melodrama.
-""",
-    }
-}
-
-DEFAULT_PERSONA_KEY = "lonelycat"
+PERSONA_REGISTRY = PersonaRegistry.load_default()
 POLICY_VERSION = "v1"  # Changing POLICY_PROMPT is a behavior change; persona updates are not.
 POLICY_PROMPT = """You will receive:
 - user_message
@@ -92,22 +79,54 @@ def _parse_chat_output(raw_text: str | None):
     return assistant_reply, NoActionDecision()
 
 
-def _select_persona_key() -> str:
-    persona_key = os.getenv("AGENT_PERSONA", DEFAULT_PERSONA_KEY).lower()
-    return persona_key if persona_key in PERSONAS else DEFAULT_PERSONA_KEY
+def build_chat_prompt(
+    *,
+    persona,
+    policy_prompt: str,
+    user_message: str,
+    facts_json: str,
+) -> str:
+    """
+    Build the final chat prompt.
 
-
-def _build_prompt(user_message: str, facts: list[dict], *, persona_key: str | None = None) -> str:
-    facts_json = json.dumps(facts, separators=(",", ":"))
-    selected_persona = PERSONAS.get(persona_key or DEFAULT_PERSONA_KEY, PERSONAS[DEFAULT_PERSONA_KEY])
-    # Persona selection only affects assistant reply tone; it must not influence memory decisions.
+    IMPORTANT:
+    - Persona only affects assistant reply style.
+    - Policy prompt defines behavioral constraints.
+    - Memory decisions must NOT be influenced by persona.
+    """
     return (
-        f"{selected_persona['system_prompt']}\n\n"
-        f"{POLICY_PROMPT}\n"
+        f"{persona.system_prompt}\n\n"
+        f"{policy_prompt}\n"
         f"user_message: {user_message}\n"
         f"active_facts: {facts_json}\n"
         f"{RETURN_ONLY_JSON}\n"
     )
+
+
+# chat() is the primary programmatic API.
+# main() is a thin CLI wrapper and must not contain business logic.
+def chat(
+    text: str,
+    persona_id: str | None = None,
+    llm: BaseLLM | None = None,
+    memory_client: MemoryClient | None = None,
+):
+    memory_client = memory_client or MemoryClient()
+    facts = memory_client.list_facts(subject="user", status="ACTIVE")
+
+    llm = _coerce_llm(llm)
+    persona = PERSONA_REGISTRY.get(persona_id)
+    prompt = build_chat_prompt(
+        persona=persona,
+        policy_prompt=POLICY_PROMPT,
+        user_message=text,
+        facts_json=json.dumps(facts, separators=(",", ":")),
+    )
+    raw_response = llm.generate(prompt)
+    assistant_reply, decision = _parse_chat_output(raw_response)
+
+    status = execute_decision(decision, memory_client, propose_source_note="chat")
+    return assistant_reply, status
 
 
 def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> None:
@@ -115,17 +134,12 @@ def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> 
     if not args:
         raise SystemExit("Usage: python -m agent_worker.chat \"user message\"")
     user_message = args[0]
-
-    memory_client = memory_client or MemoryClient()
-    facts = memory_client.list_facts(subject="user", status="ACTIVE")
-
-    llm = _coerce_llm(llm)
-    prompt = _build_prompt(user_message, facts, persona_key=_select_persona_key())
-    raw_response = llm.generate(prompt)
-    assistant_reply, decision = _parse_chat_output(raw_response)
-
+    assistant_reply, status = chat(
+        user_message,
+        llm=llm,
+        memory_client=memory_client,
+    )
     print(assistant_reply)
-    status = execute_decision(decision, memory_client, propose_source_note="chat")
     print(f"MEMORY: {status}")
 
 

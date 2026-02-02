@@ -34,6 +34,21 @@ class MemorySpy:
         self.retract_calls.append({"record_id": record_id, "reason": reason})
 
 
+class PromptInspectingLLM:
+    def __init__(self) -> None:
+        self.prompts = []
+
+    def generate(self, prompt: str) -> str:
+        self.prompts.append(prompt)
+        if "You are LonelyCat" in prompt:
+            reply = "Warm hello."
+        elif "You are ProfessionalAssistant" in prompt:
+            reply = "Professional hello."
+        else:
+            reply = "Default hello."
+        return json.dumps({"assistant_reply": reply, "memory": "NO_ACTION"})
+
+
 def test_chat_no_action(capsys):
     payload = {"assistant_reply": "Hello!", "memory": "NO_ACTION"}
     llm = FakeLLM(json.dumps(payload))
@@ -140,3 +155,54 @@ def test_chat_invalid_json_is_no_action(capsys):
     assert not memory.retract_calls
     assert "not json at all" in captured.out
     assert "MEMORY: NO_ACTION" in captured.out
+
+
+def test_chat_persona_hot_swap_no_action():
+    llm = PromptInspectingLLM()
+    memory = MemorySpy()
+
+    reply_lonely, status_lonely = chat.chat(
+        "Hi", persona_id="lonelycat", llm=llm, memory_client=memory
+    )
+    reply_professional, status_professional = chat.chat(
+        "Hi", persona_id="professional", llm=llm, memory_client=memory
+    )
+
+    assert status_lonely == "NO_ACTION"
+    assert status_professional == "NO_ACTION"
+    assert reply_lonely != reply_professional
+
+
+def test_chat_persona_only_changes_reply_not_memory():
+    llm = PromptInspectingLLM()
+    memory = MemorySpy()
+
+    reply_lonely, status_lonely = chat.chat(
+        "Hello", persona_id="lonelycat", llm=llm, memory_client=memory
+    )
+    reply_professional, status_professional = chat.chat(
+        "Hello", persona_id="professional", llm=llm, memory_client=memory
+    )
+
+    assert reply_lonely != reply_professional
+    assert status_lonely == "NO_ACTION"
+    assert status_professional == "NO_ACTION"
+    assert not memory.propose_calls
+    assert not memory.retract_calls
+
+
+def test_chat_persona_missing_or_unknown_falls_back_to_default():
+    llm = PromptInspectingLLM()
+    memory = MemorySpy()
+
+    reply_missing, status_missing = chat.chat(
+        "Hello", llm=llm, memory_client=memory
+    )
+    reply_unknown, status_unknown = chat.chat(
+        "Hello", persona_id="unknown-id", llm=llm, memory_client=memory
+    )
+
+    assert reply_missing == "Warm hello."
+    assert reply_unknown == "Warm hello."
+    assert status_missing == "NO_ACTION"
+    assert status_unknown == "NO_ACTION"
