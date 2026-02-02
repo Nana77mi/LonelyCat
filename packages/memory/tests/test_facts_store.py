@@ -396,12 +396,14 @@ def test_list_proposals_with_status_filter(temp_db):
         
         # 接受第一个
         _commit_db(db)
-        await store.accept_proposal(proposal1.id, scope=Scope.GLOBAL)
+        result1 = await store.accept_proposal(proposal1.id, scope=Scope.GLOBAL)
+        assert result1 is not None, "accept_proposal should succeed"
         _commit_db(db)
         
         # 拒绝第二个
         _commit_db(db)
-        await store.reject_proposal(proposal2.id)
+        result2 = await store.reject_proposal(proposal2.id)
+        assert result2 is not None, "reject_proposal should succeed"
         _commit_db(db)
         
         # 查询 pending proposals（应该为空）

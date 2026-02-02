@@ -304,6 +304,9 @@ class MemoryStore:
         """
         db = self._get_db()
         try:
+            # 如果使用外部数据库，先刷新会话以确保能看到新创建的 proposal
+            if self._use_external_db:
+                db.expire_all()
             model = db.query(ProposalModel).filter(ProposalModel.id == proposal_id).first()
             if model is None:
                 return None
@@ -345,6 +348,9 @@ class MemoryStore:
         """
         db = self._get_db()
         try:
+            # 如果使用外部数据库，先刷新会话以确保能看到新创建的 proposal
+            if self._use_external_db:
+                db.expire_all()
             model = db.query(ProposalModel).filter(ProposalModel.id == proposal_id).first()
             if model is None:
                 return None
@@ -394,6 +400,9 @@ class MemoryStore:
         """
         db = self._get_db()
         try:
+            # 如果使用外部数据库，先刷新会话以确保能看到新创建的 proposal
+            if self._use_external_db:
+                db.expire_all()
             proposal_model = db.query(ProposalModel).filter(ProposalModel.id == proposal_id).first()
             if proposal_model is None:
                 return None
