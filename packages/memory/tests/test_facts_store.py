@@ -79,6 +79,7 @@ def test_accept_proposal_creates_fact(temp_db):
             confidence=0.9,
             scope_hint=Scope.GLOBAL,
         )
+        _commit_db(db)  # 提交 proposal，确保 accept_proposal 能看到它
         
         accepted = await store.accept_proposal(proposal.id, scope=Scope.GLOBAL)
         _commit_db(db)
@@ -103,6 +104,7 @@ def test_reject_proposal(temp_db):
             payload=ProposalPayload(key="preferred_name", value="Alice", tags=[], ttl_seconds=None),
             source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="test", excerpt=None),
         )
+        _commit_db(db)  # 提交 proposal，确保 reject_proposal 能看到它
         
         rejected = await store.reject_proposal(proposal.id, resolved_reason="not needed")
         _commit_db(db)
@@ -124,6 +126,7 @@ def test_expire_proposal(temp_db):
             payload=ProposalPayload(key="preferred_name", value="Alice", tags=[], ttl_seconds=60),
             source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="test", excerpt=None),
         )
+        _commit_db(db)  # 提交 proposal，确保 expire_proposal 能看到它
         
         expired = await store.expire_proposal(proposal.id)
         _commit_db(db)
@@ -143,6 +146,7 @@ def test_overwrite_latest_strategy(temp_db):
             payload=ProposalPayload(key="preferred_name", value="Alice", tags=[], ttl_seconds=None),
             source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="test1", excerpt=None),
         )
+        _commit_db(db)
         _, fact1 = await store.accept_proposal(proposal1.id, scope=Scope.GLOBAL)
         _commit_db(db)
         
@@ -151,6 +155,7 @@ def test_overwrite_latest_strategy(temp_db):
             payload=ProposalPayload(key="preferred_name", value="Bob", tags=[], ttl_seconds=None),
             source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="test2", excerpt=None),
         )
+        _commit_db(db)
         _, fact2 = await store.accept_proposal(
             proposal2.id,
             strategy=ConflictStrategy.OVERWRITE_LATEST,
@@ -181,13 +186,16 @@ def test_keep_both_strategy(temp_db):
             payload=ProposalPayload(key="favorite_tools", value="vim", tags=[], ttl_seconds=None),
             source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="test1", excerpt=None),
         )
+        _commit_db(db)
         _, fact1 = await store.accept_proposal(proposal1.id, scope=Scope.GLOBAL)
+        _commit_db(db)
         
         # 创建第二个 proposal 并接受（使用 keep_both）
         proposal2 = await store.create_proposal(
             payload=ProposalPayload(key="favorite_tools", value="emacs", tags=[], ttl_seconds=None),
             source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="test2", excerpt=None),
         )
+        _commit_db(db)
         _, fact2 = await store.accept_proposal(
             proposal2.id,
             strategy=ConflictStrategy.KEEP_BOTH,
@@ -213,6 +221,7 @@ def test_revoke_fact(temp_db):
             payload=ProposalPayload(key="preferred_name", value="Alice", tags=[], ttl_seconds=None),
             source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="test", excerpt=None),
         )
+        _commit_db(db)
         _, fact = await store.accept_proposal(proposal.id, scope=Scope.GLOBAL)
         _commit_db(db)
         
@@ -236,7 +245,9 @@ def test_archive_fact(temp_db):
             payload=ProposalPayload(key="preferred_name", value="Alice", tags=[], ttl_seconds=None),
             source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="test", excerpt=None),
         )
+        _commit_db(db)
         _, fact = await store.accept_proposal(proposal.id, scope=Scope.GLOBAL)
+        _commit_db(db)
         
         archived = await store.archive_fact(fact.id)
         assert archived is not None
@@ -257,6 +268,7 @@ def test_reactivate_fact(temp_db):
             payload=ProposalPayload(key="preferred_name", value="Alice", tags=[], ttl_seconds=None),
             source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="test", excerpt=None),
         )
+        _commit_db(db)
         _, fact = await store.accept_proposal(proposal.id, scope=Scope.GLOBAL)
         _commit_db(db)
         
@@ -288,6 +300,7 @@ def test_scope_isolation(temp_db):
             payload=ProposalPayload(key="preferred_name", value="Alice", tags=[], ttl_seconds=None),
             source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="test1", excerpt=None),
         )
+        _commit_db(db)
         _, fact1 = await store.accept_proposal(proposal1.id, scope=Scope.GLOBAL)
         _commit_db(db)
         
@@ -296,6 +309,7 @@ def test_scope_isolation(temp_db):
             payload=ProposalPayload(key="preferred_name", value="Bob", tags=[], ttl_seconds=None),
             source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="test2", excerpt=None),
         )
+        _commit_db(db)
         _, fact2 = await store.accept_proposal(
             proposal2.id,
             scope=Scope.PROJECT,
@@ -346,6 +360,7 @@ def test_get_fact_by_key(temp_db):
             payload=ProposalPayload(key="preferred_name", value="Alice", tags=[], ttl_seconds=None),
             source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="test", excerpt=None),
         )
+        _commit_db(db)
         _, fact = await store.accept_proposal(proposal.id, scope=Scope.GLOBAL)
         _commit_db(db)
         
@@ -374,10 +389,12 @@ def test_list_proposals_with_status_filter(temp_db):
         )
         
         # 接受第一个
+        _commit_db(db)
         await store.accept_proposal(proposal1.id, scope=Scope.GLOBAL)
         _commit_db(db)
         
         # 拒绝第二个
+        _commit_db(db)
         await store.reject_proposal(proposal2.id)
         _commit_db(db)
         

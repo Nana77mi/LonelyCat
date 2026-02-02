@@ -54,10 +54,9 @@ def test_cli_retracts_fact(capsys):
         facts=[
             {
                 "id": "record-1",
-                "subject": "user",
-                "predicate": "likes",
-                "object": "cats",
-                "status": "ACTIVE",
+                "key": "likes",
+                "value": "cats",
+                "status": "active",
             }
         ]
     )
@@ -67,7 +66,7 @@ def test_cli_retracts_fact(capsys):
 
     assert memory.list_calls
     assert memory.retract_calls == [
-        {"record_id": "record-1", "reason": payload["reason"]}
+        {"record_id": "record-1"}
     ]
     assert "RETRACTED" in captured.out
     assert "record-1" in captured.out

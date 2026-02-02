@@ -223,6 +223,9 @@ class MemoryStore:
             db.add(proposal_model)
             if not self._use_external_db:
                 db.commit()
+            else:
+                # 使用外部数据库时，刷新会话以确保 proposal 对后续操作可见
+                db.flush()
             
             # 记录审计事件
             await self._audit_logger.log_event(
@@ -312,6 +315,8 @@ class MemoryStore:
             
             if not self._use_external_db:
                 db.commit()
+            else:
+                db.flush()
             
             # 记录审计事件
             await self._audit_logger.log_event(
@@ -351,6 +356,8 @@ class MemoryStore:
             
             if not self._use_external_db:
                 db.commit()
+            else:
+                db.flush()
             
             # 记录审计事件
             await self._audit_logger.log_event(

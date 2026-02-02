@@ -82,7 +82,7 @@ def test_run_retract_found(capsys):
     }
     llm = FakeLLM(json.dumps(payload))
     memory = MemorySpy(
-        facts=[{"id": "fact-1", "predicate": "likes", "object": "cats"}]
+        facts=[{"id": "fact-1", "key": "likes", "value": "cats"}]
     )
 
     main(["I do not like cats"], llm=llm, memory_client=memory)
@@ -102,7 +102,7 @@ def test_run_retract_not_found(capsys):
         "reason": "no longer true",
     }
     llm = FakeLLM(json.dumps(payload))
-    memory = MemorySpy(facts=[{"id": "fact-1", "predicate": "likes", "object": "dogs"}])
+    memory = MemorySpy(facts=[{"id": "fact-1", "key": "likes", "value": "dogs"}])
 
     main(["I do not like cats"], llm=llm, memory_client=memory)
     captured = capsys.readouterr()
@@ -124,7 +124,7 @@ def test_run_update_success(capsys):
     }
     llm = FakeLLM(json.dumps(payload))
     memory = MemorySpy(
-        facts=[{"id": "fact-1", "predicate": "likes", "object": "cats"}]
+        facts=[{"id": "fact-1", "key": "likes", "value": "cats"}]
     )
 
     main(["I like dogs now"], llm=llm, memory_client=memory)

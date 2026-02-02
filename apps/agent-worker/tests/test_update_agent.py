@@ -64,10 +64,9 @@ def test_cli_update_success(capsys):
         facts=[
             {
                 "id": "old-1",
-                "subject": "user",
-                "predicate": "likes",
-                "object": "cats",
-                "status": "ACTIVE",
+                "key": "likes",
+                "value": "cats",
+                "status": "active",
             }
         ]
     )
@@ -77,7 +76,7 @@ def test_cli_update_success(capsys):
 
     assert memory.list_calls
     assert memory.retract_calls == [
-        {"record_id": "old-1", "reason": payload["reason"]}
+        {"record_id": "old-1"}
     ]
     assert memory.propose_calls
     propose_call = memory.propose_calls[0]
