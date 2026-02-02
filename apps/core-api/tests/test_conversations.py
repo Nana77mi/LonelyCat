@@ -65,6 +65,7 @@ def assert_message_schema(msg: dict) -> None:
         "created_at",
         "source_ref",
         "meta_json",
+        "client_msg_id",
     }
     assert set(msg.keys()) == expected
     assert isinstance(msg["id"], str)
@@ -73,6 +74,7 @@ def assert_message_schema(msg: dict) -> None:
     assert isinstance(msg["content"], str)
     assert isinstance(msg["created_at"], str)  # ISO format string
     # source_ref and meta_json can be None or dict
+    # client_msg_id can be None or str
 
 
 def test_list_empty_conversations(temp_db) -> None:
@@ -401,3 +403,87 @@ def test_conversation_updated_at_on_message_creation(temp_db) -> None:
     assert conversations_list["items"][1]["id"] == conversation_b_id  # B 排第二
     assert conversations_list["items"][0]["title"] == "Conversation A"
     assert conversations_list["items"][1]["title"] == "Conversation B"
+
+
+def test_worker_failure_creates_system_error_message(temp_db, monkeypatch) -> None:
+    """测试：worker 失败时创建 system 错误消息，确保对话不中断"""
+    db, _ = temp_db
+    
+    # 创建对话
+    request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # 模拟 worker 失败（通过 monkeypatch）
+    def mock_chat_flow(*args, **kwargs):
+        raise Exception("Worker crashed")
+    
+    monkeypatch.setattr(conversations, "chat_flow", mock_chat_flow)
+    monkeypatch.setattr(conversations, "AGENT_WORKER_AVAILABLE", True)
+    
+    # 创建消息（会触发 worker 失败）
+    message_request = conversations.MessageCreateRequest(content="Test message")
+    result = asyncio.run(conversations._create_message(conversation_id, message_request, db))
+    _commit_db(db)
+    
+    # 验证返回结果
+    assert "user_message" in result
+    assert "assistant_message" in result
+    assert result["user_message"] is not None
+    
+    # 验证 assistant_message 是 system 错误消息
+    assistant_msg = result["assistant_message"]
+    assert assistant_msg["role"] == "system"
+    assert "执行失败" in assistant_msg["content"]
+    assert "Worker crashed" in assistant_msg["content"]
+    
+    # 验证 meta_json 包含错误信息
+    assert assistant_msg["meta_json"] is not None
+    assert assistant_msg["meta_json"]["error"] is True
+    assert assistant_msg["meta_json"]["error_type"] == "worker_failure"
+    
+    # 验证消息已保存到数据库
+    messages_response = asyncio.run(conversations._get_conversation_messages(conversation_id, db))
+    assert len(messages_response["items"]) == 2
+    assert messages_response["items"][0]["role"] == "user"
+    assert messages_response["items"][1]["role"] == "system"
+    assert "执行失败" in messages_response["items"][1]["content"]
+
+
+def test_idempotency_with_client_msg_id(temp_db) -> None:
+    """测试：使用 client_msg_id 实现幂等性"""
+    db, _ = temp_db
+    
+    # 创建对话
+    request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    client_msg_id = "test-msg-123"
+    
+    # 第一次创建消息
+    message_request1 = conversations.MessageCreateRequest(
+        content="First message",
+        client_msg_id=client_msg_id,
+    )
+    result1 = asyncio.run(conversations._create_message(conversation_id, message_request1, db))
+    _commit_db(db)
+    
+    # 第二次使用相同的 client_msg_id 创建消息（应该返回已存在的消息）
+    message_request2 = conversations.MessageCreateRequest(
+        content="Duplicate message",
+        client_msg_id=client_msg_id,
+    )
+    result2 = asyncio.run(conversations._create_message(conversation_id, message_request2, db))
+    _commit_db(db)
+    
+    # 验证返回的是同一个消息
+    assert result2.get("duplicate") is True
+    assert result1["user_message"]["id"] == result2["user_message"]["id"]
+    assert result1["user_message"]["content"] == "First message"  # 内容应该是第一次的
+    
+    # 验证数据库中只有一条消息（user + assistant，没有重复）
+    messages_response = asyncio.run(conversations._get_conversation_messages(conversation_id, db))
+    assert len(messages_response["items"]) == 2  # user + assistant，没有重复的 user
