@@ -9,8 +9,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import sessionmaker
 
 from app.api import conversations
-from memory.db import Base, ConversationModel, MessageModel
-from memory.schemas import MessageRole
+from app.db import Base, ConversationModel, MessageModel, MessageRole
 from sqlalchemy import create_engine
 
 
@@ -253,3 +252,152 @@ def test_get_nonexistent_conversation_messages(temp_db) -> None:
         asyncio.run(conversations._get_conversation_messages("nonexistent-id", db))
     assert excinfo.value.status_code == 404
     assert "Conversation not found" in str(excinfo.value.detail)
+
+
+def test_create_message_via_api_and_read_back(temp_db) -> None:
+    """验收测试：通过 API 写入消息，然后 GET 能读出来"""
+    db, _ = temp_db
+    
+    # 1. 创建对话
+    request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # 2. 通过 API 写入用户消息（会自动调用 worker 生成助手回复）
+    message_request = conversations.MessageCreateRequest(content="Hello, this is a test message")
+    result = asyncio.run(conversations._create_message(conversation_id, message_request, db))
+    _commit_db(db)
+    
+    # 验证返回结果包含两条消息
+    assert "user_message" in result
+    assert "assistant_message" in result
+    assert result["user_message"] is not None
+    assert result["assistant_message"] is not None
+    
+    user_msg = result["user_message"]
+    assistant_msg = result["assistant_message"]
+    
+    # 验证用户消息
+    assert_message_schema(user_msg)
+    assert user_msg["role"] == "user"
+    assert user_msg["content"] == "Hello, this is a test message"
+    assert user_msg["conversation_id"] == conversation_id
+    
+    # 验证助手消息
+    assert_message_schema(assistant_msg)
+    assert assistant_msg["role"] == "assistant"
+    assert assistant_msg["conversation_id"] == conversation_id
+    assert len(assistant_msg["content"]) > 0  # 助手应该有回复内容
+    
+    # 3. 通过 GET API 读取消息
+    messages_response = asyncio.run(conversations._get_conversation_messages(conversation_id, db))
+    assert "items" in messages_response
+    assert len(messages_response["items"]) == 2
+    
+    # 验证消息顺序（按 created_at 升序）
+    retrieved_messages = messages_response["items"]
+    assert retrieved_messages[0]["id"] == user_msg["id"]  # 第一条是用户消息
+    assert retrieved_messages[1]["id"] == assistant_msg["id"]  # 第二条是助手消息
+    
+    # 验证消息内容
+    assert retrieved_messages[0]["role"] == "user"
+    assert retrieved_messages[0]["content"] == "Hello, this is a test message"
+    assert retrieved_messages[1]["role"] == "assistant"
+    
+    # 验证所有消息的 schema
+    for msg in retrieved_messages:
+        assert_message_schema(msg)
+        assert msg["conversation_id"] == conversation_id
+
+
+def test_create_multiple_messages_and_read_all(temp_db) -> None:
+    """测试创建多条消息并全部读取"""
+    db, _ = temp_db
+    
+    # 创建对话
+    request = conversations.ConversationCreateRequest(title="Multi Message Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # 创建第一条用户消息
+    msg1 = conversations.MessageCreateRequest(content="First message")
+    result1 = asyncio.run(conversations._create_message(conversation_id, msg1, db))
+    _commit_db(db)
+    
+    # 创建第二条用户消息
+    msg2 = conversations.MessageCreateRequest(content="Second message")
+    result2 = asyncio.run(conversations._create_message(conversation_id, msg2, db))
+    _commit_db(db)
+    
+    # 读取所有消息
+    messages_response = asyncio.run(conversations._get_conversation_messages(conversation_id, db))
+    
+    # 应该有 4 条消息：2 条 user + 2 条 assistant
+    assert len(messages_response["items"]) == 4
+    
+    # 验证消息顺序
+    items = messages_response["items"]
+    assert items[0]["role"] == "user"
+    assert items[0]["content"] == "First message"
+    assert items[1]["role"] == "assistant"
+    assert items[2]["role"] == "user"
+    assert items[2]["content"] == "Second message"
+    assert items[3]["role"] == "assistant"
+
+
+def test_conversation_updated_at_on_message_creation(temp_db) -> None:
+    """测试：创建对话 A、B，给 A 新增 message，GET /conversations 应该 A 排第一"""
+    db, _ = temp_db
+    
+    # 创建对话 A
+    request_a = conversations.ConversationCreateRequest(title="Conversation A")
+    conv_a = asyncio.run(conversations._create_conversation(request_a, db))
+    _commit_db(db)
+    conversation_a_id = conv_a["id"]
+    # 从数据库获取初始 updated_at（datetime 对象）
+    initial_conv_a_model = db.query(ConversationModel).filter(ConversationModel.id == conversation_a_id).first()
+    initial_updated_at_a = initial_conv_a_model.updated_at
+    
+    # 等待一小段时间确保时间戳不同
+    import time
+    time.sleep(0.01)
+    
+    # 创建对话 B
+    request_b = conversations.ConversationCreateRequest(title="Conversation B")
+    conv_b = asyncio.run(conversations._create_conversation(request_b, db))
+    _commit_db(db)
+    conversation_b_id = conv_b["id"]
+    
+    # 此时 B 应该排第一（因为 B 创建时间更晚）
+    conversations_list = asyncio.run(conversations._list_conversations(db))
+    assert len(conversations_list["items"]) == 2
+    assert conversations_list["items"][0]["id"] == conversation_b_id  # B 排第一
+    assert conversations_list["items"][1]["id"] == conversation_a_id  # A 排第二
+    
+    # 等待一小段时间
+    time.sleep(0.01)
+    
+    # 给 A 新增 message（这会更新 A 的 updated_at）
+    message_request = conversations.MessageCreateRequest(content="Message to A")
+    result = asyncio.run(conversations._create_message(conversation_a_id, message_request, db))
+    _commit_db(db)
+    
+    # 验证消息创建成功
+    assert "user_message" in result
+    assert "assistant_message" in result
+    
+    # 重新获取对话 A，验证 updated_at 已更新
+    updated_conv_a = db.query(ConversationModel).filter(ConversationModel.id == conversation_a_id).first()
+    db.refresh(updated_conv_a)
+    # 验证 updated_at 已更新（应该比初始时间晚）
+    assert updated_conv_a.updated_at > initial_updated_at_a
+    
+    # GET /conversations 应该 A 排第一（因为 A 的 updated_at 更新了）
+    conversations_list = asyncio.run(conversations._list_conversations(db))
+    assert len(conversations_list["items"]) == 2
+    assert conversations_list["items"][0]["id"] == conversation_a_id  # A 排第一（因为 updated_at 更新了）
+    assert conversations_list["items"][1]["id"] == conversation_b_id  # B 排第二
+    assert conversations_list["items"][0]["title"] == "Conversation A"
+    assert conversations_list["items"][1]["title"] == "Conversation B"
