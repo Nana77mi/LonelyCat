@@ -72,8 +72,9 @@ class MessageModel(Base):
     role = Column(SQLEnum(MessageRole), nullable=False, index=True)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    source_ref = Column(JSON, nullable=True)
+    source_ref = Column(JSON, nullable=True)  # 格式：{"kind": "chat|run|connector|manual", "ref_id": "...", "excerpt": "..."}
     meta_json = Column(JSON, nullable=True)
+    client_msg_id = Column(String, nullable=True, index=True)  # 客户端消息 ID，用于幂等性去重
 
     # 关系
     conversation = relationship("ConversationModel", back_populates="messages")

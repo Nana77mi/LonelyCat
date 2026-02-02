@@ -42,6 +42,7 @@ class MessageCreateRequest(BaseModel):
     role: Optional[str] = None  # 如果提供，直接创建消息；如果不提供，会调用 worker
     source_ref: Optional[Dict[str, Any]] = None
     meta_json: Optional[Dict[str, Any]] = None
+    client_msg_id: Optional[str] = None  # 客户端消息 ID，用于幂等性去重
 
 
 class ConversationResponse(BaseModel):
@@ -83,12 +84,27 @@ def _serialize_message(msg: MessageModel) -> Dict[str, Any]:
         "created_at": msg.created_at.isoformat(),
         "source_ref": msg.source_ref,
         "meta_json": msg.meta_json,
+        "client_msg_id": msg.client_msg_id,
     }
 
 
-async def _list_conversations(db: Session) -> Dict[str, Any]:
-    """列出所有对话，按 updated_at 降序排列（内部函数，便于测试）"""
-    conversations = db.query(ConversationModel).order_by(desc(ConversationModel.updated_at)).all()
+async def _list_conversations(
+    db: Session,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+) -> Dict[str, Any]:
+    """列出所有对话，按 updated_at 降序排列（内部函数，便于测试）
+    
+    支持分页参数 limit 和 offset。
+    """
+    query = db.query(ConversationModel).order_by(desc(ConversationModel.updated_at))
+    
+    if offset is not None:
+        query = query.offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    
+    conversations = query.all()
     return {"items": [_serialize_conversation(conv) for conv in conversations]}
 
 
@@ -111,19 +127,33 @@ async def _create_conversation(request: ConversationCreateRequest, db: Session) 
     return _serialize_conversation(conversation)
 
 
-async def _get_conversation_messages(conversation_id: str, db: Session) -> Dict[str, Any]:
-    """获取指定对话的所有消息，按 created_at 升序排列（内部函数，便于测试）"""
+async def _get_conversation_messages(
+    conversation_id: str,
+    db: Session,
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+) -> Dict[str, Any]:
+    """获取指定对话的所有消息，按 created_at 升序排列（内部函数，便于测试）
+    
+    支持分页参数 limit 和 offset。
+    """
     # 检查对话是否存在
     conversation = db.query(ConversationModel).filter(ConversationModel.id == conversation_id).first()
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
     
-    messages = (
+    query = (
         db.query(MessageModel)
         .filter(MessageModel.conversation_id == conversation_id)
         .order_by(MessageModel.created_at)
-        .all()
     )
+    
+    if offset is not None:
+        query = query.offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    
+    messages = query.all()
     
     return {"items": [_serialize_message(msg) for msg in messages]}
 
@@ -137,12 +167,32 @@ async def _create_message(
     """创建消息（内部函数，便于测试）
     
     如果 request.role 已提供，直接创建消息。
-    如果 request.role 未提供，创建 user 消息，调用 worker，然后创建 assistant 消息。
+    如果 request.role 未提供，创建 user 消息，调用 worker，然后创建 assistant/system 消息。
+    
+    幂等性：如果提供了 client_msg_id，会检查是否已存在相同 client_msg_id 的消息。
     """
     # 检查对话是否存在
     conversation = db.query(ConversationModel).filter(ConversationModel.id == conversation_id).first()
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # 幂等性检查：如果提供了 client_msg_id，检查是否已存在
+    if request.client_msg_id:
+        existing_message = (
+            db.query(MessageModel)
+            .filter(
+                MessageModel.conversation_id == conversation_id,
+                MessageModel.client_msg_id == request.client_msg_id,
+            )
+            .first()
+        )
+        if existing_message:
+            # 返回已存在的消息
+            return {
+                "user_message": _serialize_message(existing_message) if existing_message.role == MessageRole.USER else None,
+                "assistant_message": _serialize_message(existing_message) if existing_message.role == MessageRole.ASSISTANT else None,
+                "duplicate": True,
+            }
     
     now = datetime.utcnow()
     
@@ -162,6 +212,7 @@ async def _create_message(
             created_at=now,
             source_ref=request.source_ref,
             meta_json=request.meta_json,
+            client_msg_id=request.client_msg_id,
         )
         db.add(message)
         db.commit()
@@ -187,6 +238,7 @@ async def _create_message(
         created_at=now,
         source_ref=request.source_ref,
         meta_json=request.meta_json,
+        client_msg_id=request.client_msg_id,
     )
     db.add(user_message)
     # 更新 conversation 的 updated_at（每次创建 message 时都更新）
@@ -195,9 +247,13 @@ async def _create_message(
     db.refresh(user_message)
     
     # 2. 调用 worker 处理消息
+    worker_error = None
+    assistant_content = None
+    
     if not AGENT_WORKER_AVAILABLE or chat_flow is None:
-        # 如果 worker 不可用，返回一个默认回复
-        assistant_content = "I'm sorry, the agent worker is not available."
+        # 如果 worker 不可用，创建 system 错误消息
+        worker_error = "Agent worker is not available"
+        assistant_content = None
     else:
         try:
             result = chat_flow(
@@ -209,24 +265,43 @@ async def _create_message(
             )
             assistant_content = result.assistant_reply
         except Exception as e:
-            # 如果 worker 调用失败，返回错误消息
-            assistant_content = f"I encountered an error processing your message: {str(e)}"
+            # Worker 失败：记录错误，创建 system 错误消息
+            worker_error = str(e)
+            assistant_content = None
     
-    # 3. 创建 assistant message
-    assistant_message_id = str(uuid.uuid4())
+    # 3. 创建 assistant/system 消息
     assistant_now = datetime.utcnow()
-    assistant_message = MessageModel(
-        id=assistant_message_id,
-        conversation_id=conversation_id,
-        role=MessageRole.ASSISTANT,
-        content=assistant_content,
-        created_at=assistant_now,
-        source_ref=None,
-        meta_json=None,
-    )
+    
+    if worker_error:
+        # Worker 失败：创建 system 错误消息，确保对话不中断
+        assistant_message_id = str(uuid.uuid4())
+        assistant_message = MessageModel(
+            id=assistant_message_id,
+            conversation_id=conversation_id,
+            role=MessageRole.SYSTEM,
+            content=f"执行失败：{worker_error}",
+            created_at=assistant_now,
+            source_ref={"kind": "manual", "ref_id": f"worker_error_{conversation_id}", "excerpt": None},
+            meta_json={"error": True, "error_type": "worker_failure", "error_message": worker_error},
+            client_msg_id=None,
+        )
+    else:
+        # Worker 成功：创建 assistant 消息
+        assistant_message_id = str(uuid.uuid4())
+        assistant_message = MessageModel(
+            id=assistant_message_id,
+            conversation_id=conversation_id,
+            role=MessageRole.ASSISTANT,
+            content=assistant_content,
+            created_at=assistant_now,
+            source_ref={"kind": "chat", "ref_id": conversation_id, "excerpt": None},
+            meta_json=None,
+            client_msg_id=None,
+        )
+    
     db.add(assistant_message)
     
-    # 4. 更新 conversation 的 updated_at
+    # 4. 更新 conversation 的 updated_at（以 assistant/system 消息时间为准）
     conversation.updated_at = assistant_now
     db.commit()
     db.refresh(assistant_message)
@@ -240,9 +315,14 @@ async def _create_message(
 @router.get("", response_model=Dict[str, Any])
 async def list_conversations(
     db: Session = Depends(get_db),
+    limit: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of conversations to return"),
+    offset: Optional[int] = Query(None, ge=0, description="Number of conversations to skip"),
 ) -> Dict[str, Any]:
-    """列出所有对话，按 updated_at 降序排列"""
-    return await _list_conversations(db)
+    """列出所有对话，按 updated_at 降序排列
+    
+    支持分页参数 limit 和 offset，便于后续扩展。
+    """
+    return await _list_conversations(db, limit=limit, offset=offset)
 
 
 @router.post("", response_model=Dict[str, Any])
@@ -258,9 +338,14 @@ async def create_conversation(
 async def get_conversation_messages(
     conversation_id: str,
     db: Session = Depends(get_db),
+    limit: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of messages to return"),
+    offset: Optional[int] = Query(None, ge=0, description="Number of messages to skip"),
 ) -> Dict[str, Any]:
-    """获取指定对话的所有消息，按 created_at 升序排列"""
-    return await _get_conversation_messages(conversation_id, db)
+    """获取指定对话的所有消息，按 created_at 升序排列
+    
+    支持分页参数 limit 和 offset，便于后续扩展。
+    """
+    return await _get_conversation_messages(conversation_id, db, limit=limit, offset=offset)
 
 
 @router.post("/{conversation_id}/messages", response_model=Dict[str, Any])
