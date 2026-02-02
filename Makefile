@@ -58,6 +58,7 @@ setup-py:
 	@if [ -f packages/mcp/pyproject.toml ]; then $(PIP) install -e packages/mcp; fi
 	@if [ -f packages/protocol/pyproject.toml ]; then $(PIP) install -e packages/protocol; fi
 	@if [ -f packages/kb/pyproject.toml ]; then $(PIP) install -e packages/kb; fi
+	@if [ -f apps/agent-worker/pyproject.toml ]; then $(PIP) install --no-build-isolation -e apps/agent-worker[test]; fi
 	@mkdir -p $(PID_DIR)
 
 .PHONY: setup-web

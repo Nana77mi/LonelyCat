@@ -2,18 +2,19 @@
 name = "lonelycat-agent-worker"
 version = "0.1.0"
 description = "Background worker for LonelyCat"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
   "pydantic>=2.6",
   "httpx>=0.27",
 ]
 
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
-[tool.setuptools]
-packages = ["agent_worker", "worker"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agent_worker*"]
 
 [project.optional-dependencies]
 test = [
