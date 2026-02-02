@@ -44,6 +44,7 @@ export const MemoryPage = () => {
   const [selectedFactId, setSelectedFactId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [proposalsError, setProposalsError] = useState<string | null>(null);
 
   const fetchParams = useMemo(
     () => ({
@@ -78,6 +79,7 @@ export const MemoryPage = () => {
 
   const loadProposals = useCallback(async () => {
     try {
+      setProposalsError(null);
       const response = await fetchProposals("PENDING");
       setProposals(response.items);
       setRejectReasons((current) => {
@@ -90,7 +92,15 @@ export const MemoryPage = () => {
         return next;
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load proposals");
+      if (err instanceof Error) {
+        const requestUrl = (err as Error & { requestUrl?: string }).requestUrl;
+        if (requestUrl) {
+          console.log(`Proposals request failed: ${requestUrl}`);
+        }
+        setProposalsError(err.message);
+      } else {
+        setProposalsError("Failed to load proposals");
+      }
     }
   }, []);
 
@@ -183,6 +193,7 @@ export const MemoryPage = () => {
       <button type="button" onClick={() => void loadProposals()}>
         Refresh Proposals
       </button>
+      {proposalsError ? <p role="alert">{proposalsError}</p> : null}
       <table>
         <thead>
           <tr>
@@ -198,7 +209,11 @@ export const MemoryPage = () => {
           </tr>
         </thead>
         <tbody>
-          {proposals.length === 0 ? (
+          {proposalsError ? (
+            <tr>
+              <td colSpan={9}>Unable to load proposals.</td>
+            </tr>
+          ) : proposals.length === 0 ? (
             <tr>
               <td colSpan={9}>No pending proposals.</td>
             </tr>

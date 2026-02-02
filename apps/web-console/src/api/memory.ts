@@ -40,7 +40,7 @@ export type FetchFactsParams = {
   predicate_contains?: string;
 };
 
-const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
+const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
 
 const joinBaseUrl = (base: string, path: string) => {
   if (!base) {
@@ -152,7 +152,11 @@ export const fetchProposals = async (status?: ProposalStatus | "ALL"): Promise<F
   const url = buildUrl("/memory/proposals", { status });
   const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(await buildErrorMessage("Failed to fetch proposals", response));
+    const detail = await readErrorBody(response);
+    const message = `Failed to fetch proposals: ${response.status} ${url}${detail ? ` ${detail}` : ""}`;
+    const error = new Error(message) as Error & { requestUrl?: string };
+    error.requestUrl = url;
+    throw error;
   }
   return await parseJson<FetchProposalsResponse>(response);
 };
