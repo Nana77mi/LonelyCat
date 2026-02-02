@@ -18,6 +18,11 @@ from memory.schemas import (
 )
 
 
+def _commit_db(db):
+    """辅助函数：提交数据库事务"""
+    db.commit()
+
+
 @pytest.fixture
 def temp_db():
     """创建临时数据库用于测试"""

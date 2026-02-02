@@ -198,6 +198,10 @@ async def create_proposal(
     
     # 检查是否应该自动接受
     if _should_auto_accept(request.payload, request.confidence):
+        # 如果使用外部数据库，需要刷新会话以确保 proposal 可见
+        if hasattr(store, '_db') and store._db is not None:
+            store._db.flush()
+        
         accepted = await store.accept_proposal(
             proposal.id,
             strategy=None,  # 使用默认策略
