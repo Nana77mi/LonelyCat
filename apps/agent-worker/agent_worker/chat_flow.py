@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from agent_worker.config import ChatConfig
-from agent_worker.llm import BaseLLM, build_llm_from_env
+from agent_worker.llm import BaseLLM, JsonOnlyLLMWrapper, build_llm_from_env
 from agent_worker.memory_client import MemoryClient
 from agent_worker.memory_gate import MemoryGate
 from agent_worker.persona import PersonaRegistry
@@ -57,6 +57,7 @@ def chat_flow(
     trace.record("chat_flow.start")
 
     llm = _coerce_llm(llm)
+    gate_llm = JsonOnlyLLMWrapper(llm)
     persona = PERSONA_REGISTRY.get(persona_id or config.persona_default)
 
     active_facts: list[dict] = []
@@ -76,19 +77,34 @@ def chat_flow(
         trace.record("memory.disabled")
 
     responder = Responder(llm)
-    gate = MemoryGate(llm)
+    gate = MemoryGate(gate_llm)
+    had_error = False
 
-    assistant_reply, _memory_hint = responder.reply(
-        persona,
-        user_message,
-        active_facts,
-        trace=trace,
-    )
+    try:
+        assistant_reply, _memory_hint = responder.reply(
+            persona,
+            user_message,
+            active_facts,
+            trace=trace,
+        )
+    except Exception as exc:
+        if trace:
+            trace.record("responder.error", str(exc))
+        assistant_reply = "Okay."
+        had_error = True
     if not assistant_reply:
         assistant_reply = FALLBACK_REPLY
 
-    decision = gate.decide(user_message, active_facts, trace=trace)
+    try:
+        decision = gate.decide(user_message, active_facts, trace=trace)
+    except Exception as exc:
+        if trace:
+            trace.record("gate.error", str(exc))
+        decision = NoActionDecision()
+        had_error = True
 
+    if had_error:
+        decision = NoActionDecision()
     if not config.memory_enabled:
         decision = NoActionDecision()
     elif isinstance(decision, UpdateDecision) and not config.memory_allow_update:

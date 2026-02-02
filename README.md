@@ -38,6 +38,15 @@ python -m uvicorn app.main:app --app-dir apps/core-api --reload
 pnpm --filter @lonelycat/web-console dev
 ```
 
+### Agent Worker LLM examples
+
+```bash
+LLM_PROVIDER=stub python -m agent_worker.chat "hi"
+LLM_PROVIDER=openai OPENAI_API_KEY=... python -m agent_worker.chat "hi"
+LLM_PROVIDER=qwen QWEN_API_KEY=... python -m agent_worker.chat "hi"
+LLM_PROVIDER=ollama OLLAMA_BASE_URL=... python -m agent_worker.chat "hi"
+```
+
 ## Security Note
 
 LonelyCat defaults to **least privilege** access, sandboxed workspaces in `data/workspaces`, and audit-friendly design. Any tool execution or connector should enforce explicit allowlists and produce audit logs.

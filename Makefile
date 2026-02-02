@@ -41,6 +41,12 @@ help:
 	@echo "After 'make up':"
 	@echo "  core-api:     http://localhost:$(API_PORT)/docs"
 	@echo "  web-console:  http://localhost:$(WEB_PORT)/memory"
+	@echo ""
+	@echo "Agent worker LLM examples:"
+	@echo "  LLM_PROVIDER=stub python -m agent_worker.chat \"hi\""
+	@echo "  LLM_PROVIDER=openai OPENAI_API_KEY=... python -m agent_worker.chat \"hi\""
+	@echo "  LLM_PROVIDER=qwen QWEN_API_KEY=... python -m agent_worker.chat \"hi\""
+	@echo "  LLM_PROVIDER=ollama OLLAMA_BASE_URL=... python -m agent_worker.chat \"hi\""
 
 # -------------------------
 # Setup

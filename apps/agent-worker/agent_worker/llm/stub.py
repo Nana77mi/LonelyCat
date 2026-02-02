@@ -7,7 +7,11 @@ from agent_worker.memory_gate import MEMORY_GATE_MARKER
 
 
 class StubLLM(BaseLLM):
+    def __init__(self, max_prompt_chars: int = 20000) -> None:
+        super().__init__(max_prompt_chars=max_prompt_chars)
+
     def generate(self, prompt: str) -> str:
+        prompt = self._trim_prompt(prompt)
         if MEMORY_GATE_MARKER in prompt:
             return "NO_ACTION"
         return json.dumps({"assistant_reply": "Okay.", "memory": "NO_ACTION"})
