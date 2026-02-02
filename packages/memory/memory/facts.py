@@ -4,6 +4,7 @@ import asyncio
 import copy
 import time
 import uuid
+import warnings
 from dataclasses import dataclass, replace
 from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
@@ -115,13 +116,23 @@ class FactsStore:
         self._active_by_key[key] = record.id
         return record
 
-    async def propose(self, candidate: FactCandidate) -> FactRecord:
+    async def create_record_direct(self, candidate: FactCandidate) -> FactRecord:
+        """Create an ACTIVE fact record directly (bypasses proposals)."""
         if not 0 <= candidate.confidence <= 1:
             raise ValueError("confidence must be between 0 and 1")
 
         async with self._lock:
             record = self._create_record(candidate)
             return self._copy_record(record)
+
+    async def propose(self, candidate: FactCandidate) -> FactRecord:
+        """Deprecated: use create_record_direct or proposal flow instead."""
+        warnings.warn(
+            "FactsStore.propose is deprecated; use create_record_direct or proposals.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return await self.create_record_direct(candidate)
 
     async def create_proposal(
         self,

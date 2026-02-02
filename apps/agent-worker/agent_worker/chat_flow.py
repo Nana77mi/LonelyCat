@@ -115,7 +115,12 @@ def chat_flow(
     if isinstance(decision, NoActionDecision) or memory_client_in_use is None:
         status = "NO_ACTION"
     else:
-        status = execute_decision(decision, memory_client_in_use, propose_source_note="chat")
+        status = execute_decision(
+            decision,
+            memory_client_in_use,
+            propose_source_note="chat",
+            trace=trace,
+        )
 
     trace.record("chat_flow.finish")
     return ChatResult(

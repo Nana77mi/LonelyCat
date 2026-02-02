@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from typing import Sequence
 
@@ -34,10 +35,10 @@ def _coerce_llm(llm: object | None) -> BaseLLM:
     raise ValueError("LLM must implement generate(prompt)")
 
 
-def _format_proposed(record_id: str, decision: ProposeDecision) -> str:
+def _format_proposed(proposal_id: str, decision: ProposeDecision) -> str:
     return (
         "PROPOSED "
-        f"{record_id} "
+        f"{proposal_id} "
         f"subject={decision.subject} "
         f"predicate={decision.predicate} "
         f"object={decision.object}"
@@ -77,61 +78,92 @@ def execute_decision(
     *,
     propose_source_note: str = "mvp-1",
     update_source_note: str = "update",
+    trace=None,
 ) -> str:
     if isinstance(decision, NoActionDecision):
         return "NO_ACTION"
 
     memory_client = memory_client or MemoryClient()
     if isinstance(decision, ProposeDecision):
-        proposal = FactProposal(
-            subject=decision.subject,
-            predicate=decision.predicate,
-            object=decision.object,
-            confidence=decision.confidence,
-        )
-        record_id = memory_client.propose(proposal, source_note=propose_source_note)
-        return _format_proposed(record_id, decision)
+        try:
+            if trace:
+                trace.record("memory.propose.start")
+            proposal = FactProposal(
+                subject=decision.subject,
+                predicate=decision.predicate,
+                object=decision.object,
+                confidence=decision.confidence,
+            )
+            proposal_id = memory_client.propose(proposal, source_note=propose_source_note)
+            if trace:
+                trace.record("memory.propose.finish")
+            return _format_proposed(proposal_id, decision)
+        except Exception as exc:
+            if trace:
+                trace.record("memory.propose.error", str(exc))
+            logging.exception("Memory propose failed")
+            return "NO_ACTION"
 
     if isinstance(decision, RetractDecision):
-        facts = memory_client.list_facts(subject=decision.subject, status="ACTIVE")
-        match = next(
-            (
-                record
-                for record in facts
-                if record.get("predicate") == decision.predicate
-                and record.get("object") == decision.object
-            ),
-            None,
-        )
-        if not match:
-            return _format_not_found_retract(decision)
-        record_id = str(match.get("id"))
-        memory_client.retract(record_id, decision.reason)
-        return _format_retracted(record_id, decision)
+        try:
+            if trace:
+                trace.record("memory.retract.start")
+            facts = memory_client.list_facts(subject=decision.subject, status="ACTIVE")
+            match = next(
+                (
+                    record
+                    for record in facts
+                    if record.get("predicate") == decision.predicate
+                    and record.get("object") == decision.object
+                ),
+                None,
+            )
+            if not match:
+                return _format_not_found_retract(decision)
+            record_id = str(match.get("id"))
+            memory_client.retract(record_id, decision.reason)
+            if trace:
+                trace.record("memory.retract.finish")
+            return _format_retracted(record_id, decision)
+        except Exception as exc:
+            if trace:
+                trace.record("memory.retract.error", str(exc))
+            logging.exception("Memory retract failed")
+            return "NO_ACTION"
 
     if isinstance(decision, UpdateDecision):
-        facts = memory_client.list_facts(subject=decision.subject, status="ACTIVE")
-        match = next(
-            (
-                record
-                for record in facts
-                if record.get("predicate") == decision.predicate
-                and record.get("object") == decision.old_object
-            ),
-            None,
-        )
-        if not match:
-            return _format_not_found_update(decision)
-        old_id = str(match.get("id"))
-        memory_client.retract(old_id, decision.reason)
-        proposal = FactProposal(
-            subject=decision.subject,
-            predicate=decision.predicate,
-            object=decision.new_object,
-            confidence=decision.confidence,
-        )
-        new_id = memory_client.propose(proposal, source_note=update_source_note)
-        return _format_updated(old_id, new_id, decision)
+        try:
+            if trace:
+                trace.record("memory.update.start")
+            facts = memory_client.list_facts(subject=decision.subject, status="ACTIVE")
+            match = next(
+                (
+                    record
+                    for record in facts
+                    if record.get("predicate") == decision.predicate
+                    and record.get("object") == decision.old_object
+                ),
+                None,
+            )
+            if not match:
+                return _format_not_found_update(decision)
+            old_id = str(match.get("id"))
+            memory_client.retract(old_id, decision.reason)
+            proposal = FactProposal(
+                subject=decision.subject,
+                predicate=decision.predicate,
+                object=decision.new_object,
+                confidence=decision.confidence,
+            )
+            new_id = memory_client.propose(proposal, source_note=update_source_note)
+            if trace:
+                trace.record("memory.update.finish")
+            return _format_updated(old_id, new_id, decision)
+        except Exception as exc:
+            if trace:
+                trace.record("memory.update.error", str(exc))
+            logging.exception("Memory update failed")
+            return "NO_ACTION"
 
     return "NO_ACTION"
 

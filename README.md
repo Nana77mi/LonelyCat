@@ -34,8 +34,8 @@ Run dev servers (examples):
 # Core API
 python -m uvicorn app.main:app --app-dir apps/core-api --reload
 
-# Web console
-VITE_API_BASE_URL=http://localhost:8000 pnpm --filter @lonelycat/web-console dev
+# Web console (uses /api proxy by default)
+pnpm --filter @lonelycat/web-console dev
 ```
 
 ## Demo script (30s)
@@ -45,7 +45,7 @@ VITE_API_BASE_URL=http://localhost:8000 pnpm --filter @lonelycat/web-console dev
 make up
 
 # In another terminal, open the web console
-VITE_API_BASE_URL=http://localhost:8000 pnpm --filter @lonelycat/web-console dev
+pnpm --filter @lonelycat/web-console dev
 ```
 
 1. Open the console at `http://localhost:5173` and navigate to **Memory**.
@@ -57,7 +57,20 @@ VITE_API_BASE_URL=http://localhost:8000 pnpm --filter @lonelycat/web-console dev
 4. Verify the accepted proposal now appears in **Facts** as `ACTIVE`.
 
 > To point the console at a different API origin, set `VITE_API_BASE_URL` before running the dev server
-> (for example, `VITE_API_BASE_URL=http://127.0.0.1:8000 ...`).
+> (for example, `VITE_API_BASE_URL=http://127.0.0.1:8000 ...`). The default is `/api` with a Vite
+> proxy to `http://localhost:8000`.
+
+## Proposal workflow (quick reference)
+
+1. Run the Core API and web console (see above).
+2. Trigger a proposal via the agent worker:
+   ```bash
+   python -m agent_worker.chat "Remember that I like matcha."
+   ```
+3. In the console **Memory** page:
+   - Review the proposal under **Proposals** and click **Accept** or **Reject**.
+4. Accepted proposals appear as `ACTIVE` facts; rejected proposals remain in the proposals list with
+   status `REJECTED`.
 
 ## Memory review workflow
 

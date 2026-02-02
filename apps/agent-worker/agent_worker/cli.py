@@ -7,10 +7,10 @@ from agent_worker.fact_agent import FactGate, FactProposal, build_llm
 from agent_worker.memory_client import MemoryClient
 
 
-def _format_proposed(record_id: str, proposal: FactProposal) -> str:
+def _format_proposed(proposal_id: str, proposal: FactProposal) -> str:
     return (
         "PROPOSED "
-        f"{record_id} "
+        f"{proposal_id} "
         f"(subject={proposal.subject}, "
         f"predicate={proposal.predicate}, "
         f"object={proposal.object}, "
@@ -32,8 +32,8 @@ def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> 
         return
 
     memory_client = memory_client or MemoryClient()
-    record_id = memory_client.propose(proposal)
-    print(_format_proposed(record_id, proposal))
+    proposal_id = memory_client.propose(proposal)
+    print(_format_proposed(proposal_id, proposal))
 
 
 if __name__ == "__main__":

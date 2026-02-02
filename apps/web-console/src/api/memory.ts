@@ -1,4 +1,4 @@
-export type FactStatus = "ACTIVE" | "RETRACTED";
+export type FactStatus = "ACTIVE" | "OVERRIDDEN" | "RETRACTED";
 export type ProposalStatus = "PENDING" | "ACCEPTED" | "REJECTED";
 
 export type FactRecord = {
@@ -36,11 +36,11 @@ export type Proposal = {
 
 export type FetchFactsParams = {
   subject?: string;
-  status?: "ALL" | "ACTIVE" | "RETRACTED";
+  status?: "ALL" | "ACTIVE" | "OVERRIDDEN" | "RETRACTED";
   predicate_contains?: string;
 };
 
-const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
 const joinBaseUrl = (base: string, path: string) => {
   if (!base) {
@@ -157,13 +157,18 @@ export const fetchProposals = async (status?: ProposalStatus | "ALL"): Promise<F
   return await parseJson<FetchProposalsResponse>(response);
 };
 
-export const acceptProposal = async (id: string): Promise<FactRecord> => {
+export type AcceptProposalResponse = {
+  proposal: Proposal;
+  record: FactRecord;
+};
+
+export const acceptProposal = async (id: string): Promise<AcceptProposalResponse> => {
   const url = buildUrl(`/memory/proposals/${id}/accept`);
   const response = await fetch(url, { method: "POST" });
   if (!response.ok) {
     throw new Error(await buildErrorMessage("Failed to accept proposal", response));
   }
-  return await parseJson<FactRecord>(response);
+  return await parseJson<AcceptProposalResponse>(response);
 };
 
 export const rejectProposal = async (id: string, reason?: string): Promise<Proposal> => {

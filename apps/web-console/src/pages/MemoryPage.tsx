@@ -12,7 +12,7 @@ import {
 } from "../api/memory";
 import { FactDetailsDrawer } from "../components/FactDetailsDrawer";
 
-const STATUS_OPTIONS = ["ALL", "ACTIVE", "RETRACTED"] as const;
+const STATUS_OPTIONS = ["ALL", "ACTIVE", "OVERRIDDEN", "RETRACTED"] as const;
 
 type StatusFilter = (typeof STATUS_OPTIONS)[number];
 

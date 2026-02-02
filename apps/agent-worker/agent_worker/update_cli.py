@@ -8,10 +8,10 @@ from agent_worker.memory_client import MemoryClient
 from agent_worker.update_agent import UpdateGate, UpdateRequest, build_llm
 
 
-def _format_updated(old_id: str, new_id: str, request: UpdateRequest) -> str:
+def _format_updated(old_id: str, proposal_id: str, request: UpdateRequest) -> str:
     return (
         "UPDATED "
-        f"{old_id} -> {new_id} "
+        f"{old_id} -> {proposal_id} "
         f"predicate={request.predicate} "
         f"old={request.old_object} "
         f"new={request.new_object}"
@@ -57,8 +57,8 @@ def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> 
         object=request.new_object,
         confidence=request.confidence,
     )
-    new_id = memory_client.propose(proposal, source_note="update")
-    print(_format_updated(old_id, new_id, request))
+    proposal_id = memory_client.propose(proposal, source_note="update")
+    print(_format_updated(old_id, proposal_id, request))
 
 
 if __name__ == "__main__":

@@ -1,7 +1,8 @@
 import json
 
-from agent_worker.run import main
+from agent_worker.run import execute_decision, main
 from agent_worker.router import parse_llm_output, ProposeDecision, RetractDecision, UpdateDecision
+from agent_worker.trace import TraceCollector, TraceLevel
 
 
 class FakeLLM:
@@ -175,6 +176,32 @@ def test_router_parses_code_fences():
     assert decision.predicate == payload["predicate"]
     assert decision.object == payload["object"]
     assert decision.confidence == payload["confidence"]
+
+
+def test_execute_decision_propose_failure_traces() -> None:
+    class FailingMemory:
+        def propose(self, proposal, source_note: str = "mvp-1"):
+            raise RuntimeError("connection failed")
+
+        def list_facts(self, subject: str = "user", status: str = "ACTIVE"):
+            return []
+
+        def retract(self, record_id: str, reason: str) -> None:
+            return None
+
+    decision = ProposeDecision(
+        action="PROPOSE",
+        subject="user",
+        predicate="likes",
+        object="cats",
+        confidence=0.9,
+    )
+    trace = TraceCollector(level=TraceLevel.BASIC, trace_id="trace-1")
+
+    status = execute_decision(decision, FailingMemory(), trace=trace)
+
+    assert status == "NO_ACTION"
+    assert any(event.stage == "memory.propose.error" for event in trace.events)
 
 
 def test_router_invalid_json_is_no_action():

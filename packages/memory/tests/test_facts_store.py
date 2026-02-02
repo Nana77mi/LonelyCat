@@ -5,7 +5,7 @@ import pytest
 from memory.facts import FactCandidate, FactStatus, FactsStore
 
 
-def test_propose_creates_active():
+def test_create_record_direct_creates_active():
     async def run():
         store = FactsStore()
         candidate = FactCandidate(
@@ -15,7 +15,7 @@ def test_propose_creates_active():
             confidence=0.9,
             source={"session_id": "s1"},
         )
-        rec = await store.propose(candidate)
+        rec = await store.create_record_direct(candidate)
         assert rec.status == FactStatus.ACTIVE
         assert rec.overrides is None
         active = await store.get_active("user", "likes_cat")
@@ -25,10 +25,10 @@ def test_propose_creates_active():
     asyncio.run(run())
 
 
-def test_propose_conflict_overrides():
+def test_create_record_direct_conflict_overrides():
     async def run():
         store = FactsStore()
-        first = await store.propose(
+        first = await store.create_record_direct(
             FactCandidate(
                 subject="user",
                 predicate="likes_cat",
@@ -37,7 +37,7 @@ def test_propose_conflict_overrides():
                 source={"session_id": "s1"},
             )
         )
-        second = await store.propose(
+        second = await store.create_record_direct(
             FactCandidate(
                 subject="user",
                 predicate="likes_cat",
@@ -61,7 +61,7 @@ def test_propose_conflict_overrides():
 def test_retract_active():
     async def run():
         store = FactsStore()
-        rec = await store.propose(
+        rec = await store.create_record_direct(
             FactCandidate(
                 subject="user",
                 predicate="likes_cat",
@@ -84,7 +84,7 @@ def test_retract_active():
 def test_list_subject_ordering_and_statuses():
     async def run():
         store = FactsStore()
-        first = await store.propose(
+        first = await store.create_record_direct(
             FactCandidate(
                 subject="user",
                 predicate="likes_cat",
@@ -93,7 +93,7 @@ def test_list_subject_ordering_and_statuses():
                 source={"session_id": "s1"},
             )
         )
-        second = await store.propose(
+        second = await store.create_record_direct(
             FactCandidate(
                 subject="user",
                 predicate="likes_cat",
@@ -102,7 +102,7 @@ def test_list_subject_ordering_and_statuses():
                 source={"session_id": "s1"},
             )
         )
-        third = await store.propose(
+        third = await store.create_record_direct(
             FactCandidate(
                 subject="user",
                 predicate="age",
@@ -126,7 +126,7 @@ def test_confidence_validation():
     async def run():
         store = FactsStore()
         with pytest.raises(ValueError):
-            await store.propose(
+            await store.create_record_direct(
                 FactCandidate(
                     subject="user",
                     predicate="likes_cat",
@@ -136,7 +136,7 @@ def test_confidence_validation():
                 )
             )
         with pytest.raises(ValueError):
-            await store.propose(
+            await store.create_record_direct(
                 FactCandidate(
                     subject="user",
                     predicate="likes_cat",
@@ -167,8 +167,8 @@ def test_concurrency_same_subject_predicate():
             source={"session_id": "s1"},
         )
         first, second = await asyncio.gather(
-            store.propose(candidate_one),
-            store.propose(candidate_two),
+            store.create_record_direct(candidate_one),
+            store.create_record_direct(candidate_two),
         )
         records = [first, second]
         active = await store.get_active("user", "likes_cat")
@@ -191,7 +191,7 @@ def test_concurrency_same_subject_predicate():
 def test_external_mutation_does_not_affect_store():
     async def run():
         store = FactsStore()
-        rec = await store.propose(
+        rec = await store.create_record_direct(
             FactCandidate(
                 subject="user",
                 predicate="likes_cat",
@@ -219,7 +219,7 @@ def test_copy_fallback_on_uncopyable_object():
 
     async def run():
         store = FactsStore()
-        rec = await store.propose(
+        rec = await store.create_record_direct(
             FactCandidate(
                 subject="user",
                 predicate="likes_cat",

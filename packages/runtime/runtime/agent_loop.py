@@ -125,7 +125,7 @@ class AgentLoop:
             )
         committed: List[FactRecord] = []
         for candidate in candidates:
-            committed.append(await self._facts.propose(candidate))
+            committed.append(await self._facts.create_record_direct(candidate))
         for record in committed:
             await self._transcript.append(
                 session_id,

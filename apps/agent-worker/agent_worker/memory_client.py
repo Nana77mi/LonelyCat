@@ -20,10 +20,11 @@ class MemoryClient:
             response = client.post(url, json=payload)
             response.raise_for_status()
             data = response.json()
-        record_id = data.get("id")
-        if not record_id:
-            raise ValueError("Missing record id in response")
-        return record_id
+        proposal = data.get("proposal")
+        proposal_id = proposal.get("id") if isinstance(proposal, dict) else None
+        if not proposal_id:
+            raise ValueError("Missing proposal id in response")
+        return proposal_id
 
     def list_facts(self, subject: str = "user", status: str = "ACTIVE") -> list[dict]:
         url = f"{self._base_url}/memory/facts"
@@ -55,3 +56,22 @@ class MemoryClient:
         with httpx.Client(timeout=10.0) as client:
             response = client.post(url, json=payload)
             response.raise_for_status()
+
+    def accept_proposal(self, proposal_id: str) -> dict:
+        url = f"{self._base_url}/memory/proposals/{proposal_id}/accept"
+        import httpx
+
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(url)
+            response.raise_for_status()
+            return response.json()
+
+    def reject_proposal(self, proposal_id: str, reason: str | None = None) -> dict:
+        url = f"{self._base_url}/memory/proposals/{proposal_id}/reject"
+        payload = {"reason": reason}
+        import httpx
+
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(url, json=payload)
+            response.raise_for_status()
+            return response.json()
