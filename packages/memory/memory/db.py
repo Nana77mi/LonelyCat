@@ -12,6 +12,7 @@ from sqlalchemy import (
     Enum as SQLEnum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -128,6 +129,11 @@ class ConversationModel(Base):
     # 关系
     messages = relationship("MessageModel", back_populates="conversation", cascade="all, delete-orphan")
 
+    # 索引：用于按 updated_at 排序查询对话列表
+    __table_args__ = (
+        Index("idx_conversations_updated_at", "updated_at"),
+    )
+
 
 class MessageModel(Base):
     """Message 数据库模型"""
@@ -143,6 +149,11 @@ class MessageModel(Base):
 
     # 关系
     conversation = relationship("ConversationModel", back_populates="messages")
+
+    # 复合索引：用于查询某个对话的消息并按 created_at 排序
+    __table_args__ = (
+        Index("idx_messages_conversation_created", "conversation_id", "created_at"),
+    )
 
 
 def init_db() -> None:
