@@ -4,7 +4,7 @@ import "./ChatPage.css";
 
 type ChatPageProps = {
   messages: Message[];
-  onSendMessage: (content: string) => void;
+  onSendMessage: (content: string, retryMessageId?: string) => void;
   loading?: boolean;
 };
 
@@ -67,44 +67,67 @@ export const ChatPage = ({ messages, onSendMessage, loading }: ChatPageProps) =>
             <p>输入消息开始与 LonelyCat 对话</p>
           </div>
         ) : (
-          messages.map((message) => (
-            <div
-              key={message.id}
-              className={`message ${message.role}`}
-            >
-              <div className="message-avatar">
-                {message.role === "user" ? (
-                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                    <path
-                      d="M10 10C12.7614 10 15 7.76142 15 5C15 2.23858 12.7614 0 10 0C7.23858 0 5 2.23858 5 5C5 7.76142 7.23858 10 10 10Z"
-                      fill="currentColor"
-                    />
-                    <path
-                      d="M10 12C5.58172 12 2 15.5817 2 20H18C18 15.5817 14.4183 12 10 12Z"
-                      fill="currentColor"
-                    />
-                  </svg>
-                ) : (
-                  // assistant 或 system 消息使用相同的图标
-                  <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                    <path
-                      d="M10 0C4.48 0 0 4.48 0 10C0 15.52 4.48 20 10 20C15.52 20 20 15.52 20 10C20 4.48 15.52 0 10 0ZM10 18C5.59 18 2 14.41 2 10C2 5.59 5.59 2 10 2C14.41 2 18 5.59 18 10C18 14.41 14.41 18 10 18ZM9 5H11V11H9V5ZM9 13H11V15H9V13Z"
-                      fill="currentColor"
-                    />
-                  </svg>
-                )}
-              </div>
-              <div className="message-content">
-                <div className="message-text">{message.content}</div>
-                <div className="message-time">
-                  {new Date(message.created_at).toLocaleTimeString("zh-CN", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                  })}
+          messages.map((message) => {
+            const isFailed = message.meta_json && typeof message.meta_json === "object" && "failed" in message.meta_json && message.meta_json.failed === true;
+            const errorMessage = isFailed && message.meta_json && typeof message.meta_json === "object" && "error" in message.meta_json
+              ? String(message.meta_json.error)
+              : null;
+            const isRetryable = isFailed && message.meta_json && typeof message.meta_json === "object" && "retryable" in message.meta_json && message.meta_json.retryable === true;
+
+            return (
+              <div
+                key={message.id}
+                className={`message ${message.role} ${isFailed ? "message-failed" : ""}`}
+              >
+                <div className="message-avatar">
+                  {message.role === "user" ? (
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                      <path
+                        d="M10 10C12.7614 10 15 7.76142 15 5C15 2.23858 12.7614 0 10 0C7.23858 0 5 2.23858 5 5C5 7.76142 7.23858 10 10 10Z"
+                        fill="currentColor"
+                      />
+                      <path
+                        d="M10 12C5.58172 12 2 15.5817 2 20H18C18 15.5817 14.4183 12 10 12Z"
+                        fill="currentColor"
+                      />
+                    </svg>
+                  ) : (
+                    // assistant 或 system 消息使用相同的图标
+                    <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                      <path
+                        d="M10 0C4.48 0 0 4.48 0 10C0 15.52 4.48 20 10 20C15.52 20 20 15.52 20 10C20 4.48 15.52 0 10 0ZM10 18C5.59 18 2 14.41 2 10C2 5.59 5.59 2 10 2C14.41 2 18 5.59 18 10C18 14.41 14.41 18 10 18ZM9 5H11V11H9V5ZM9 13H11V15H9V13Z"
+                        fill="currentColor"
+                      />
+                    </svg>
+                  )}
+                </div>
+                <div className="message-content">
+                  <div className="message-text">{message.content}</div>
+                  {isFailed && errorMessage && (
+                    <div className="message-error">
+                      <span className="message-error-text">{errorMessage}</span>
+                      {isRetryable && (
+                        <button
+                          className="message-retry-btn"
+                          onClick={() => onSendMessage(message.content, message.id)}
+                          disabled={loading}
+                          aria-label="重试"
+                        >
+                          重试
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <div className="message-time">
+                    {new Date(message.created_at).toLocaleTimeString("zh-CN", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))
+            );
+          })
         )}
         {loading && (
           <div className="message assistant">

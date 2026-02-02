@@ -95,7 +95,7 @@ export const Sidebar = ({
               <div className="conversation-content">
                 <span className="conversation-title">{conv.title}</span>
                 <span className="conversation-time">
-                  {formatTime(new Date(conv.updated_at).getTime())}
+                  {formatTime(conv.updated_at)}
                 </span>
               </div>
               {hoveredId === conv.id && onDeleteConversation && (
@@ -125,9 +125,24 @@ export const Sidebar = ({
   );
 };
 
-function formatTime(timestamp: number): string {
+function formatTime(isoString: string): string {
+  // 解析 ISO 8601 字符串
+  const date = new Date(isoString);
+  
+  // 检查日期是否有效
+  if (isNaN(date.getTime())) {
+    return "未知时间";
+  }
+  
   const now = Date.now();
+  const timestamp = date.getTime();
   const diff = now - timestamp;
+  
+  // 处理负数情况（未来时间）
+  if (diff < 0) {
+    return "刚刚";
+  }
+  
   const minutes = Math.floor(diff / 60000);
   const hours = Math.floor(diff / 3600000);
   const days = Math.floor(diff / 86400000);
@@ -137,7 +152,6 @@ function formatTime(timestamp: number): string {
   if (hours < 24) return `${hours}小时前`;
   if (days < 7) return `${days}天前`;
 
-  const date = new Date(timestamp);
   return date.toLocaleDateString("zh-CN", {
     month: "short",
     day: "numeric",

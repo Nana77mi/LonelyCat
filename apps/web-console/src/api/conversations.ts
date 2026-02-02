@@ -187,6 +187,44 @@ export const listMessages = async (
 };
 
 /**
+ * 更新对话标题
+ * 
+ * @param conversationId 对话 ID
+ * @param title 新标题
+ * @returns 更新后的对话对象
+ */
+export const updateConversation = async (
+  conversationId: string,
+  title: string
+): Promise<Conversation> => {
+  const url = buildUrl(`/conversations/${conversationId}`);
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to update conversation", response));
+  }
+  return await parseJson<Conversation>(response);
+};
+
+/**
+ * 删除对话
+ * 
+ * @param conversationId 对话 ID
+ */
+export const deleteConversation = async (conversationId: string): Promise<void> => {
+  const url = buildUrl(`/conversations/${conversationId}`);
+  const response = await fetch(url, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to delete conversation", response));
+  }
+};
+
+/**
  * 发送消息到指定对话（chat 模式）
  * 
  * 此函数不传 role 参数，后端会自动：

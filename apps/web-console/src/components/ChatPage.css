@@ -130,6 +130,57 @@
   text-align: right;
 }
 
+/* 失败消息样式 */
+.message-failed .message-text {
+  opacity: 0.7;
+  border: 1px solid #ef4444;
+}
+
+.message-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 12px;
+  background-color: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  font-size: 12px;
+}
+
+.message.user .message-error {
+  background-color: #fee2e2;
+  border-color: #fca5a5;
+}
+
+.message-error-text {
+  flex: 1;
+  color: #dc2626;
+  word-break: break-word;
+}
+
+.message-retry-btn {
+  flex-shrink: 0;
+  padding: 4px 12px;
+  background-color: #ef4444;
+  color: #ffffff;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s, opacity 0.2s;
+}
+
+.message-retry-btn:hover:not(:disabled) {
+  background-color: #dc2626;
+}
+
+.message-retry-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* 输入区域 */
 .chat-input-form {
   border-top: 1px solid #e5e5e5;
