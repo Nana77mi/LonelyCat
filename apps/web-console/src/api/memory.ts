@@ -40,7 +40,7 @@ export type FetchFactsParams = {
   predicate_contains?: string;
 };
 
-const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "";
+const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
 const joinBaseUrl = (base: string, path: string) => {
   if (!base) {
