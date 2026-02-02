@@ -346,3 +346,59 @@ def test_create_multiple_messages_and_read_all(temp_db) -> None:
     assert items[2]["role"] == "user"
     assert items[2]["content"] == "Second message"
     assert items[3]["role"] == "assistant"
+
+
+def test_conversation_updated_at_on_message_creation(temp_db) -> None:
+    """测试：创建对话 A、B，给 A 新增 message，GET /conversations 应该 A 排第一"""
+    db, _ = temp_db
+    
+    # 创建对话 A
+    request_a = conversations.ConversationCreateRequest(title="Conversation A")
+    conv_a = asyncio.run(conversations._create_conversation(request_a, db))
+    _commit_db(db)
+    conversation_a_id = conv_a["id"]
+    # 从数据库获取初始 updated_at（datetime 对象）
+    initial_conv_a_model = db.query(ConversationModel).filter(ConversationModel.id == conversation_a_id).first()
+    initial_updated_at_a = initial_conv_a_model.updated_at
+    
+    # 等待一小段时间确保时间戳不同
+    import time
+    time.sleep(0.01)
+    
+    # 创建对话 B
+    request_b = conversations.ConversationCreateRequest(title="Conversation B")
+    conv_b = asyncio.run(conversations._create_conversation(request_b, db))
+    _commit_db(db)
+    conversation_b_id = conv_b["id"]
+    
+    # 此时 B 应该排第一（因为 B 创建时间更晚）
+    conversations_list = asyncio.run(conversations._list_conversations(db))
+    assert len(conversations_list["items"]) == 2
+    assert conversations_list["items"][0]["id"] == conversation_b_id  # B 排第一
+    assert conversations_list["items"][1]["id"] == conversation_a_id  # A 排第二
+    
+    # 等待一小段时间
+    time.sleep(0.01)
+    
+    # 给 A 新增 message（这会更新 A 的 updated_at）
+    message_request = conversations.MessageCreateRequest(content="Message to A")
+    result = asyncio.run(conversations._create_message(conversation_a_id, message_request, db))
+    _commit_db(db)
+    
+    # 验证消息创建成功
+    assert "user_message" in result
+    assert "assistant_message" in result
+    
+    # 重新获取对话 A，验证 updated_at 已更新
+    updated_conv_a = db.query(ConversationModel).filter(ConversationModel.id == conversation_a_id).first()
+    db.refresh(updated_conv_a)
+    # 验证 updated_at 已更新（应该比初始时间晚）
+    assert updated_conv_a.updated_at > initial_updated_at_a
+    
+    # GET /conversations 应该 A 排第一（因为 A 的 updated_at 更新了）
+    conversations_list = asyncio.run(conversations._list_conversations(db))
+    assert len(conversations_list["items"]) == 2
+    assert conversations_list["items"][0]["id"] == conversation_a_id  # A 排第一（因为 updated_at 更新了）
+    assert conversations_list["items"][1]["id"] == conversation_b_id  # B 排第二
+    assert conversations_list["items"][0]["title"] == "Conversation A"
+    assert conversations_list["items"][1]["title"] == "Conversation B"

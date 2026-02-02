@@ -193,6 +193,8 @@ async def _create_message(
         meta_json=request.meta_json,
     )
     db.add(user_message)
+    # 更新 conversation 的 updated_at（每次创建 message 时都更新）
+    conversation.updated_at = now
     db.commit()
     db.refresh(user_message)
     
