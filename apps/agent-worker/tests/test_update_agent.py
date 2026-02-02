@@ -19,12 +19,12 @@ class MemorySpy:
         self.retract_calls = []
         self.propose_calls = []
 
-    def list_facts(self, subject="user", status="ACTIVE"):
-        self.list_calls.append({"subject": subject, "status": status})
+    def list_facts(self, scope="global", status="active", **kwargs):
+        self.list_calls.append({"scope": scope, "status": status, **kwargs})
         return self.facts
 
-    def retract(self, record_id: str, reason: str) -> None:
-        self.retract_calls.append({"record_id": record_id, "reason": reason})
+    def revoke(self, record_id: str) -> None:
+        self.retract_calls.append({"record_id": record_id})
 
     def propose(self, proposal, source_note: str = "mvp-1") -> str:
         self.propose_calls.append({"proposal": proposal, "source_note": source_note})
@@ -35,11 +35,11 @@ def test_cli_no_action(capsys):
     llm = FakeLLM("NO_ACTION")
 
     class NoCallMemory:
-        def list_facts(self, subject="user", status="ACTIVE"):
+        def list_facts(self, scope="global", status="active", **kwargs):
             raise AssertionError("list_facts should not be called")
 
-        def retract(self, record_id: str, reason: str) -> None:
-            raise AssertionError("retract should not be called")
+        def revoke(self, record_id: str) -> None:
+            raise AssertionError("revoke should not be called")
 
         def propose(self, proposal, source_note: str = "mvp-1") -> str:
             raise AssertionError("propose should not be called")
@@ -64,10 +64,9 @@ def test_cli_update_success(capsys):
         facts=[
             {
                 "id": "old-1",
-                "subject": "user",
-                "predicate": "likes",
-                "object": "cats",
-                "status": "ACTIVE",
+                "key": "likes",
+                "value": "cats",
+                "status": "active",
             }
         ]
     )
@@ -77,7 +76,7 @@ def test_cli_update_success(capsys):
 
     assert memory.list_calls
     assert memory.retract_calls == [
-        {"record_id": "old-1", "reason": payload["reason"]}
+        {"record_id": "old-1"}
     ]
     assert memory.propose_calls
     propose_call = memory.propose_calls[0]

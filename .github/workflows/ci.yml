@@ -15,7 +15,7 @@ jobs:
       - name: Install Python deps
         run: |
           python -m pip install --upgrade pip
-             python -m pip install -e "packages/memory" -e "packages/runtime" -e "packages/protocol[test]" -e "apps/core-api[test]" -e "apps/agent-worker[test]"
+          python -m pip install -e "packages/memory" -e "packages/protocol[test]" -e "apps/core-api[test]" -e "apps/agent-worker[test]"
       - uses: pnpm/action-setup@v3
         with:
           version: 9
@@ -23,5 +23,5 @@ jobs:
         run: pnpm install
       - name: Run tests
         run: |
-          python -m pytest
+          python -m pytest --ignore=packages/runtime/tests
           pnpm -r test

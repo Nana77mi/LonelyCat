@@ -17,11 +17,12 @@ test("memory api helpers are defined", async () => {
   const content = await readFile(apiPath, "utf-8");
   assert.match(content, /export const fetchFacts/);
   assert.match(content, /export const proposeFact/);
-  assert.match(content, /export const retractFact/);
+  assert.match(content, /export const revokeFact/);
   assert.match(content, /export const fetchProposals/);
   assert.match(content, /export const acceptProposal/);
   assert.match(content, /export const rejectProposal/);
-  assert.match(content, /export const fetchFactChain/);
+  assert.match(content, /export const archiveFact/);
+  assert.match(content, /export const reactivateFact/);
 });
 
 test("fact details drawer component exists", async () => {

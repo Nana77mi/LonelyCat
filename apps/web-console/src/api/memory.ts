@@ -1,43 +1,93 @@
-export type FactStatus = "ACTIVE" | "OVERRIDDEN" | "RETRACTED";
-export type ProposalStatus = "PENDING" | "ACCEPTED" | "REJECTED";
+export type FactStatus = "active" | "revoked" | "archived";
+export type ProposalStatus = "pending" | "accepted" | "rejected" | "expired";
+export type Scope = "global" | "project" | "session";
+export type SourceKind = "chat" | "run" | "connector" | "manual";
+export type ConflictStrategy = "overwrite_latest" | "keep_both";
 
-export type FactRecord = {
-  id: string;
-  subject: string;
-  predicate: string;
-  object: unknown;
-  confidence: number;
-  source: Record<string, unknown> | null;
-  status: FactStatus;
-  created_at: number;
-  seq: number;
-  overrides: string | null;
-  retracted_reason: string | null;
+export type SourceRef = {
+  kind: SourceKind;
+  ref_id: string;
+  excerpt: string | null;
 };
 
-export type FactCandidate = {
-  subject: string;
-  predicate: string;
-  object: unknown;
-  confidence: number;
-  source: Record<string, unknown>;
+export type ProposalPayload = {
+  key: string;
+  value: unknown;
+  tags: string[];
+  ttl_seconds: number | null;
 };
 
 export type Proposal = {
   id: string;
-  candidate: FactCandidate;
-  source_note: string;
-  reason: string | null;
+  payload: ProposalPayload;
   status: ProposalStatus;
-  created_at: number;
-  resolved_at: number | null;
-  resolved_reason: string | null;
+  reason: string | null;
+  confidence: number | null;
+  scope_hint: Scope | null;
+  source_ref: SourceRef;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Fact = {
+  id: string;
+  key: string;
+  value: unknown;
+  status: FactStatus;
+  scope: Scope;
+  project_id: string | null;
+  session_id: string | null;
+  source_ref: SourceRef;
+  confidence: number | null;
+  version: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AuditEvent = {
+  id: string;
+  type: string;
+  actor: {
+    kind: string;
+    id: string;
+  };
+  target: {
+    type: string;
+    id: string;
+  };
+  request_id: string | null;
+  diff: {
+    before: unknown;
+    after: unknown;
+  } | null;
+  created_at: string;
+};
+
+export type ProposalCreateRequest = {
+  payload: ProposalPayload;
+  source_ref: SourceRef;
+  reason?: string | null;
+  confidence?: number | null;
+  scope_hint?: Scope | null;
+};
+
+export type ProposalAcceptRequest = {
+  strategy?: ConflictStrategy | null;
+  scope?: Scope | null;
+  project_id?: string | null;
+  session_id?: string | null;
 };
 
 export type FetchFactsParams = {
-  subject?: string;
-  status?: "ALL" | "ACTIVE" | "OVERRIDDEN" | "RETRACTED";
-  predicate_contains?: string;
+  scope?: Scope;
+  project_id?: string;
+  session_id?: string;
+  status?: FactStatus | "all";
+};
+
+export type FetchProposalsParams = {
+  status?: ProposalStatus | "all";
+  scope_hint?: Scope;
 };
 
 // Priority: VITE_CORE_API_URL > VITE_API_BASE_URL > default "/api"
@@ -71,23 +121,26 @@ const buildUrl = (path: string, params?: Record<string, string | undefined>) => 
 };
 
 type FetchFactsResponse = {
-  items: FactRecord[];
+  items: Fact[];
 };
 
 type FetchProposalsResponse = {
   items: Proposal[];
 };
 
-type FactChainResponse = {
-  root_id: string;
-  items: FactRecord[];
-  truncated: boolean;
+type FetchAuditEventsResponse = {
+  items: AuditEvent[];
 };
 
 export type ProposeFactResponse = {
   status: ProposalStatus;
   proposal: Proposal;
-  record: FactRecord | null;
+  fact: Fact | null;
+};
+
+export type AcceptProposalResponse = {
+  proposal: Proposal;
+  fact: Fact;
 };
 
 const parseJson = async <T>(response: Response): Promise<T> => {
@@ -130,9 +183,10 @@ const buildErrorMessage = async (prefix: string, response: Response): Promise<st
 
 export const fetchFacts = async (params: FetchFactsParams = {}): Promise<FetchFactsResponse> => {
   const url = buildUrl("/memory/facts", {
-    subject: params.subject,
+    scope: params.scope,
+    project_id: params.project_id,
+    session_id: params.session_id,
     status: params.status,
-    predicate_contains: params.predicate_contains,
   });
   const response = await fetch(url);
   if (!response.ok) {
@@ -141,12 +195,39 @@ export const fetchFacts = async (params: FetchFactsParams = {}): Promise<FetchFa
   return await parseJson<FetchFactsResponse>(response);
 };
 
-export const proposeFact = async (candidate: FactCandidate): Promise<ProposeFactResponse> => {
-  const url = buildUrl("/memory/facts/propose");
+export const getFact = async (factId: string): Promise<Fact> => {
+  const url = buildUrl(`/memory/facts/${factId}`);
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to fetch fact", response));
+  }
+  return await parseJson<Fact>(response);
+};
+
+export const getFactByKey = async (
+  key: string,
+  scope: Scope,
+  projectId?: string,
+  sessionId?: string
+): Promise<Fact> => {
+  const url = buildUrl(`/memory/facts/key/${encodeURIComponent(key)}`, {
+    scope,
+    project_id: projectId,
+    session_id: sessionId,
+  });
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to fetch fact by key", response));
+  }
+  return await parseJson<Fact>(response);
+};
+
+export const proposeFact = async (request: ProposalCreateRequest): Promise<ProposeFactResponse> => {
+  const url = buildUrl("/memory/proposals");
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(candidate),
+    body: JSON.stringify(request),
   });
   if (!response.ok) {
     throw new Error(await buildErrorMessage("Failed to propose fact", response));
@@ -154,8 +235,11 @@ export const proposeFact = async (candidate: FactCandidate): Promise<ProposeFact
   return await parseJson<ProposeFactResponse>(response);
 };
 
-export const fetchProposals = async (status?: ProposalStatus | "ALL"): Promise<FetchProposalsResponse> => {
-  const url = buildUrl("/memory/proposals", { status });
+export const fetchProposals = async (params: FetchProposalsParams = {}): Promise<FetchProposalsResponse> => {
+  const url = buildUrl("/memory/proposals", {
+    status: params.status,
+    scope_hint: params.scope_hint,
+  });
   const response = await fetch(url);
   if (!response.ok) {
     const detail = await readErrorBody(response);
@@ -167,14 +251,25 @@ export const fetchProposals = async (status?: ProposalStatus | "ALL"): Promise<F
   return await parseJson<FetchProposalsResponse>(response);
 };
 
-export type AcceptProposalResponse = {
-  proposal: Proposal;
-  record: FactRecord;
+export const getProposal = async (proposalId: string): Promise<Proposal> => {
+  const url = buildUrl(`/memory/proposals/${proposalId}`);
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to fetch proposal", response));
+  }
+  return await parseJson<Proposal>(response);
 };
 
-export const acceptProposal = async (id: string): Promise<AcceptProposalResponse> => {
+export const acceptProposal = async (
+  id: string,
+  request?: ProposalAcceptRequest
+): Promise<AcceptProposalResponse> => {
   const url = buildUrl(`/memory/proposals/${id}/accept`);
-  const response = await fetch(url, { method: "POST" });
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request || {}),
+  });
   if (!response.ok) {
     throw new Error(await buildErrorMessage("Failed to accept proposal", response));
   }
@@ -194,30 +289,78 @@ export const rejectProposal = async (id: string, reason?: string): Promise<Propo
   return await parseJson<Proposal>(response);
 };
 
-export const retractFact = async (id: string, reason: string): Promise<FactRecord> => {
-  const url = buildUrl(`/memory/facts/${id}/retract`);
+export const expireProposal = async (id: string): Promise<Proposal> => {
+  const url = buildUrl(`/memory/proposals/${id}/expire`);
   const response = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ reason }),
   });
   if (!response.ok) {
-    throw new Error(await buildErrorMessage("Failed to retract fact", response));
+    throw new Error(await buildErrorMessage("Failed to expire proposal", response));
   }
-  return await parseJson<FactRecord>(response);
+  return await parseJson<Proposal>(response);
 };
 
-export const fetchFactChain = async (
-  id: string,
-  maxDepth = 20,
-  signal?: AbortSignal
-): Promise<FactChainResponse> => {
-  const url = buildUrl(`/memory/facts/${id}/chain`, {
-    max_depth: String(maxDepth),
+export const revokeFact = async (id: string): Promise<Fact> => {
+  const url = buildUrl(`/memory/facts/${id}/revoke`);
+  const response = await fetch(url, {
+    method: "POST",
   });
-  const response = await fetch(url, { signal });
   if (!response.ok) {
-    throw new Error(await buildErrorMessage("Failed to fetch fact chain", response));
+    throw new Error(await buildErrorMessage("Failed to revoke fact", response));
   }
-  return await parseJson<FactChainResponse>(response);
+  return await parseJson<Fact>(response);
+};
+
+export const archiveFact = async (id: string): Promise<Fact> => {
+  const url = buildUrl(`/memory/facts/${id}/archive`);
+  const response = await fetch(url, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to archive fact", response));
+  }
+  return await parseJson<Fact>(response);
+};
+
+export const reactivateFact = async (id: string): Promise<Fact> => {
+  const url = buildUrl(`/memory/facts/${id}/reactivate`);
+  const response = await fetch(url, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to reactivate fact", response));
+  }
+  return await parseJson<Fact>(response);
+};
+
+export const fetchAuditEvents = async (params: {
+  target_type?: string;
+  target_id?: string;
+  event_type?: string;
+  limit?: number;
+  offset?: number;
+} = {}): Promise<FetchAuditEventsResponse> => {
+  const url = buildUrl("/memory/audit", {
+    target_type: params.target_type,
+    target_id: params.target_id,
+    event_type: params.event_type,
+    limit: params.limit?.toString(),
+    offset: params.offset?.toString(),
+  });
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to fetch audit events", response));
+  }
+  return await parseJson<FetchAuditEventsResponse>(response);
+};
+
+export const checkExpiredProposals = async (): Promise<{ expired_ids: string[] }> => {
+  const url = buildUrl("/memory/maintenance/check-expired");
+  const response = await fetch(url, {
+    method: "POST",
+  });
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to check expired proposals", response));
+  }
+  return await parseJson<{ expired_ids: string[] }>(response);
 };

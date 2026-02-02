@@ -21,16 +21,16 @@ class MemorySpy:
         self.retract_calls = []
         self.response_id = "new-123"
 
-    def list_facts(self, subject: str = "user", status: str = "ACTIVE"):
-        self.list_calls.append({"subject": subject, "status": status})
+    def list_facts(self, scope="global", status="active", **kwargs):
+        self.list_calls.append({"scope": scope, "status": status, **kwargs})
         return self.facts
 
     def propose(self, proposal, source_note: str = "mvp-1"):
         self.propose_calls.append({"proposal": proposal, "source_note": source_note})
         return self.response_id
 
-    def retract(self, record_id: str, reason: str) -> None:
-        self.retract_calls.append({"record_id": record_id, "reason": reason})
+    def revoke(self, record_id: str) -> None:
+        self.retract_calls.append({"record_id": record_id})
 
 
 def test_run_no_action(capsys):
@@ -40,10 +40,10 @@ def test_run_no_action(capsys):
         def propose(self, proposal, source_note: str = "mvp-1"):
             raise AssertionError("Memory client should not be called")
 
-        def list_facts(self, subject: str = "user", status: str = "ACTIVE"):
+        def list_facts(self, scope="global", status="active", **kwargs):
             raise AssertionError("Memory client should not be called")
 
-        def retract(self, record_id: str, reason: str) -> None:
+        def revoke(self, record_id: str) -> None:
             raise AssertionError("Memory client should not be called")
 
     main(["hello"], llm=llm, memory_client=NoCallMemory())
@@ -82,7 +82,7 @@ def test_run_retract_found(capsys):
     }
     llm = FakeLLM(json.dumps(payload))
     memory = MemorySpy(
-        facts=[{"id": "fact-1", "predicate": "likes", "object": "cats"}]
+        facts=[{"id": "fact-1", "key": "likes", "value": "cats"}]
     )
 
     main(["I do not like cats"], llm=llm, memory_client=memory)
@@ -102,7 +102,7 @@ def test_run_retract_not_found(capsys):
         "reason": "no longer true",
     }
     llm = FakeLLM(json.dumps(payload))
-    memory = MemorySpy(facts=[{"id": "fact-1", "predicate": "likes", "object": "dogs"}])
+    memory = MemorySpy(facts=[{"id": "fact-1", "key": "likes", "value": "dogs"}])
 
     main(["I do not like cats"], llm=llm, memory_client=memory)
     captured = capsys.readouterr()
@@ -124,7 +124,7 @@ def test_run_update_success(capsys):
     }
     llm = FakeLLM(json.dumps(payload))
     memory = MemorySpy(
-        facts=[{"id": "fact-1", "predicate": "likes", "object": "cats"}]
+        facts=[{"id": "fact-1", "key": "likes", "value": "cats"}]
     )
 
     main(["I like dogs now"], llm=llm, memory_client=memory)

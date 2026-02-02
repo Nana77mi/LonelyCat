@@ -108,20 +108,22 @@ def execute_decision(
         try:
             if trace:
                 trace.record("memory.retract.start")
-            facts = memory_client.list_facts(subject=decision.subject, status="ACTIVE")
+            # 构建 key（从 subject.predicate 转换为 key）
+            key = f"{decision.subject}.{decision.predicate}" if decision.subject != "user" else decision.predicate
+            facts = memory_client.list_facts(scope="global", status="active")
             match = next(
                 (
                     record
                     for record in facts
-                    if record.get("predicate") == decision.predicate
-                    and record.get("object") == decision.object
+                    if record.get("key") == key
+                    and record.get("value") == decision.object
                 ),
                 None,
             )
             if not match:
                 return _format_not_found_retract(decision)
             record_id = str(match.get("id"))
-            memory_client.retract(record_id, decision.reason)
+            memory_client.revoke(record_id)
             if trace:
                 trace.record("memory.retract.finish")
             return _format_retracted(record_id, decision)
@@ -135,20 +137,22 @@ def execute_decision(
         try:
             if trace:
                 trace.record("memory.update.start")
-            facts = memory_client.list_facts(subject=decision.subject, status="ACTIVE")
+            # 构建 key（从 subject.predicate 转换为 key）
+            key = f"{decision.subject}.{decision.predicate}" if decision.subject != "user" else decision.predicate
+            facts = memory_client.list_facts(scope="global", status="active")
             match = next(
                 (
                     record
                     for record in facts
-                    if record.get("predicate") == decision.predicate
-                    and record.get("object") == decision.old_object
+                    if record.get("key") == key
+                    and record.get("value") == decision.old_object
                 ),
                 None,
             )
             if not match:
                 return _format_not_found_update(decision)
             old_id = str(match.get("id"))
-            memory_client.retract(old_id, decision.reason)
+            memory_client.revoke(old_id)
             proposal = FactProposal(
                 subject=decision.subject,
                 predicate=decision.predicate,

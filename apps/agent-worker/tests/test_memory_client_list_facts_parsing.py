@@ -37,7 +37,7 @@ def test_list_facts_accepts_list_response(monkeypatch: pytest.MonkeyPatch) -> No
 
     client = MemoryClient(base_url="http://testserver")
 
-    assert client.list_facts() == payload
+    assert client.list_facts(scope="global") == payload
 
 
 def test_list_facts_accepts_items_response(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -46,7 +46,7 @@ def test_list_facts_accepts_items_response(monkeypatch: pytest.MonkeyPatch) -> N
 
     client = MemoryClient(base_url="http://testserver")
 
-    assert client.list_facts() == payload["items"]
+    assert client.list_facts(scope="global") == payload["items"]
 
 
 def test_list_facts_accepts_data_response(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -55,7 +55,7 @@ def test_list_facts_accepts_data_response(monkeypatch: pytest.MonkeyPatch) -> No
 
     client = MemoryClient(base_url="http://testserver")
 
-    assert client.list_facts() == payload["data"]
+    assert client.list_facts(scope="global") == payload["data"]
 
 
 def test_list_facts_rejects_unexpected_response(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,6 +65,6 @@ def test_list_facts_rejects_unexpected_response(monkeypatch: pytest.MonkeyPatch)
     client = MemoryClient(base_url="http://testserver")
 
     with pytest.raises(ValueError) as excinfo:
-        client.list_facts()
+        client.list_facts(scope="global")
 
     assert "unexpected" in str(excinfo.value)

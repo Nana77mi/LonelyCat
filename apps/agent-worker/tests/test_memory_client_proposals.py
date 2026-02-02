@@ -18,13 +18,23 @@ class DummyClient:
     def post(self, url: str, json: dict | None = None) -> httpx.Response:
         return self._response
 
+    def get(self, url: str, params: dict | None = None) -> httpx.Response:
+        return self._response
 
-def _patch_httpx_client(monkeypatch: pytest.MonkeyPatch, payload, status_code: int = 200) -> None:
-    response = httpx.Response(
-        status_code,
-        json=payload,
-        request=httpx.Request("POST", "http://testserver/memory/facts/propose"),
-    )
+
+def _patch_httpx_client(monkeypatch: pytest.MonkeyPatch, payload, status_code: int = 200, method: str = "POST") -> None:
+    if method == "POST":
+        response = httpx.Response(
+            status_code,
+            json=payload,
+            request=httpx.Request("POST", "http://testserver/memory/proposals"),
+        )
+    else:  # GET
+        response = httpx.Response(
+            status_code,
+            json=payload,
+            request=httpx.Request("GET", "http://testserver/memory/facts"),
+        )
 
     def _client_factory(timeout: float | None = None) -> DummyClient:
         return DummyClient(response=response, timeout=timeout)
@@ -34,9 +44,9 @@ def _patch_httpx_client(monkeypatch: pytest.MonkeyPatch, payload, status_code: i
 
 def test_propose_returns_proposal_id(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = {
-        "status": "PENDING",
-        "proposal": {"id": "proposal-123"},
-        "record": None,
+        "status": "pending",
+        "proposal": {"id": "proposal-123", "payload": {"key": "likes", "value": "cats"}},
+        "fact": None,
     }
     _patch_httpx_client(monkeypatch, payload)
 
@@ -46,7 +56,7 @@ def test_propose_returns_proposal_id(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_propose_missing_proposal_id_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    payload = {"status": "PENDING", "proposal": {"id": ""}, "record": None}
+    payload = {"status": "pending", "proposal": {}, "fact": None}
     _patch_httpx_client(monkeypatch, payload)
 
     client = MemoryClient(base_url="http://testserver")
@@ -55,14 +65,60 @@ def test_propose_missing_proposal_id_raises(monkeypatch: pytest.MonkeyPatch) -> 
         client.propose(proposal=_fake_proposal())
 
 
-def test_accept_and_reject_return_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    payload = {"proposal": {"id": "proposal-1"}, "record": {"id": "fact-1"}}
+def test_accept_proposal_returns_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "proposal": {"id": "proposal-1", "status": "accepted"},
+        "fact": {"id": "fact-1", "key": "likes", "value": "cats", "status": "active"},
+    }
     _patch_httpx_client(monkeypatch, payload)
 
     client = MemoryClient(base_url="http://testserver")
 
-    assert client.accept_proposal("proposal-1") == payload
-    assert client.reject_proposal("proposal-1", reason="no") == payload
+    result = client.accept_proposal("proposal-1")
+    assert result == payload
+
+
+def test_reject_proposal_returns_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {"id": "proposal-1", "status": "rejected"}
+    _patch_httpx_client(monkeypatch, payload)
+
+    client = MemoryClient(base_url="http://testserver")
+
+    result = client.reject_proposal("proposal-1", reason="no")
+    assert result == payload
+
+
+def test_list_facts_returns_items(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "items": [
+            {"id": "fact-1", "key": "likes", "value": "cats", "status": "active"},
+            {"id": "fact-2", "key": "prefers", "value": "tea", "status": "active"},
+        ]
+    }
+    _patch_httpx_client(monkeypatch, payload, method="GET")
+
+    client = MemoryClient(base_url="http://testserver")
+
+    facts = client.list_facts(scope="global", status="active")
+    assert len(facts) == 2
+    assert facts[0]["id"] == "fact-1"
+    assert facts[1]["id"] == "fact-2"
+
+
+def test_list_facts_handles_different_response_formats(monkeypatch: pytest.MonkeyPatch) -> None:
+    # 测试 {"data": [...]} 格式
+    payload = {
+        "data": [
+            {"id": "fact-1", "key": "likes", "value": "cats", "status": "active"},
+        ]
+    }
+    _patch_httpx_client(monkeypatch, payload, method="GET")
+
+    client = MemoryClient(base_url="http://testserver")
+
+    facts = client.list_facts(scope="global", status="active")
+    assert len(facts) == 1
+    assert facts[0]["id"] == "fact-1"
 
 
 def _fake_proposal() -> FactProposal:

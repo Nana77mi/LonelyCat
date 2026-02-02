@@ -1,8 +1,8 @@
 import memory
-from memory.facts import FactsStore
+from memory.facts import MemoryStore
 
 
-def test_facts_store_importable():
-    store = FactsStore()
-    assert isinstance(store, FactsStore)
-    assert hasattr(memory, "FactsStore")
+def test_memory_store_importable():
+    store = MemoryStore()
+    assert isinstance(store, MemoryStore)
+    assert hasattr(memory, "MemoryStore")
