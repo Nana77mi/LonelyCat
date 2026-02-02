@@ -15,6 +15,8 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    inspect,
+    text,
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -88,6 +90,28 @@ class MessageModel(Base):
 def init_db() -> None:
     """初始化数据库，创建所有表"""
     Base.metadata.create_all(bind=engine)
+    # 迁移：添加 client_msg_id 列（如果不存在）
+    _migrate_add_client_msg_id()
+
+
+def _migrate_add_client_msg_id() -> None:
+    """迁移：为 messages 表添加 client_msg_id 列（如果不存在）"""
+    try:
+        inspector = inspect(engine)
+        # 检查表是否存在
+        if "messages" not in inspector.get_table_names():
+            return
+        
+        columns = [col["name"] for col in inspector.get_columns("messages")]
+        
+        if "client_msg_id" not in columns:
+            # 添加 client_msg_id 列
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE messages ADD COLUMN client_msg_id VARCHAR"))
+                conn.commit()
+    except Exception as e:
+        # 迁移失败不影响启动，只记录错误
+        print(f"Warning: Failed to migrate client_msg_id column: {e}")
 
 
 def get_db():

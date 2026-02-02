@@ -36,6 +36,11 @@ class ConversationCreateRequest(BaseModel):
     title: Optional[str] = "New chat"
 
 
+class ConversationUpdateRequest(BaseModel):
+    """更新 Conversation 请求"""
+    title: Optional[str] = None
+
+
 class MessageCreateRequest(BaseModel):
     """创建 Message 请求"""
     content: str
@@ -66,22 +71,35 @@ class MessageResponse(BaseModel):
 
 def _serialize_conversation(conv: ConversationModel) -> Dict[str, Any]:
     """序列化 Conversation 为字典"""
+    # 确保时间包含时区信息（Z 表示 UTC）
+    created_at_str = conv.created_at.isoformat()
+    if not created_at_str.endswith('Z') and '+' not in created_at_str:
+        created_at_str += 'Z'
+    updated_at_str = conv.updated_at.isoformat()
+    if not updated_at_str.endswith('Z') and '+' not in updated_at_str:
+        updated_at_str += 'Z'
+    
     return {
         "id": conv.id,
         "title": conv.title,
-        "created_at": conv.created_at.isoformat(),
-        "updated_at": conv.updated_at.isoformat(),
+        "created_at": created_at_str,
+        "updated_at": updated_at_str,
     }
 
 
 def _serialize_message(msg: MessageModel) -> Dict[str, Any]:
     """序列化 Message 为字典"""
+    # 确保时间包含时区信息（Z 表示 UTC）
+    created_at_str = msg.created_at.isoformat()
+    if not created_at_str.endswith('Z') and '+' not in created_at_str:
+        created_at_str += 'Z'
+    
     return {
         "id": msg.id,
         "conversation_id": msg.conversation_id,
         "role": msg.role.value,
         "content": msg.content,
-        "created_at": msg.created_at.isoformat(),
+        "created_at": created_at_str,
         "source_ref": msg.source_ref,
         "meta_json": msg.meta_json,
         "client_msg_id": msg.client_msg_id,
@@ -125,6 +143,39 @@ async def _create_conversation(request: ConversationCreateRequest, db: Session) 
     db.refresh(conversation)
     
     return _serialize_conversation(conversation)
+
+
+async def _update_conversation(
+    conversation_id: str,
+    request: ConversationUpdateRequest,
+    db: Session,
+) -> Dict[str, Any]:
+    """更新对话（内部函数，便于测试）"""
+    conversation = db.query(ConversationModel).filter(ConversationModel.id == conversation_id).first()
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    if request.title is not None:
+        conversation.title = request.title
+        conversation.updated_at = datetime.utcnow()
+    
+    db.commit()
+    db.refresh(conversation)
+    
+    return _serialize_conversation(conversation)
+
+
+async def _delete_conversation(conversation_id: str, db: Session) -> None:
+    """删除对话（内部函数，便于测试）
+    
+    注意：由于设置了 cascade="all, delete-orphan"，删除对话会自动删除所有关联的消息。
+    """
+    conversation = db.query(ConversationModel).filter(ConversationModel.id == conversation_id).first()
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    db.delete(conversation)
+    db.commit()
 
 
 async def _get_conversation_messages(
@@ -243,8 +294,16 @@ async def _create_message(
     db.add(user_message)
     # 更新 conversation 的 updated_at（每次创建 message 时都更新）
     conversation.updated_at = now
-    db.commit()
-    db.refresh(user_message)
+    try:
+        db.commit()
+        db.refresh(user_message)
+    except Exception as e:
+        # 数据库操作失败：回滚事务
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save user message: {str(e)}"
+        )
     
     # 2. 调用 worker 处理消息
     worker_error = None
@@ -266,6 +325,10 @@ async def _create_message(
             assistant_content = result.assistant_reply
         except Exception as e:
             # Worker 失败：记录错误，创建 system 错误消息
+            import traceback
+            error_traceback = traceback.format_exc()
+            print(f"[ERROR] Worker failed: {e}")
+            print(f"[ERROR] Traceback:\n{error_traceback}")
             worker_error = str(e)
             assistant_content = None
     
@@ -303,8 +366,16 @@ async def _create_message(
     
     # 4. 更新 conversation 的 updated_at（以 assistant/system 消息时间为准）
     conversation.updated_at = assistant_now
-    db.commit()
-    db.refresh(assistant_message)
+    try:
+        db.commit()
+        db.refresh(assistant_message)
+    except Exception as e:
+        # 数据库操作失败：回滚事务
+        db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to save assistant message: {str(e)}"
+        )
     
     return {
         "user_message": _serialize_message(user_message),
@@ -361,3 +432,28 @@ async def create_message(
     如果 request.role 未提供，创建 user 消息，调用 worker 处理，然后创建 assistant 消息。
     """
     return await _create_message(conversation_id, request, db, persona_id)
+
+
+@router.patch("/{conversation_id}", response_model=Dict[str, Any])
+async def update_conversation(
+    conversation_id: str,
+    request: ConversationUpdateRequest,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """更新对话
+    
+    目前支持更新标题。
+    """
+    return await _update_conversation(conversation_id, request, db)
+
+
+@router.delete("/{conversation_id}", status_code=204)
+async def delete_conversation(
+    conversation_id: str,
+    db: Session = Depends(get_db),
+) -> None:
+    """删除对话
+    
+    删除对话及其所有关联的消息（级联删除）。
+    """
+    await _delete_conversation(conversation_id, db)
