@@ -122,7 +122,7 @@ test: test-py test-web
 .PHONY: test-py
 test-py: setup-py
 	@echo "Running python tests..."
-	@env PYTHONPATH=$(PYTHONPATH) $(PY) -m pytest
+	@env PYTHONPATH=$(PYTHONPATH) $(PY) -m pytest apps/agent-worker/tests -q
 
 .PHONY: test-web
 test-web:

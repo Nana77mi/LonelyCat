@@ -4,6 +4,8 @@ import json
 import re
 
 from agent_worker.llm import BaseLLM
+from agent_worker.router import parse_llm_output
+from agent_worker.trace import TraceCollector
 from agent_worker.persona import Persona
 
 POLICY_PROMPT = """You are an assistant responding to the user.
@@ -12,6 +14,7 @@ Do not decide on memory actions here.
 Respond with helpful, concise text.
 """
 RETURN_TEXT_ONLY = "Return plain text. If you output JSON, include assistant_reply."
+FALLBACK_REPLY = "I'm sorry, I couldn't generate a response."
 
 
 def _extract_json_block(text: str) -> str | None:
@@ -44,10 +47,12 @@ def build_prompt(
 
 def parse_responder_output(raw_text: str | None) -> tuple[str, str]:
     if raw_text is None:
-        return "", "NO_ACTION"
+        return FALLBACK_REPLY, "NO_ACTION"
     if not isinstance(raw_text, str):
         raw_text = str(raw_text)
     stripped = raw_text.strip()
+    if not stripped:
+        return FALLBACK_REPLY, "NO_ACTION"
     candidate_text = _extract_json_block(stripped)
     if not candidate_text:
         return stripped, "NO_ACTION"
@@ -59,6 +64,8 @@ def parse_responder_output(raw_text: str | None) -> tuple[str, str]:
         return stripped, "NO_ACTION"
     assistant_reply = data.get("assistant_reply")
     if not isinstance(assistant_reply, str):
+        if data.get("action") is not None:
+            return FALLBACK_REPLY, "NO_ACTION"
         return stripped, "NO_ACTION"
     memory_hint = data.get("memory", "NO_ACTION")
     if not isinstance(memory_hint, str):
@@ -71,8 +78,20 @@ class Responder:
         self._llm = llm
 
     def reply(
-        self, persona: Persona, user_message: str, active_facts: list[dict]
+        self,
+        persona: Persona,
+        user_message: str,
+        active_facts: list[dict],
+        trace: TraceCollector | None = None,
     ) -> tuple[str, str]:
         prompt = build_prompt(persona, POLICY_PROMPT, active_facts, user_message)
+        if trace:
+            trace.record("responder.prompt", prompt)
         raw = self._llm.generate(prompt)
+        if trace:
+            trace.record("responder.response", str(raw))
+        if raw is not None and isinstance(raw, str):
+            maybe_decision = parse_llm_output(raw)
+            if maybe_decision.action != "NO_ACTION" and "assistant_reply" not in raw:
+                return FALLBACK_REPLY, "NO_ACTION"
         return parse_responder_output(raw)
