@@ -11,6 +11,8 @@ type SidebarProps = {
   onNewConversation: () => void;
   onSelectConversation: (id: string) => void;
   onDeleteConversation?: (id: string) => void;
+  loading?: boolean;
+  error?: string | null;
 };
 
 export const Sidebar = ({
@@ -19,6 +21,8 @@ export const Sidebar = ({
   onNewConversation,
   onSelectConversation,
   onDeleteConversation,
+  loading = false,
+  error = null,
 }: SidebarProps) => {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const location = useLocation();
@@ -63,7 +67,16 @@ export const Sidebar = ({
 
       {/* 对话列表 */}
       <div className="conversations-list">
-        {conversations.length === 0 ? (
+        {loading ? (
+          <div className="empty-state">
+            <p>加载中...</p>
+          </div>
+        ) : error ? (
+          <div className="empty-state">
+            <p>加载失败</p>
+            <p className="empty-hint">{error}</p>
+          </div>
+        ) : conversations.length === 0 ? (
           <div className="empty-state">
             <p>还没有对话记录</p>
             <p className="empty-hint">开始一个新对话吧</p>
