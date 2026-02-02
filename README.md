@@ -38,6 +38,37 @@ python -m uvicorn app.main:app --app-dir apps/core-api --reload
 pnpm --filter @lonelycat/web-console dev
 ```
 
+## Memory review workflow
+
+Proposed facts are reviewed before they become active memory records.
+
+1. **Propose a fact**: `POST /memory/facts/propose` creates a proposal with status `PENDING`.
+2. **Review proposals**: `GET /memory/proposals` lists pending items.
+3. **Accept or reject**:
+   - `POST /memory/proposals/{proposal_id}/accept` creates an `ACTIVE` fact record.
+   - `POST /memory/proposals/{proposal_id}/reject` stores the rejection reason.
+4. **List facts**: `GET /memory/facts` returns active/retracted facts as before.
+
+The web console's Memory page surfaces pending proposals for review and action.
+
+## Auto-accept demo
+
+For demo environments, the Core API can auto-accept proposals based on confidence and predicate filters:
+
+```bash
+# Enable auto-accept
+MEMORY_AUTO_ACCEPT=1
+
+# Optional confidence threshold (default: 0.85)
+MEMORY_AUTO_ACCEPT_MIN_CONF=0.9
+
+# Optional predicate allowlist (comma-separated; empty means allow all)
+MEMORY_AUTO_ACCEPT_PREDICATES=likes,uses,plays
+```
+
+When enabled, proposals that meet the thresholds are automatically accepted and immediately appear in
+`GET /memory/facts`, while still recording an accepted proposal entry.
+
 ### Agent Worker LLM examples
 
 ```bash

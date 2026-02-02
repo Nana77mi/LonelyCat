@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  Proposal,
   FactRecord,
+  acceptProposal,
   fetchFacts,
+  fetchProposals,
   proposeFact,
+  rejectProposal,
   retractFact,
 } from "../api/memory";
 import { FactDetailsDrawer } from "../components/FactDetailsDrawer";
@@ -13,6 +17,7 @@ const STATUS_OPTIONS = ["ALL", "ACTIVE", "RETRACTED"] as const;
 type StatusFilter = (typeof STATUS_OPTIONS)[number];
 
 type RetractReasonMap = Record<string, string>;
+type RejectReasonMap = Record<string, string>;
 
 const defaultCandidate = {
   subject: "user",
@@ -30,10 +35,12 @@ const renderObjectValue = (value: unknown) => {
 
 export const MemoryPage = () => {
   const [facts, setFacts] = useState<FactRecord[]>([]);
+  const [proposals, setProposals] = useState<Proposal[]>([]);
   const [status, setStatus] = useState<StatusFilter>("ALL");
   const [predicateContains, setPredicateContains] = useState("");
   const [candidate, setCandidate] = useState(defaultCandidate);
   const [retractReasons, setRetractReasons] = useState<RetractReasonMap>({});
+  const [rejectReasons, setRejectReasons] = useState<RejectReasonMap>({});
   const [selectedFactId, setSelectedFactId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -69,6 +76,24 @@ export const MemoryPage = () => {
     }
   }, [fetchParams]);
 
+  const loadProposals = useCallback(async () => {
+    try {
+      const response = await fetchProposals("PENDING");
+      setProposals(response.items);
+      setRejectReasons((current) => {
+        const next: RejectReasonMap = {};
+        response.items.forEach((item) => {
+          if (current[item.id]) {
+            next[item.id] = current[item.id];
+          }
+        });
+        return next;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load proposals");
+    }
+  }, []);
+
   const sortedFacts = useMemo(() => {
     return [...facts].sort((a, b) => {
       const subjectCompare = a.subject.localeCompare(b.subject);
@@ -81,7 +106,8 @@ export const MemoryPage = () => {
 
   useEffect(() => {
     void loadFacts();
-  }, [loadFacts]);
+    void loadProposals();
+  }, [loadFacts, loadProposals]);
 
   const handleAddFact = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -100,6 +126,7 @@ export const MemoryPage = () => {
       });
       setCandidate(defaultCandidate);
       await loadFacts();
+      await loadProposals();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add fact");
     }
@@ -118,6 +145,28 @@ export const MemoryPage = () => {
       await loadFacts();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to retract fact");
+    }
+  };
+
+  const handleAcceptProposal = async (id: string) => {
+    setError(null);
+    try {
+      await acceptProposal(id);
+      await loadFacts();
+      await loadProposals();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to accept proposal");
+    }
+  };
+
+  const handleRejectProposal = async (id: string) => {
+    setError(null);
+    try {
+      await rejectProposal(id, rejectReasons[id]?.trim() || undefined);
+      setRejectReasons((current) => ({ ...current, [id]: "" }));
+      await loadProposals();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reject proposal");
     }
   };
 
@@ -262,6 +311,65 @@ export const MemoryPage = () => {
                   >
                     Retract
                   </button>
+                </td>
+              </tr>
+            ))
+          )}
+        </tbody>
+      </table>
+
+      <h3>Pending Proposals</h3>
+      <p>Review incoming memory proposals before accepting them into active facts.</p>
+      <table>
+        <thead>
+          <tr>
+            <th>Predicate</th>
+            <th>Object</th>
+            <th>Confidence</th>
+            <th>Source</th>
+            <th>Reason</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {proposals.length === 0 ? (
+            <tr>
+              <td colSpan={6}>No pending proposals.</td>
+            </tr>
+          ) : (
+            proposals.map((proposal) => (
+              <tr key={proposal.id}>
+                <td>{proposal.candidate.predicate}</td>
+                <td>
+                  {typeof proposal.candidate.object === "string" ? (
+                    renderObjectValue(proposal.candidate.object)
+                  ) : (
+                    <pre>{renderObjectValue(proposal.candidate.object)}</pre>
+                  )}
+                </td>
+                <td>{proposal.candidate.confidence.toFixed(2)}</td>
+                <td>{proposal.source_note}</td>
+                <td>{proposal.reason ?? "—"}</td>
+                <td>
+                  <input
+                    type="text"
+                    placeholder="Reject reason (optional)"
+                    value={rejectReasons[proposal.id] ?? ""}
+                    onChange={(event) =>
+                      setRejectReasons((current) => ({
+                        ...current,
+                        [proposal.id]: event.target.value,
+                      }))
+                    }
+                  />
+                  <div>
+                    <button type="button" onClick={() => void handleAcceptProposal(proposal.id)}>
+                      Accept
+                    </button>
+                    <button type="button" onClick={() => void handleRejectProposal(proposal.id)}>
+                      Reject
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))
