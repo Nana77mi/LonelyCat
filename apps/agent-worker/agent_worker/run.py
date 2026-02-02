@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import os
 import sys
-from typing import Protocol, Sequence
+from typing import Sequence
 
 from agent_worker.fact_agent import FactProposal
+from agent_worker.llm import BaseLLM, build_llm_from_env
 from agent_worker.memory_client import MemoryClient
 from agent_worker.router import (
     NoActionDecision,
@@ -24,21 +24,12 @@ Or JSON with one of:
 """
 
 
-class LLM(Protocol):
-    def decide(self, text: str) -> str:
-        raise NotImplementedError
-
-
-class StubLLM:
-    def decide(self, text: str) -> str:
-        return "NO_ACTION"
-
-
-def build_llm() -> LLM:
-    mode = os.getenv("LONELYCAT_LLM_MODE", "stub").lower()
-    if mode == "stub":
-        return StubLLM()
-    raise ValueError(f"Unsupported LLM mode: {mode}")
+def _coerce_llm(llm: object | None) -> BaseLLM:
+    if llm is None:
+        return build_llm_from_env()
+    if hasattr(llm, "generate"):
+        return llm  # type: ignore[return-value]
+    raise ValueError("LLM must implement generate(prompt)")
 
 
 def _format_proposed(record_id: str, decision: ProposeDecision) -> str:
@@ -149,8 +140,11 @@ def main(argv: Sequence[str] | None = None, *, llm=None, memory_client=None) -> 
         raise SystemExit("Usage: python -m agent_worker.run \"text\"")
     text = args[0]
 
-    llm = llm or build_llm()
-    decision = parse_llm_output(llm.decide(text))
+    llm = _coerce_llm(llm)
+    raw_output = llm.generate(text)
+    if not isinstance(raw_output, str):
+        raw_output = str(raw_output)
+    decision = parse_llm_output(raw_output)
     status = execute_decision(decision, memory_client)
     print(status)
 
