@@ -38,6 +38,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in offline tests
         def __init__(self, app, **kwargs) -> None:
             self.app = app
 
+from app.api.conversations import router as conversations_router
 from app.api.memory import router as memory_router
 from app.settings import Settings
 
@@ -51,6 +52,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(memory_router, prefix="/memory", tags=["memory"])
+app.include_router(conversations_router, prefix="/conversations", tags=["conversations"])
 
 
 @app.get("/health")

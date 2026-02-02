@@ -56,6 +56,13 @@ class AuditEventType(str, Enum):
     FACT_REACTIVATED = "fact.reactivated"
 
 
+class MessageRole(str, Enum):
+    """消息角色枚举"""
+    USER = "user"
+    ASSISTANT = "assistant"
+    SYSTEM = "system"
+
+
 class SourceRef(BaseModel):
     """Source 引用信息"""
     kind: SourceKind
