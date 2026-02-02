@@ -40,7 +40,11 @@ export type FetchFactsParams = {
   predicate_contains?: string;
 };
 
-const baseUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
+// Priority: VITE_CORE_API_URL > VITE_API_BASE_URL > default "/api"
+const baseUrl =
+  import.meta.env.VITE_CORE_API_URL ||
+  import.meta.env.VITE_API_BASE_URL ||
+  "/api";
 
 const joinBaseUrl = (base: string, path: string) => {
   if (!base) {
@@ -53,7 +57,9 @@ const joinBaseUrl = (base: string, path: string) => {
 
 const buildUrl = (path: string, params?: Record<string, string | undefined>) => {
   const joined = joinBaseUrl(baseUrl, path);
-  const url = new URL(joined, window.location.origin);
+  // If baseUrl is absolute (http:// or https://), use it directly
+  // Otherwise, treat as relative path (will use window.location.origin)
+  const url = new URL(joined, baseUrl.startsWith("http") ? undefined : window.location.origin);
   if (params) {
     Object.entries(params).forEach(([key, value]) => {
       if (value) {
