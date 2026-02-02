@@ -7,10 +7,10 @@ const appPath = path.join(process.cwd(), "src", "App.tsx");
 const apiPath = path.join(process.cwd(), "src", "api", "memory.ts");
 const drawerPath = path.join(process.cwd(), "src", "components", "FactDetailsDrawer.tsx");
 
-test("memory route and page are wired in", async () => {
+test("settings panel with memory management is wired in", async () => {
   const content = await readFile(appPath, "utf-8");
-  assert.match(content, /\/memory/);
-  assert.match(content, /MemoryPage/);
+  assert.match(content, /SettingsPanel/);
+  assert.match(content, /isOpen/);
 });
 
 test("memory api helpers are defined", async () => {
