@@ -34,9 +34,18 @@ class MemoryClient:
             response = client.get(url, params=params)
             response.raise_for_status()
             data = response.json()
-        if not isinstance(data, list):
-            raise ValueError("Expected list response from memory facts API")
-        return data
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict):
+            # Accept FastAPI pagination responses: {"items": [...]} (preferred) or {"data": [...]}.
+            if isinstance(data.get("items"), list):
+                return data["items"]
+            if isinstance(data.get("data"), list):
+                return data["data"]
+            shape = f"keys={list(data.keys())}"
+        else:
+            shape = f"type={type(data).__name__}"
+        raise ValueError(f"Unexpected response from memory facts API ({shape}): {data!r}")
 
     def retract(self, record_id: str, reason: str) -> None:
         url = f"{self._base_url}/memory/facts/{record_id}/retract"
