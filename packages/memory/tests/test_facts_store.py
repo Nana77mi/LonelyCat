@@ -46,7 +46,11 @@ def temp_db():
     
     # 清理
     db.close()
-    os.unlink(db_path)
+    try:
+        os.unlink(db_path)
+    except (PermissionError, OSError):
+        # Windows 上可能文件被占用，忽略错误
+        pass
 
 
 def test_create_proposal(temp_db):
@@ -201,8 +205,10 @@ def test_keep_both_strategy(temp_db):
             strategy=ConflictStrategy.KEEP_BOTH,
             scope=Scope.GLOBAL,
         )
+        _commit_db(db)  # 提交第二个 fact
         
         # 验证创建了两个不同的 fact
+        assert fact2 is not None, "fact2 should not be None"
         assert fact2.id != fact1.id
         assert fact2.version == 1  # 新 fact，version 从 1 开始
         

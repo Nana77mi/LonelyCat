@@ -470,6 +470,8 @@ class MemoryStore:
             
             if not self._use_external_db:
                 db.commit()
+            else:
+                db.flush()
             
             # 记录审计事件
             await self._audit_logger.log_event(
@@ -518,6 +520,8 @@ class MemoryStore:
         )
         
         db.add(fact_model)
+        db.flush()  # 刷新以确保 fact_model 有 ID
+        db.refresh(fact_model)  # 刷新以确保数据完整
         
         # 记录审计事件
         await self._audit_logger.log_event(
@@ -680,6 +684,9 @@ class MemoryStore:
             
             if not self._use_external_db:
                 db.commit()
+            else:
+                db.flush()
+                db.refresh(model)
             
             # 记录审计事件
             await self._audit_logger.log_event(
@@ -719,6 +726,9 @@ class MemoryStore:
             
             if not self._use_external_db:
                 db.commit()
+            else:
+                db.flush()
+                db.refresh(model)
             
             # 记录审计事件
             await self._audit_logger.log_event(
@@ -758,6 +768,9 @@ class MemoryStore:
             
             if not self._use_external_db:
                 db.commit()
+            else:
+                db.flush()
+                db.refresh(model)
             
             # 记录审计事件
             await self._audit_logger.log_event(
