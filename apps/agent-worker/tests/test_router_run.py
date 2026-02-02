@@ -178,6 +178,94 @@ def test_router_parses_code_fences():
     assert decision.confidence == payload["confidence"]
 
 
+def test_router_parses_plain_json():
+    payload = {
+        "action": "PROPOSE",
+        "subject": "user",
+        "predicate": "likes",
+        "object": "cats",
+        "confidence": 0.9,
+    }
+
+    decision = parse_llm_output(json.dumps(payload))
+
+    assert isinstance(decision, ProposeDecision)
+    assert decision.predicate == "likes"
+
+
+def test_router_parses_fenced_json():
+    payload = {
+        "action": "PROPOSE",
+        "subject": "user",
+        "predicate": "likes",
+        "object": "tea",
+        "confidence": 0.7,
+    }
+    response = (
+        "```json\n"
+        "{\n"
+        '  "action": "PROPOSE",\n'
+        '  "subject": "user",\n'
+        '  "predicate": "likes",\n'
+        '  "object": "tea",\n'
+        '  "confidence": 0.7\n'
+        "}\n"
+        "```"
+    )
+
+    decision = parse_llm_output(response)
+
+    assert isinstance(decision, ProposeDecision)
+    assert decision.confidence == payload["confidence"]
+
+
+def test_router_parses_natural_language_with_fenced_json():
+    response = (
+        "Sure! Here's the decision:\n"
+        "```json\n"
+        '{ "action": "PROPOSE", "subject": "user", "predicate": "likes",'
+        ' "object": "cats", "confidence": 0.8 }\n'
+        "```\n"
+        "Thanks!"
+    )
+
+    decision = parse_llm_output(response)
+
+    assert isinstance(decision, ProposeDecision)
+    assert decision.object == "cats"
+
+
+def test_router_parses_natural_language_with_inline_json():
+    response = (
+        "I will store this as memory: "
+        '{"action":"PROPOSE","subject":"user","predicate":"likes","object":"cats","confidence":0.8}'
+        " done."
+    )
+
+    decision = parse_llm_output(response)
+
+    assert isinstance(decision, ProposeDecision)
+    assert decision.subject == "user"
+
+
+def test_router_invalid_json_returns_no_action():
+    decision = parse_llm_output("{bad json")
+    assert decision.action == "NO_ACTION"
+
+
+def test_router_prefers_first_action_object():
+    response = (
+        '{"action":"PROPOSE","subject":"user","predicate":"likes","object":"cats","confidence":0.6}'
+        " and later "
+        '{"action":"PROPOSE","subject":"user","predicate":"likes","object":"dogs","confidence":0.9}'
+    )
+
+    decision = parse_llm_output(response)
+
+    assert isinstance(decision, ProposeDecision)
+    assert decision.object == "cats"
+
+
 def test_execute_decision_propose_failure_traces() -> None:
     class FailingMemory:
         def propose(self, proposal, source_note: str = "mvp-1"):
@@ -223,6 +311,7 @@ def test_router_parses_retract_and_update():
         "predicate": "likes",
         "old_object": "cats",
         "new_object": "dogs",
+        "confidence": 0.7,
         "reason": "changed",
     }
 
