@@ -45,6 +45,28 @@ class QwenChatLLM(BaseLLM):
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError("qwen response missing expected content") from exc
 
+    def generate_messages(self, messages: list[dict[str, str]]) -> str:
+        """Generate response from a list of messages."""
+        url = f"{self._base_url}/chat/completions"
+        # Convert messages to Qwen format
+        formatted_messages = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            formatted_messages.append({"role": role, "content": content})
+        
+        payload = {
+            "model": self._model,
+            "messages": formatted_messages,
+            "temperature": 0,
+        }
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        data = self._post_with_retry(url, payload, headers=headers)
+        try:
+            return data["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError("qwen response missing expected content") from exc
+
     def _post_with_retry(
         self,
         url: str,

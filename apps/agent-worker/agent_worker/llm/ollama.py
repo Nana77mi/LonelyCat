@@ -42,6 +42,27 @@ class OllamaLLM(BaseLLM):
         except (KeyError, IndexError, TypeError) as exc:
             raise RuntimeError("ollama response missing expected content") from exc
 
+    def generate_messages(self, messages: list[dict[str, str]]) -> str:
+        """Generate response from a list of messages."""
+        url = f"{self._base_url}/api/chat"
+        # Convert messages to Ollama format
+        formatted_messages = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            formatted_messages.append({"role": role, "content": content})
+        
+        payload = {
+            "model": self._model,
+            "messages": formatted_messages,
+            "stream": False,
+        }
+        data = self._post_with_retry(url, payload)
+        try:
+            return data["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError("ollama response missing expected content") from exc
+
     def _post_with_retry(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         attempt = 0
         while True:
