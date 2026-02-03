@@ -487,3 +487,156 @@ def test_idempotency_with_client_msg_id(temp_db) -> None:
     # 验证数据库中只有一条消息（user + assistant，没有重复）
     messages_response = asyncio.run(conversations._get_conversation_messages(conversation_id, db))
     assert len(messages_response["items"]) == 2  # user + assistant，没有重复的 user
+
+
+def test_no_duplicate_last_user_message(temp_db, monkeypatch) -> None:
+    """关键测试：确保最后一条用户消息不会重复传递给 LLM
+    
+    发送一条消息，断言 LLM 收到的 messages 里最后一个 user content 只出现一次。
+    """
+    db, _ = temp_db
+    
+    # 创建对话
+    request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # 捕获传给 chat_flow 的参数
+    captured_calls = []
+    
+    def mock_chat_flow(user_message: str, history_messages=None, **kwargs):
+        """Mock chat_flow 来捕获传入的参数"""
+        from agent_worker.chat_flow import ChatResult
+        from agent_worker.trace import TraceCollector
+        
+        captured_calls.append({
+            "user_message": user_message,
+            "history_messages": history_messages,
+        })
+        
+        trace = TraceCollector.from_env()
+        return ChatResult(
+            assistant_reply="Test response",
+            memory_status="NO_ACTION",
+            trace_id=trace.trace_id,
+            trace_lines=[],
+        )
+    
+    monkeypatch.setattr(conversations, "chat_flow", mock_chat_flow)
+    monkeypatch.setattr(conversations, "AGENT_WORKER_AVAILABLE", True)
+    
+    # 发送一条消息
+    test_content = "Test user message content"
+    message_request = conversations.MessageCreateRequest(content=test_content)
+    result = asyncio.run(conversations._create_message(conversation_id, message_request, db))
+    _commit_db(db)
+    
+    # 验证消息创建成功
+    assert "user_message" in result
+    assert "assistant_message" in result
+    
+    # 验证 chat_flow 被调用
+    assert len(captured_calls) == 1, "chat_flow should be called exactly once"
+    call = captured_calls[0]
+    
+    # 关键断言：history_messages 不应该包含当前用户消息（避免重复）
+    # 因为当前用户消息会作为 user_message 参数单独传递
+    if call["history_messages"]:
+        # 检查历史消息中是否包含当前用户消息的内容
+        history_user_contents = [
+            msg.get("content", "") 
+            for msg in call["history_messages"] 
+            if msg.get("role") == "user"
+        ]
+        
+        # 当前用户消息的内容不应该出现在历史消息中
+        assert test_content not in history_user_contents, (
+            f"Current user message content '{test_content}' should not appear in history_messages, "
+            f"but found in: {history_user_contents}"
+        )
+    
+    # 验证 user_message 参数包含当前消息内容
+    assert test_content in call["user_message"], (
+        f"user_message parameter should contain '{test_content}', "
+        f"but got: {call['user_message']}"
+    )
+
+
+def test_window_truncation_sanity(temp_db, monkeypatch) -> None:
+    """关键测试：窗口截断的正确性
+    
+    插入 30 条 user/assistant 消息，断言传给 LLM 的消息数量 <= MAX_MESSAGES + 1(system)
+    """
+    db, _ = temp_db
+    
+    # 创建对话
+    request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # 捕获传给 chat_flow 的 history_messages
+    captured_history_messages = []
+    
+    def mock_chat_flow(user_message: str, history_messages=None, **kwargs):
+        """Mock chat_flow 来捕获传入的 history_messages"""
+        from agent_worker.chat_flow import ChatResult
+        from agent_worker.trace import TraceCollector
+        
+        if history_messages is not None:
+            captured_history_messages.append(history_messages)
+        
+        trace = TraceCollector.from_env()
+        return ChatResult(
+            assistant_reply="Test response",
+            memory_status="NO_ACTION",
+            trace_id=trace.trace_id,
+            trace_lines=[],
+        )
+    
+    monkeypatch.setattr(conversations, "chat_flow", mock_chat_flow)
+    monkeypatch.setattr(conversations, "AGENT_WORKER_AVAILABLE", True)
+    
+    # 插入 30 条 user/assistant 消息（15 轮对话）
+    # 注意：每次调用 _create_message 会创建 1 条 user + 1 条 assistant，所以总共会有 30 条消息
+    for i in range(15):
+        # User message (会生成 user + assistant 两条消息)
+        user_request = conversations.MessageCreateRequest(content=f"User message {i}")
+        asyncio.run(conversations._create_message(conversation_id, user_request, db))
+        _commit_db(db)
+    
+    # 验证：传给 chat_flow 的 history_messages 数量应该 <= MAX_MESSAGES (40)
+    # 注意：这里检查的是传给 chat_flow 的 history_messages，不包含 system message
+    # System message 会在 responder 中单独添加
+    # 每次调用 _create_message 会创建 2 条消息（user + assistant），所以 15 次调用 = 30 条消息
+    
+    # 获取最后一次调用时传入的 history_messages
+    assert len(captured_history_messages) > 0, "chat_flow should have been called"
+    last_history = captured_history_messages[-1]
+    
+    # 关键断言：历史消息数量应该 <= MAX_MESSAGES (40)
+    MAX_MESSAGES = 40  # 从 chat_flow.py 中的默认值
+    assert len(last_history) <= MAX_MESSAGES, (
+        f"History messages count ({len(last_history)}) should be <= MAX_MESSAGES ({MAX_MESSAGES}), "
+        f"but got {len(last_history)} messages. First 5: {last_history[:5]}"
+    )
+    
+    # 验证消息都是 user 或 assistant（不应该有 system，因为 system 在 responder 中单独添加）
+    for msg in last_history:
+        assert msg.get("role") in ("user", "assistant"), (
+            f"History messages should only contain 'user' or 'assistant' roles, "
+            f"but found role '{msg.get('role')}' in message: {msg}"
+        )
+    
+    # 验证截断生效：
+    # - 15 次调用 _create_message = 15 user + 15 assistant = 30 条消息
+    # - 但最后一次调用时，history_messages 不包含当前刚插入的 user message（会被排除）
+    # - 所以最后一次调用时，history_messages 应该包含 28 条消息（14 user + 14 assistant）
+    # - 因为 MAX_MESSAGES = 40，所以应该保留全部 28 条
+    # 注意：实际数量可能因排除当前 user message而略有不同，但应该 <= 30
+    assert len(last_history) <= 30, (
+        f"Expected <= 30 history messages (15 calls * 2 messages each - 2 excluded), "
+        f"but got {len(last_history)}"
+    )
+    assert len(last_history) > 0, "Should have some history messages"

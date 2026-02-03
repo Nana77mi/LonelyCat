@@ -309,16 +309,27 @@ async def _create_message(
     history_messages: list[dict[str, str]] = []
     if AGENT_WORKER_AVAILABLE and chat_flow is not None:
         try:
-            # 查询该对话的所有历史消息（按创建时间升序）
+            # Query with limit to reduce DB load (MAX_MESSAGES + buffer for filtering)
+            # Default MAX_MESSAGES is 40 (from chat_flow), so query 60 messages to account for filtering
+            # Order by created_at DESC, then reverse to get ascending order
+            # This is more efficient than .all() for conversations with many messages
+            MAX_MESSAGES_LIMIT = 60  # MAX_MESSAGES (40) + buffer (20)
             history_messages_query = (
                 db.query(MessageModel)
                 .filter(MessageModel.conversation_id == conversation_id)
-                .order_by(MessageModel.created_at.asc())
+                .order_by(MessageModel.created_at.desc())
+                .limit(MAX_MESSAGES_LIMIT)
                 .all()
             )
+            # Reverse to get ascending order (oldest first)
+            history_messages_query.reverse()
             
             # 转换为 LLM 消息格式（只包含 USER 和 ASSISTANT 角色，跳过 SYSTEM）
+            # 排除刚插入的最后一条 user message（避免重复，它会在 responder 中作为 current_user_message 添加）
             for msg in history_messages_query:
+                # Skip the last user message that was just inserted (to avoid duplication)
+                if msg.id == user_message_id:
+                    continue
                 if msg.role == MessageRole.USER:
                     history_messages.append({"role": "user", "content": msg.content})
                 elif msg.role == MessageRole.ASSISTANT:

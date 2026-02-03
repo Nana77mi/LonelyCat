@@ -43,13 +43,21 @@ class OllamaLLM(BaseLLM):
             raise RuntimeError("ollama response missing expected content") from exc
 
     def generate_messages(self, messages: list[dict[str, str]]) -> str:
-        """Generate response from a list of messages."""
+        """Generate response from a list of messages.
+        
+        Ollama API natively supports messages format with roles: system, user, assistant.
+        Messages are passed directly to the API without conversion.
+        """
         url = f"{self._base_url}/api/chat"
-        # Convert messages to Ollama format
+        # Ollama API natively supports messages format - pass directly
+        # Validate and format messages (role must be system/user/assistant)
         formatted_messages = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
+            # Ollama API accepts system, user, assistant roles
+            if role not in ("system", "user", "assistant"):
+                raise ValueError(f"Ollama API only accepts 'system', 'user', or 'assistant' roles, got '{role}'")
             formatted_messages.append({"role": role, "content": content})
         
         payload = {

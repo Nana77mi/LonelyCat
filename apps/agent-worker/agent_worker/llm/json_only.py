@@ -32,17 +32,41 @@ class JsonOnlyLLMWrapper(BaseLLM):
         return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
 
     def generate_messages(self, messages: list[dict[str, str]]) -> str:
-        """Generate response from a list of messages, wrapping with JSON-only instructions."""
-        # Wrap the last user message with JSON-only instructions
+        """Generate response from a list of messages, wrapping with JSON-only instructions.
+        
+        JSON-only constraint is added to:
+        - System message (if present), or
+        - First user message (if no system message)
+        
+        This ensures the constraint persists across multiple turns.
+        """
+        if not messages:
+            return "NO_ACTION"
+        
         wrapped_messages = []
-        for i, msg in enumerate(messages):
+        json_constraint_added = False
+        
+        for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            # Add JSON-only prefix/suffix to the last user message
-            if role == "user" and i == len(messages) - 1:
-                wrapped_content = f"{JSON_ONLY_PREFIX}\n{content}\n{JSON_ONLY_SUFFIX}"
-                wrapped_messages.append({"role": role, "content": wrapped_content})
+            
+            # Add JSON-only constraint to system message (preferred) or first user message
+            if not json_constraint_added:
+                if role == "system":
+                    # Add constraint to system message
+                    wrapped_content = f"{content}\n\n{JSON_ONLY_PREFIX}\n{JSON_ONLY_SUFFIX}"
+                    wrapped_messages.append({"role": role, "content": wrapped_content})
+                    json_constraint_added = True
+                elif role == "user":
+                    # Add constraint to first user message if no system message
+                    wrapped_content = f"{JSON_ONLY_PREFIX}\n{content}\n{JSON_ONLY_SUFFIX}"
+                    wrapped_messages.append({"role": role, "content": wrapped_content})
+                    json_constraint_added = True
+                else:
+                    # Keep assistant messages as-is until we find system/user
+                    wrapped_messages.append({"role": role, "content": content})
             else:
+                # After constraint is added, keep all messages as-is
                 wrapped_messages.append({"role": role, "content": content})
         
         raw = self._llm.generate_messages(wrapped_messages)
