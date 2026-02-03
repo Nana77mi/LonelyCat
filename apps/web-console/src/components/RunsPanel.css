@@ -3,9 +3,7 @@
   flex-direction: column;
   height: 100%;
   background-color: #ffffff;
-  border-left: 1px solid #e5e5e5;
-  min-width: 280px;
-  max-width: 320px;
+  /* border-left 和宽度由 Layout.css 的 .tasks-panel 控制 */
 }
 
 .runs-panel-header {

@@ -6,7 +6,7 @@ import { ChatPage } from "./components/ChatPage";
 import { RunsPanel } from "./components/RunsPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { MemoryPage } from "./pages/MemoryPage";
-import { listConversations, createConversation, listMessages, sendMessage, deleteConversation, updateConversation } from "./api/conversations";
+import { listConversations, createConversation, listMessages, sendMessage, deleteConversation, updateConversation, markConversationRead } from "./api/conversations";
 import { listConversationRuns, createRun, deleteRun, cancelRun, retryRun } from "./api/runs";
 import type { Conversation, Message } from "./api/conversations";
 import type { Run } from "./api/runs";
@@ -195,9 +195,21 @@ const App = () => {
     }
   }, [navigate]);
 
-  const handleSelectConversation = useCallback((id: string) => {
+  const handleSelectConversation = useCallback(async (id: string) => {
     // URL 驱动：导航到对应路由，消息加载由 useEffect 处理
     navigate(`/chat/${id}`);
+    
+    // 标记对话为已读
+    try {
+      const updatedConversation = await markConversationRead(id);
+      // 更新 conversations 列表以反映 has_unread 变化
+      setConversations((prev) =>
+        prev.map((conv) => (conv.id === id ? updatedConversation : conv))
+      );
+    } catch (error) {
+      // 静默失败，不影响导航
+      console.error("Failed to mark conversation as read:", error);
+    }
   }, [navigate]);
 
   const handleDeleteConversation = useCallback(async (id: string) => {
@@ -535,23 +547,11 @@ const App = () => {
               <Route
                 path="/chat/:conversationId"
                 element={
-                  <div className="chat-page-with-runs">
-                    <ChatPage 
-                      messages={messages} 
-                      onSendMessage={handleSendMessage} 
-                      loading={loading || messagesLoading}
-                    />
-                    <RunsPanel
-                      runs={runs}
-                      loading={runsLoading}
-                      error={runsError}
-                      onRetry={handleRetryRuns}
-                      onCreateRun={handleCreateRun}
-                      onDeleteRun={handleDeleteRun}
-                      onRetryRun={handleRetryRun}
-                      onCancelRun={handleCancelRun}
-                    />
-                  </div>
+                  <ChatPage 
+                    messages={messages} 
+                    onSendMessage={handleSendMessage} 
+                    loading={loading || messagesLoading}
+                  />
                 }
               />
               <Route
@@ -564,6 +564,20 @@ const App = () => {
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </div>
+        }
+        tasksPanel={
+          conversationId ? (
+            <RunsPanel
+              runs={runs}
+              loading={runsLoading}
+              error={runsError}
+              onRetry={handleRetryRuns}
+              onCreateRun={handleCreateRun}
+              onDeleteRun={handleDeleteRun}
+              onRetryRun={handleRetryRun}
+              onCancelRun={handleCancelRun}
+            />
+          ) : undefined
         }
         onSettingsClick={() => setSettingsOpen(true)}
       />

@@ -4,15 +4,16 @@ import "./Layout.css";
 type LayoutProps = {
   sidebar: ReactNode;
   mainContent: ReactNode;
+  tasksPanel?: ReactNode; // 右侧固定 Tasks Panel（可选）
   onSettingsClick: () => void;
 };
 
-export const Layout = ({ sidebar, mainContent, onSettingsClick }: LayoutProps) => {
+export const Layout = ({ sidebar, mainContent, tasksPanel, onSettingsClick }: LayoutProps) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   return (
     <div className="layout">
-      {/* 侧边栏 */}
+      {/* 侧边栏 - 固定左侧 */}
       <aside className={`sidebar ${sidebarOpen ? "open" : "closed"}`}>
         <div className="sidebar-header">
           <button
@@ -34,10 +35,28 @@ export const Layout = ({ sidebar, mainContent, onSettingsClick }: LayoutProps) =
         {sidebar}
       </aside>
 
-      {/* 主内容区 */}
+      {/* 主内容区 - 中间弹性区域 */}
       <main className="main-content">
         {/* 顶部栏 */}
         <header className="top-bar">
+          {/* 当 sidebar 关闭时显示此按钮 */}
+          {!sidebarOpen && (
+            <button
+              className="sidebar-show-btn"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="显示侧边栏"
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <path
+                  d="M3 5h14M3 10h14M3 15h14"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+          )}
+          {/* 移动端菜单按钮（仅在移动端显示，通过 CSS media query 控制） */}
           <button
             className="mobile-menu-btn"
             onClick={() => setSidebarOpen(!sidebarOpen)}
@@ -78,6 +97,9 @@ export const Layout = ({ sidebar, mainContent, onSettingsClick }: LayoutProps) =
         </header>
         {mainContent}
       </main>
+
+      {/* Tasks Panel - 固定右侧 */}
+      {tasksPanel && <aside className="tasks-panel">{tasksPanel}</aside>}
     </div>
   );
 };

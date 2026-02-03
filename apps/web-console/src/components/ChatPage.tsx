@@ -73,11 +73,13 @@ export const ChatPage = ({ messages, onSendMessage, loading }: ChatPageProps) =>
               ? String(message.meta_json.error)
               : null;
             const isRetryable = isFailed && message.meta_json && typeof message.meta_json === "object" && "retryable" in message.meta_json && message.meta_json.retryable === true;
+            // 检查是否是主动消息（run 完成）
+            const isProactiveMessage = message.source_ref && message.source_ref.kind === "run";
 
             return (
               <div
                 key={message.id}
-                className={`message ${message.role} ${isFailed ? "message-failed" : ""}`}
+                className={`message ${message.role} ${isFailed ? "message-failed" : ""} ${isProactiveMessage ? "message-proactive" : ""}`}
               >
                 <div className="message-avatar">
                   {message.role === "user" ? (
@@ -102,6 +104,11 @@ export const ChatPage = ({ messages, onSendMessage, loading }: ChatPageProps) =>
                   )}
                 </div>
                 <div className="message-content">
+                  {isProactiveMessage && (
+                    <div className="message-proactive-badge">
+                      <span className="message-proactive-label">任务完成</span>
+                    </div>
+                  )}
                   <div className="message-text">{message.content}</div>
                   {isFailed && errorMessage && (
                     <div className="message-error">
