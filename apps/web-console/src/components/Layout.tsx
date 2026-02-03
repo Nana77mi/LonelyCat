@@ -39,6 +39,24 @@ export const Layout = ({ sidebar, mainContent, tasksPanel, onSettingsClick }: La
       <main className="main-content">
         {/* 顶部栏 */}
         <header className="top-bar">
+          {/* 当 sidebar 关闭时显示此按钮 */}
+          {!sidebarOpen && (
+            <button
+              className="sidebar-show-btn"
+              onClick={() => setSidebarOpen(true)}
+              aria-label="显示侧边栏"
+            >
+              <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+                <path
+                  d="M3 5h14M3 10h14M3 15h14"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+          )}
+          {/* 移动端菜单按钮（仅在移动端显示，通过 CSS media query 控制） */}
           <button
             className="mobile-menu-btn"
             onClick={() => setSidebarOpen(!sidebarOpen)}

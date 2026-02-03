@@ -87,6 +87,31 @@
   gap: 12px;
 }
 
+/* Sidebar 显示按钮（当 sidebar 关闭时显示，桌面端） */
+.sidebar-show-btn {
+  background: none;
+  border: none;
+  color: #171717;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s;
+}
+
+.sidebar-show-btn:hover {
+  background-color: #f5f5f5;
+}
+
+/* 移动端隐藏 sidebar-show-btn，使用 mobile-menu-btn */
+@media (max-width: 899px) {
+  .sidebar-show-btn {
+    display: none;
+  }
+}
+
 .mobile-menu-btn {
   display: none;
   background: none;
