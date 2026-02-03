@@ -98,8 +98,12 @@ def execute_with_heartbeat(
             
             return True
         
+        # 构建 LLM 实例
+        from agent_worker.llm.factory import build_llm_from_env
+        llm = build_llm_from_env()
+        
         # 执行任务
-        result = runner.execute(run, heartbeat_callback)
+        result = runner.execute(run, db, llm, heartbeat_callback)
         return result
     finally:
         db.close()

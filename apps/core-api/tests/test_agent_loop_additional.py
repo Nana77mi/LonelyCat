@@ -331,6 +331,182 @@ def test_agent_decision_prompt_includes_active_facts(temp_db, monkeypatch) -> No
     assert "favorite_color" in prompt_text or "blue" in prompt_text
 
 
+def test_agent_loop_summarize_conversation_run(temp_db, monkeypatch) -> None:
+    """Test Agent Loop: summarize_conversation run execution and message emission.
+    
+    This test verifies the complete flow:
+    - Decision returns run.type=summarize_conversation
+    - Run is created successfully
+    - Worker handler executes and generates summary
+    - Summary message is emitted to conversation
+    - output_json.summary is non-empty
+    
+    Note: We directly call runner.execute() instead of starting worker main loop,
+    testing "capability" not "deployment mode".
+    """
+    db, _ = temp_db
+    
+    # Create conversation
+    request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # Create some messages in the conversation
+    from app.db import MessageModel, MessageRole
+    from datetime import UTC, datetime
+    
+    messages_data = [
+        ("user", "我想了解 Agent Loop 的设计"),
+        ("assistant", "Agent Loop 是让 Bot 从被动聊天升级为能自主挂任务并推进工作的本地 AI 助手。"),
+        ("user", "具体怎么实现？"),
+        ("assistant", "核心是在用户发消息时插入 Decision 层，决定是仅回复、创建任务，还是两者都做。"),
+        ("user", "帮我总结一下我们的对话"),
+    ]
+    
+    for role_str, content in messages_data:
+        role = MessageRole.USER if role_str == "user" else MessageRole.ASSISTANT
+        message = MessageModel(
+            id=str(uuid.uuid4()),
+            conversation_id=conversation_id,
+            role=role,
+            content=content,
+            created_at=datetime.now(UTC),
+        )
+        db.add(message)
+    _commit_db(db)
+    
+    # Mock Agent Decision to return summarize_conversation
+    def mock_decide(*args, **kwargs):
+        from app.services.agent_decision import Decision, RunDecision
+        return Decision(
+            decision="run",
+            reply=None,
+            run=RunDecision(
+                type="summarize_conversation",
+                title="Summarize this conversation",
+                conversation_id=conversation_id,
+                input={
+                    "conversation_id": conversation_id,
+                    "max_messages": 20,
+                },
+            ),
+            confidence=0.85,
+            reason="User explicitly asked for a conversation summary",
+        )
+    
+    # Enable Agent Loop and mock AgentDecision
+    monkeypatch.setattr(conversations, "AGENT_LOOP_ENABLED", True)
+    monkeypatch.setattr(conversations, "AGENT_DECISION_AVAILABLE", True)
+    
+    # Mock AgentDecision.decide directly
+    with patch("app.api.conversations.AgentDecision") as mock_agent_decision_class:
+        mock_agent_decision = MagicMock()
+        mock_agent_decision.decide = MagicMock(side_effect=mock_decide)
+        mock_agent_decision.get_active_facts = MagicMock(return_value=[])
+        mock_agent_decision_class.return_value = mock_agent_decision
+        
+        # Create message (this will trigger Decision and create run)
+        message_request = conversations.MessageCreateRequest(content="帮我总结一下我们的对话")
+        result = asyncio.run(conversations._create_message(conversation_id, message_request, db))
+        _commit_db(db)
+    
+    # Verify run was created
+    from app.api.runs import _list_conversation_runs
+    runs_result = asyncio.run(_list_conversation_runs(conversation_id, db))
+    assert len(runs_result["items"]) == 1
+    run_data = runs_result["items"][0]
+    assert run_data["type"] == "summarize_conversation"
+    assert run_data["status"] == "queued"
+    run_id = run_data["id"]
+    
+    # Get the run model
+    run_obj = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert run_obj is not None
+    
+    # Mock LLM for handler execution
+    class MockLLM:
+        def generate(self, prompt: str) -> str:
+            # Verify prompt contains conversation content
+            assert "用户的主要目标" in prompt
+            assert "Agent Loop" in prompt or "总结" in prompt
+            # Return a mock summary
+            return """- 用户主要关注：Agent Loop 的设计与实现
+- 已完成：了解了 Agent Loop 的核心概念和实现方式
+- 下一步建议：可以开始实现具体的功能"""
+    
+    # Directly call runner.execute() (testing capability, not deployment)
+    # Add worker path for imports
+    worker_path = Path(__file__).parent.parent.parent / "agent-worker"
+    if str(worker_path) not in sys.path:
+        sys.path.insert(0, str(worker_path))
+    
+    from worker.runner import TaskRunner
+    from worker.queue import complete_success
+    from app.services import run_messages
+    
+    runner = TaskRunner()
+    llm = MockLLM()
+    
+    # Mock heartbeat callback (always return True for testing)
+    def heartbeat_callback() -> bool:
+        return True
+    
+    # Execute handler
+    output_json = runner.execute(run_obj, db, llm, heartbeat_callback)
+    
+    # Verify output_json structure
+    assert "summary" in output_json
+    assert "message_count" in output_json
+    assert "conversation_id" in output_json
+    assert output_json["conversation_id"] == conversation_id
+    assert output_json["message_count"] > 0
+    # Verify summary is non-empty string (required)
+    assert isinstance(output_json["summary"], str)
+    assert output_json["summary"] != ""
+    assert len(output_json["summary"]) > 0
+    # Verify messages are NOT included in output_json (security)
+    assert "messages" not in output_json
+    
+    # Mock HTTP call for emit_run_message API (complete_success calls it internally)
+    def mock_call_api(run_id_param: str) -> None:
+        # Query run and call service function directly
+        run_obj_for_emit = db.query(RunModel).filter(RunModel.id == run_id_param).first()
+        if run_obj_for_emit:
+            run_messages.emit_run_message(db, run_obj_for_emit)
+    
+    # Replace worker's HTTP call with direct service call
+    from worker import queue
+    monkeypatch.setattr(queue, "_call_emit_run_message_api", mock_call_api)
+    
+    # Complete run (this will call emit_run_message internally via mocked API)
+    complete_success(db, run_id, output_json)
+    _commit_db(db)
+    
+    # Verify message was created in conversation
+    messages_response = asyncio.run(conversations._get_conversation_messages(conversation_id, db))
+    # Should have original messages + summary message
+    assert len(messages_response["items"]) >= len(messages_data) + 1
+    
+    # Find the summary message
+    summary_message = None
+    for msg in messages_response["items"]:
+        if msg.get("source_ref") and msg["source_ref"].get("ref_id") == run_id:
+            summary_message = msg
+            break
+    
+    assert summary_message is not None, "Summary message should be created"
+    assert summary_message["role"] == "assistant"
+    assert "对话总结已完成" in summary_message["content"]
+    assert "📝" in summary_message["content"]
+    assert output_json["summary"] in summary_message["content"]
+    
+    # Verify run status
+    run_obj = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert run_obj.status == RunStatus.SUCCEEDED
+    assert run_obj.output_json == output_json
+
+
 def test_agent_decision_confidence_logging(temp_db, monkeypatch) -> None:
     """➕ Priority 5: Test that Decision confidence is logged consistently.
     

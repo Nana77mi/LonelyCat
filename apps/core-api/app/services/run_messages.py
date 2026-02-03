@@ -15,13 +15,24 @@ from sqlalchemy.orm import Session
 from app.db import ConversationModel, MessageModel, MessageRole, RunModel, RunStatus
 
 
-def _format_run_output_summary(output_json: Optional[Dict[str, Any]]) -> str:
-    """格式化 run 输出摘要"""
+def _format_run_output_summary(output_json: Optional[Dict[str, Any]], run_type: Optional[str] = None) -> str:
+    """格式化 run 输出摘要
+    
+    Args:
+        output_json: Run 输出 JSON
+        run_type: Run 类型（用于特殊格式化）
+    """
     if not output_json:
         return "任务已完成。"
     
     # 尝试提取摘要信息
     if isinstance(output_json, dict):
+        # 特殊处理：summarize_conversation 任务
+        if run_type == "summarize_conversation" and "summary" in output_json:
+            message_count = output_json.get("message_count", 0)
+            summary = str(output_json["summary"])
+            return f"📝 对话总结已完成（最近 {message_count} 条）：\n\n{summary}"
+        
         # 如果有 summary 字段，使用它
         if "summary" in output_json:
             return str(output_json["summary"])
@@ -143,7 +154,11 @@ def emit_run_message(db: Session, run: RunModel) -> None:
     
     # 生成消息内容
     if run.status == RunStatus.SUCCEEDED:
-        content = f"任务已完成：{run.title or run.type}\n\n{_format_run_output_summary(run.output_json)}"
+        # 对于 summarize_conversation，使用特殊格式（已在 _format_run_output_summary 中处理）
+        if run.type == "summarize_conversation":
+            content = _format_run_output_summary(run.output_json, run_type=run.type)
+        else:
+            content = f"任务已完成：{run.title or run.type}\n\n{_format_run_output_summary(run.output_json, run_type=run.type)}"
     elif run.status == RunStatus.FAILED:
         error_msg = run.error or "未知错误"
         content = f"任务执行失败：{run.title or run.type}\n\n错误：{error_msg}"
