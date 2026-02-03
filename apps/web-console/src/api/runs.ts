@@ -85,6 +85,10 @@ export type Run = {
   attempt: number;
   worker_id?: string | null;
   lease_expires_at?: string | null;
+  parent_run_id?: string | null;
+  canceled_at?: string | null;
+  canceled_by?: string | null;
+  cancel_reason?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -95,6 +99,7 @@ export type CreateRunRequest = {
   conversation_id?: string | null;
   input?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
+  parent_run_id?: string;
 };
 
 export type RunResponse = { run: Run };
@@ -161,6 +166,43 @@ export const listConversationRuns = async (
   }
   const data = await parseJson<RunListResponse>(response);
   return data.items;
+};
+
+/**
+ * 取消指定 Run
+ * 
+ * @param id Run ID
+ * @param cancelReason 可选的取消原因
+ * @returns 更新后的 Run 对象
+ */
+export const cancelRun = async (id: string, cancelReason?: string): Promise<Run> => {
+  const url = buildUrl(`/runs/${id}/cancel`);
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cancel_reason: cancelReason }),
+  });
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to cancel run", response));
+  }
+  const data = await parseJson<RunResponse>(response);
+  return data.run;
+};
+
+/**
+ * 重试指定 Run（创建新 Run，复制原 Run 的 input，设置 parent_run_id）
+ * 
+ * @param run 要重试的 Run 对象
+ * @returns 新创建的 Run 对象
+ */
+export const retryRun = async (run: Run): Promise<Run> => {
+  return createRun({
+    type: run.type,
+    title: run.title || undefined,
+    conversation_id: run.conversation_id || undefined,
+    input: run.input,
+    parent_run_id: run.id,
+  });
 };
 
 /**

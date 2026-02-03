@@ -21,6 +21,7 @@ if str(agent_worker_path) not in sys.path:
 
 from worker.queue import (
     claim_run,
+    complete_canceled,
     complete_failed,
     complete_success,
     fetch_and_claim_run,
@@ -71,6 +72,10 @@ def assert_run_schema(run: dict) -> None:
         "attempt",
         "worker_id",
         "lease_expires_at",
+        "parent_run_id",
+        "canceled_at",
+        "canceled_by",
+        "cancel_reason",
         "created_at",
         "updated_at",
     }
@@ -90,6 +95,10 @@ def assert_run_schema(run: dict) -> None:
     assert run["lease_expires_at"] is None or isinstance(run["lease_expires_at"], str)
     assert run["conversation_id"] is None or isinstance(run["conversation_id"], str)
     assert run["title"] is None or isinstance(run["title"], str)
+    assert run["parent_run_id"] is None or isinstance(run["parent_run_id"], str)
+    assert run["canceled_at"] is None or isinstance(run["canceled_at"], str)
+    assert run["canceled_by"] is None or isinstance(run["canceled_by"], str)
+    assert run["cancel_reason"] is None or isinstance(run["cancel_reason"], str)
 
 
 def test_create_run_returns_queued(temp_db) -> None:
@@ -768,3 +777,255 @@ def test_delete_run_with_conversation_id(temp_db) -> None:
     
     db_conv = db.query(ConversationModel).filter(ConversationModel.id == conv_id).first()
     assert db_conv is not None
+
+
+def test_cancel_queued_run(temp_db) -> None:
+    """测试取消 queued 状态的 run"""
+    db, _ = temp_db
+    
+    # 创建一个 queued run
+    request = runs.RunCreateRequest(
+        type="sleep",
+        title="Test Sleep",
+        input={"seconds": 5}
+    )
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # 验证 run 是 queued 状态
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert db_run.status == RunStatus.QUEUED
+    
+    # 取消 run
+    canceled_run = asyncio.run(runs._cancel_run(run_id, "User canceled", db))
+    _commit_db(db)
+    
+    # 验证 run 已被取消
+    assert canceled_run["status"] == "canceled"
+    assert canceled_run["canceled_at"] is not None
+    assert canceled_run["canceled_by"] == "user"
+    assert canceled_run["cancel_reason"] == "User canceled"
+    assert canceled_run["lease_expires_at"] is None
+    
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert db_run.status == RunStatus.CANCELED
+    assert db_run.canceled_at is not None
+    assert db_run.canceled_by == "user"
+    assert db_run.cancel_reason == "User canceled"
+    assert db_run.lease_expires_at is None
+
+
+def test_cancel_running_run(temp_db) -> None:
+    """测试取消 running 状态的 run"""
+    db, _ = temp_db
+    
+    # 创建一个 queued run
+    request = runs.RunCreateRequest(
+        type="sleep",
+        title="Test Sleep",
+        input={"seconds": 5}
+    )
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # 设置为 running 状态
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    db_run.status = RunStatus.RUNNING
+    db_run.worker_id = "test-worker"
+    db_run.lease_expires_at = datetime.now(UTC) + timedelta(seconds=30)
+    _commit_db(db)
+    
+    # 取消 run
+    canceled_run = asyncio.run(runs._cancel_run(run_id, None, db))
+    _commit_db(db)
+    
+    # 验证 run 已被取消
+    assert canceled_run["status"] == "canceled"
+    assert canceled_run["canceled_at"] is not None
+    assert canceled_run["canceled_by"] == "user"
+    assert canceled_run["lease_expires_at"] is None
+
+
+def test_cancel_failed_run_fails(temp_db) -> None:
+    """测试不能取消终态（failed）的 run"""
+    db, _ = temp_db
+    
+    # 创建一个 queued run
+    request = runs.RunCreateRequest(
+        type="sleep",
+        title="Test Sleep",
+        input={"seconds": 5}
+    )
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # 设置为 failed 状态
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    db_run.status = RunStatus.FAILED
+    _commit_db(db)
+    
+    # 尝试取消 run，应该失败
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(runs._cancel_run(run_id, None, db))
+    
+    assert exc_info.value.status_code == 400
+    assert "cannot cancel" in exc_info.value.detail.lower() or "only queued or running" in exc_info.value.detail.lower()
+
+
+def test_create_run_with_parent(temp_db) -> None:
+    """测试创建带 parent_run_id 的 run"""
+    db, _ = temp_db
+    
+    # 创建父 run
+    parent_request = runs.RunCreateRequest(
+        type="sleep",
+        title="Parent Task",
+        input={"seconds": 5}
+    )
+    parent_run = asyncio.run(runs._create_run(parent_request, db))
+    _commit_db(db)
+    parent_run_id = parent_run["id"]
+    
+    # 创建子 run
+    child_request = runs.RunCreateRequest(
+        type="sleep",
+        title="Child Task",
+        input={"seconds": 3},
+        parent_run_id=parent_run_id
+    )
+    child_run = asyncio.run(runs._create_run(child_request, db))
+    _commit_db(db)
+    
+    # 验证子 run 有 parent_run_id
+    assert child_run["parent_run_id"] == parent_run_id
+    
+    db_child_run = db.query(RunModel).filter(RunModel.id == child_run["id"]).first()
+    assert db_child_run.parent_run_id == parent_run_id
+
+
+def test_complete_failed_with_output_json(temp_db) -> None:
+    """测试失败时保存 output_json"""
+    db, _ = temp_db
+    
+    # 创建一个 queued run
+    request = runs.RunCreateRequest(
+        type="sleep",
+        title="Test Sleep",
+        input={"seconds": 5}
+    )
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # 设置为 running 状态
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    db_run.status = RunStatus.RUNNING
+    db_run.worker_id = "test-worker"
+    _commit_db(db)
+    
+    # 使用 output_json 标记为失败
+    output_json = {"trace_id": "test-trace-123", "debug": "Some debug info", "partial_result": {"processed": 10}}
+    complete_failed(db, run_id, "Test error", output_json)
+    _commit_db(db)
+    
+    # 验证失败状态和 output_json
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert db_run.status == RunStatus.FAILED
+    assert db_run.error == "Test error"
+    assert db_run.output_json == output_json
+    assert db_run.lease_expires_at is None
+
+
+def test_fetch_excludes_canceled(temp_db) -> None:
+    """测试 fetch_runnable_candidate 排除 canceled 状态"""
+    db, _ = temp_db
+    
+    # 创建一个 canceled run
+    request = runs.RunCreateRequest(
+        type="sleep",
+        title="Canceled Task",
+        input={"seconds": 5}
+    )
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    canceled_run_id = run_response["id"]
+    
+    # 设置为 canceled 状态
+    db_run = db.query(RunModel).filter(RunModel.id == canceled_run_id).first()
+    db_run.status = RunStatus.CANCELED
+    _commit_db(db)
+    
+    # 创建一个 queued run
+    request2 = runs.RunCreateRequest(
+        type="sleep",
+        title="Queued Task",
+        input={"seconds": 3}
+    )
+    run_response2 = asyncio.run(runs._create_run(request2, db))
+    _commit_db(db)
+    queued_run_id = run_response2["id"]
+    
+    # fetch 应该返回 queued run，而不是 canceled run
+    now = datetime.now(UTC)
+    fetched_id = fetch_runnable_candidate(db, now)
+    assert fetched_id == queued_run_id
+    assert fetched_id != canceled_run_id
+
+
+def test_claim_excludes_canceled(temp_db) -> None:
+    """测试 claim_run 排除 canceled 状态"""
+    db, _ = temp_db
+    
+    # 创建一个 canceled run
+    request = runs.RunCreateRequest(
+        type="sleep",
+        title="Canceled Task",
+        input={"seconds": 5}
+    )
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    canceled_run_id = run_response["id"]
+    
+    # 设置为 canceled 状态
+    db_run = db.query(RunModel).filter(RunModel.id == canceled_run_id).first()
+    db_run.status = RunStatus.CANCELED
+    _commit_db(db)
+    
+    # 尝试 claim canceled run，应该失败
+    claimed_run = claim_run(db, canceled_run_id, "test-worker", 30)
+    assert claimed_run is None
+
+
+def test_complete_canceled(temp_db) -> None:
+    """测试 complete_canceled 函数"""
+    db, _ = temp_db
+    
+    # 创建一个 running run
+    request = runs.RunCreateRequest(
+        type="sleep",
+        title="Test Sleep",
+        input={"seconds": 5}
+    )
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # 设置为 running 状态
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    db_run.status = RunStatus.RUNNING
+    db_run.worker_id = "test-worker"
+    db_run.lease_expires_at = datetime.now(UTC) + timedelta(seconds=30)
+    _commit_db(db)
+    
+    # 标记为 canceled
+    complete_canceled(db, run_id, "Canceled during execution")
+    _commit_db(db)
+    
+    # 验证 run 已被取消
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert db_run.status == RunStatus.CANCELED
+    assert db_run.error == "Canceled during execution"
+    assert db_run.lease_expires_at is None

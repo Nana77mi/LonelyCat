@@ -16,6 +16,8 @@ def fetch_runnable_candidate(db: Session, now: datetime) -> Optional[str]:
     1. status = 'queued'
     2. status = 'running' AND lease_expires_at < now (租约过期，可接管)
     
+    排除 canceled 状态（终态，不应被执行）
+    
     排序：先 queued，再过期 running，按 created_at ASC（公平）
     
     Args:
@@ -25,7 +27,7 @@ def fetch_runnable_candidate(db: Session, now: datetime) -> Optional[str]:
     Returns:
         第一个可执行的 run_id，如果没有则返回 None
     """
-    # 查询 queued 的任务
+    # 查询 queued 的任务（排除 canceled）
     queued_run = (
         db.query(RunModel.id)
         .filter(RunModel.status == RunStatus.QUEUED)
@@ -36,7 +38,7 @@ def fetch_runnable_candidate(db: Session, now: datetime) -> Optional[str]:
     if queued_run:
         return queued_run[0]
     
-    # 查询租约过期的 running 任务
+    # 查询租约过期的 running 任务（排除 canceled）
     expired_run = (
         db.query(RunModel.id)
         .filter(
@@ -64,6 +66,8 @@ def claim_run(
     """原子性抢占 run
     
     只有当 run 仍然处于可抢占状态时才更新成功。
+    排除 canceled 状态（终态，不应被执行）。
+    
     更新字段：
     - status = 'running'
     - worker_id = worker_id
@@ -85,6 +89,7 @@ def claim_run(
     
     # 原子性 conditional update
     # 只有当 run 仍然处于可抢占状态时才更新
+    # 排除 canceled 状态
     # 使用 SQLAlchemy 的 update() 函数来处理 attempt + 1
     # 注意：使用 synchronize_session=False 避免 Python 层面的 datetime 比较问题
     stmt = (
@@ -92,6 +97,7 @@ def claim_run(
         .where(
             and_(
                 RunModel.id == run_id,
+                RunModel.status != RunStatus.CANCELED,
                 or_(
                     RunModel.status == RunStatus.QUEUED,
                     and_(
@@ -235,12 +241,14 @@ def complete_failed(
     db: Session,
     run_id: str,
     error_str: str,
+    output_json: Optional[dict[str, Any]] = None,
 ) -> None:
     """完成任务（失败）
     
     更新字段：
     - status = 'failed'
     - error = error_str
+    - output_json = output_json（可选，用于保存部分结果或调试信息）
     - lease_expires_at = NULL
     - updated_at = now
     
@@ -248,6 +256,46 @@ def complete_failed(
         db: 数据库会话
         run_id: Run ID
         error_str: 错误信息
+        output_json: 可选的输出 JSON（用于保存部分结果或调试信息）
+    """
+    now = datetime.now(UTC)
+    
+    values = {
+        "status": RunStatus.FAILED,
+        "error": error_str,
+        "lease_expires_at": None,
+        "updated_at": now,
+    }
+    
+    if output_json is not None:
+        values["output_json"] = output_json
+    
+    stmt = (
+        update(RunModel)
+        .where(RunModel.id == run_id)
+        .values(**values)
+    )
+    db.execute(stmt)
+    db.commit()
+
+
+def complete_canceled(
+    db: Session,
+    run_id: str,
+    error_str: str = "Canceled by user",
+) -> None:
+    """完成任务（取消）
+    
+    更新字段：
+    - status = 'canceled'
+    - error = error_str（默认 "Canceled by user"）
+    - lease_expires_at = NULL
+    - updated_at = now
+    
+    Args:
+        db: 数据库会话
+        run_id: Run ID
+        error_str: 错误信息（默认 "Canceled by user"）
     """
     now = datetime.now(UTC)
     
@@ -255,7 +303,7 @@ def complete_failed(
         update(RunModel)
         .where(RunModel.id == run_id)
         .values(
-            status=RunStatus.FAILED,
+            status=RunStatus.CANCELED,
             error=error_str,
             lease_expires_at=None,
             updated_at=now,

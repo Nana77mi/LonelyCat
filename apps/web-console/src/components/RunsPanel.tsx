@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Run } from "../api/runs";
 import { formatTime } from "../utils/time";
 import "./RunsPanel.css";
@@ -9,6 +10,8 @@ type RunsPanelProps = {
   onRetry?: () => void;
   onCreateRun?: () => void;
   onDeleteRun?: (runId: string) => void;
+  onRetryRun?: (run: Run) => void;
+  onCancelRun?: (runId: string) => void;
 };
 
 export const RunsPanel = ({
@@ -18,7 +21,41 @@ export const RunsPanel = ({
   onRetry,
   onCreateRun,
   onDeleteRun,
+  onRetryRun,
+  onCancelRun,
 }: RunsPanelProps) => {
+  const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
+
+  const toggleErrorExpansion = (runId: string) => {
+    setExpandedErrors((prev) => {
+      const next = new Set(prev);
+      if (next.has(runId)) {
+        next.delete(runId);
+      } else {
+        next.add(runId);
+      }
+      return next;
+    });
+  };
+
+  const copyErrorToClipboard = async (error: string) => {
+    try {
+      await navigator.clipboard.writeText(error);
+    } catch (err) {
+      // Fallback for older browsers
+      const textArea = document.createElement("textarea");
+      textArea.value = error;
+      document.body.appendChild(textArea);
+      textArea.select();
+      try {
+        document.execCommand("copy");
+      } catch (e) {
+        // Ignore
+      }
+      document.body.removeChild(textArea);
+    }
+  };
+
   const getStatusColor = (status: Run["status"]): string => {
     switch (status) {
       case "queued":
@@ -109,7 +146,22 @@ export const RunsPanel = ({
                     {run.title || run.type}
                   </span>
                   <span className="run-time">{formatTime(run.updated_at)}</span>
-                  {onDeleteRun && (
+                  {/* 运行中状态显示取消按钮 */}
+                  {(run.status === "queued" || run.status === "running") && onCancelRun && (
+                    <button
+                      className="run-action-btn run-cancel-btn run-header-action-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onCancelRun(run.id);
+                      }}
+                      aria-label="取消任务"
+                      title="取消任务"
+                    >
+                      取消
+                    </button>
+                  )}
+                  {/* 终态显示删除按钮 */}
+                  {(run.status === "succeeded" || run.status === "failed" || run.status === "canceled") && onDeleteRun && (
                     <button
                       className="run-delete-btn"
                       onClick={(e) => {
@@ -141,9 +193,36 @@ export const RunsPanel = ({
                     <span className="run-progress-text">{run.progress}%</span>
                   </div>
                 )}
-                {run.status === "failed" && run.error && (
+                {(run.status === "failed" || run.status === "canceled") && run.error && (
                   <div className="run-error">
-                    {truncateError(run.error)}
+                    <div className="run-error-content">
+                      {expandedErrors.has(run.id) ? run.error : truncateError(run.error)}
+                      {run.error.length > 100 && (
+                        <button
+                          className="run-error-toggle"
+                          onClick={() => toggleErrorExpansion(run.id)}
+                        >
+                          {expandedErrors.has(run.id) ? "收起" : "展开"}
+                        </button>
+                      )}
+                    </div>
+                    <div className="run-error-actions">
+                      {run.status === "failed" && onRetryRun && (
+                        <button
+                          className="run-action-btn run-retry-btn"
+                          onClick={() => onRetryRun(run)}
+                        >
+                          重试
+                        </button>
+                      )}
+                      <button
+                        className="run-action-btn run-copy-error-btn"
+                        onClick={() => copyErrorToClipboard(run.error || "")}
+                        title="复制错误信息"
+                      >
+                        复制错误
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
