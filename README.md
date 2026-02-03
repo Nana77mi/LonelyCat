@@ -11,9 +11,52 @@
 
 ## Quickstart
 
+### Docker（推荐，Linux / WSL / PowerShell 通用）
+
+仅需安装 [Docker](https://docs.docker.com/get-docker/) 与 Docker Compose（Docker Desktop 已自带）。在纯净环境中：
+
+```bash
+git clone <your-repo-url>
+cd LonelyCat
+docker compose up -d --build
+```
+
+首次构建可能稍长；之后只需 `docker compose up -d`。然后：
+
+- **用户界面**: http://localhost:8000
+- **API 文档**: http://localhost:5173/docs
+
+数据默认使用 SQLite，持久化在项目下的 `./data` 目录。可选：复制 `.env.example` 为 `.env` 做自定义配置。
+
+### 本机运行（无需 Docker）
+
+**Linux / WSL / macOS**
+
+前置：Python 3.11+、Node.js 18+、pnpm（`corepack enable` 后 `pnpm install`）。
+
 ```bash
 make setup
+make up
 ```
+
+**Windows（PowerShell）**
+
+前置：Python 3.11+、Node.js 18+、pnpm（`corepack enable` 后 `corepack prepare pnpm@latest`）。若脚本无法执行，请先运行：
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+```
+
+首次安装依赖并启动：
+
+```powershell
+.\scripts\setup.ps1
+.\scripts\up.ps1
+```
+
+停止后端与 Worker：`.\scripts\down.ps1`；Web 在前台运行时用 Ctrl+C 停止。
+
+---
 
 Run all tests:
 
@@ -40,7 +83,7 @@ python -m uvicorn app.main:app --app-dir apps/core-api --reload --port 5173
 CORE_API_PORT=5173 pnpm --filter @lonelycat/web-console dev --port 8000
 ```
 
-或者使用一键启动：
+或者使用一键启动（Linux/WSL/macOS）：
 
 ```bash
 make up
@@ -134,11 +177,14 @@ LonelyCat defaults to **least privilege** access, sandboxed workspaces in `data/
 
 以下方案基于当前仓库结构，覆盖依赖准备、数据库/缓存、后端服务、前端控制台与日常运维。
 
+- **快速体验**：根目录 `docker compose up -d --build` 使用 SQLite，无需 Postgres/Redis（见上方 Quickstart）。
+- **生产/自建**：需要 Postgres/Redis 时使用 `deployments/docker-compose.yml` 启动数据库与缓存，再在宿主机或镜像中运行 Core API / Worker（见下）。
+
 ### 1. 依赖与环境准备
 
 - **Python 3.11+**（后端 API 与 Worker）
 - **Node.js 18+ + pnpm**（Web Console）
-- **Docker + Docker Compose**（Postgres/Redis）
+- **Docker + Docker Compose**（可选，用于 Postgres/Redis 或一键运行）
 
 ### 2. 获取代码并安装依赖
 
@@ -146,9 +192,11 @@ LonelyCat defaults to **least privilege** access, sandboxed workspaces in `data/
 git clone <your-repo-url>
 cd LonelyCat
 
-# Python + Node 依赖
+# Python + Node 依赖（Linux/WSL/macOS）
 make setup
 ```
+
+Windows PowerShell：`.\scripts\setup.ps1`
 
 ### 3. 启动基础依赖（Postgres/Redis）
 

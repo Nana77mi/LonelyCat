@@ -1,3 +1,7 @@
+# LonelyCat — Docker Compose for quick start (Linux / WSL / PowerShell).
+# Uses SQLite by default; no Postgres/Redis required.
+# Optional: copy .env.example to .env for overrides.
+
 services:
   core-api:
     build:
@@ -6,9 +10,26 @@ services:
     container_name: lonelycat-core-api
     ports:
       - "5173:5173"
-    env_file:
-      - .env
-    command: uvicorn app.main:app --host 0.0.0.0 --port 5173
+    environment:
+      - LONELYCAT_MEMORY_DB_URL=sqlite:////app/data/lonelycat_memory.db
+      - LONELYCAT_CORE_API_DB_URL=sqlite:////app/data/lonelycat_memory.db
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  agent-worker:
+    build:
+      context: .
+      dockerfile: apps/agent-worker/Dockerfile
+    container_name: lonelycat-agent-worker
+    depends_on:
+      - core-api
+    environment:
+      - LONELYCAT_MEMORY_DB_URL=sqlite:////app/data/lonelycat_memory.db
+      - LONELYCAT_CORE_API_DB_URL=sqlite:////app/data/lonelycat_memory.db
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
 
   web-console:
     build:
@@ -17,9 +38,9 @@ services:
     container_name: lonelycat-web-console
     ports:
       - "8000:8000"
-    env_file:
-      - .env
     depends_on:
       - core-api
     environment:
-      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+      # Vite dev server proxies /api to core-api container
+      - VITE_CORE_API_URL=http://core-api:5173
+    restart: unless-stopped
