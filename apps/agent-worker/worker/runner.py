@@ -111,6 +111,8 @@ class TaskRunner:
         self,
         run: RunModel,
         heartbeat_callback: Callable[[], bool],
+        *,
+        runtime: Optional[ToolRuntime] = None,
     ) -> Dict[str, Any]:
         """处理 research_report 任务；stub 搜索/抓取，产出 report + sources（含 provider）。"""
         input_json = run.input_json
@@ -124,7 +126,8 @@ class TaskRunner:
             max_sources = 5
         max_sources = min(max_sources, 20)
 
-        runtime = ToolRuntime()
+        if runtime is None:
+            runtime = ToolRuntime()
 
         def body(ctx: TaskContext) -> None:
             self._research_report_body(ctx, query, max_sources, runtime)
@@ -293,17 +296,29 @@ class TaskRunner:
         if not parent_run_id or not isinstance(parent_run_id, str):
             raise ValueError("input_json['parent_run_id'] must be a non-empty string")
         patch_id = input_json.get("patch_id")
+        parent_run = db.query(RunModel).filter(RunModel.id == parent_run_id).first()
+        if not parent_run or not parent_run.output_json:
+            raise ValueError(f"Parent run {parent_run_id} not found or has no output")
+        parent_artifacts = parent_run.output_json.get("artifacts") or {}
+        parent_patch_id_full = parent_artifacts.get("patch_id") or ""
         if not patch_id or not isinstance(patch_id, str):
-            parent_run = db.query(RunModel).filter(RunModel.id == parent_run_id).first()
-            if parent_run and parent_run.output_json:
-                artifacts = parent_run.output_json.get("artifacts") or {}
-                patch_id = artifacts.get("patch_id") or ""
-            if not patch_id:
-                raise ValueError("patch_id required or parent run must have artifacts.patch_id")
+            patch_id = parent_patch_id_full
+        if not patch_id:
+            raise ValueError("patch_id required or parent run must have artifacts.patch_id")
+        # Idempotency: input patch_id (full or short) must match parent
+        if parent_patch_id_full != patch_id and (
+            len(parent_patch_id_full) < 16 or parent_patch_id_full[:16] != patch_id
+        ):
+            raise ValueError(
+                "PatchMismatch: input.patch_id does not match parent run artifacts.patch_id"
+            )
+        # Use full patch_id in artifacts so UI tree has consistent propose.patch_id
+        patch_id_for_artifacts = parent_patch_id_full if len(parent_patch_id_full) == 64 else patch_id
 
         def body(ctx: TaskContext) -> None:
             with ctx.step("record_cancel"):
-                ctx.artifacts["patch_id"] = patch_id
+                ctx.result["parent_run_id"] = parent_run_id
+                ctx.artifacts["patch_id"] = patch_id_for_artifacts
                 ctx.artifacts["canceled"] = True
 
         return run_task_with_steps(run, "edit_docs_cancel", body)

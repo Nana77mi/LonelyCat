@@ -65,7 +65,7 @@ def test_sleep_slept_seconds_match_input():
 
 
 def test_sleep_heartbeat_failure_raises():
-    """心跳失败时抛出 RuntimeError（任务被接管）。"""
+    """心跳失败时 output.ok=False、error 含 Heartbeat（run_task_with_steps 仍返回可诊断 output）。"""
     runner = TaskRunner()
     run = Mock()
     run.input_json = {"seconds": 10}
@@ -77,8 +77,10 @@ def test_sleep_heartbeat_failure_raises():
             return True
         return False
 
-    with pytest.raises(RuntimeError, match="Heartbeat"):
-        runner._handle_sleep(run, fail_after_first)
+    result = runner._handle_sleep(run, fail_after_first)
+    assert result.get("ok") is False
+    err = result.get("error") or {}
+    assert "Heartbeat" in (err.get("message") or "")
 
 
 def test_sleep_invalid_seconds_raises():

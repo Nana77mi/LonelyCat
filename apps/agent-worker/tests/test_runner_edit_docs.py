@@ -56,6 +56,51 @@ def test_edit_docs_apply_reads_parent_and_sets_applied():
     assert "apply_patch" in names
 
 
+def test_edit_docs_apply_patch_id_short_only_succeeds():
+    """apply 只传 patch_id_short（前 16 位）仍能匹配并 applied=True。"""
+    runner = TaskRunner()
+    parent_run = Mock()
+    parent_run.id = "parent-456"
+    full_id = "e" * 32 + "f" * 32
+    parent_run.output_json = {
+        "artifacts": {
+            "diff": "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n",
+            "patch_id": full_id,
+            "files": ["f"],
+        }
+    }
+    run = Mock()
+    run.input_json = {"parent_run_id": "parent-456", "patch_id": full_id[:16]}
+    run.type = "edit_docs_apply"
+    db = Mock()
+    db.query.return_value.filter.return_value.first.return_value = parent_run
+    result = runner._handle_edit_docs_apply(run, db, lambda: True)
+    assert result.get("ok") is True
+    assert result.get("artifacts", {}).get("applied") is True
+    assert result.get("artifacts", {}).get("patch_id") == full_id
+
+
+def test_edit_docs_cancel_parent_run_id_and_patch_id_match_propose():
+    """edit_docs_cancel 的 parent_run_id == propose_run_id，artifacts.patch_id == propose.patch_id，便于 UI 成树。"""
+    runner = TaskRunner()
+    propose_run_id = "propose-789"
+    full_patch_id = "a" * 64
+    parent_run = Mock()
+    parent_run.id = propose_run_id
+    parent_run.output_json = {
+        "artifacts": {"patch_id": full_patch_id, "diff": "--- a\n+++ b\n", "files": ["f"]},
+    }
+    run = Mock()
+    run.input_json = {"parent_run_id": propose_run_id, "patch_id": full_patch_id[:16]}
+    db = Mock()
+    db.query.return_value.filter.return_value.first.return_value = parent_run
+    result = runner._handle_edit_docs_cancel(run, db, lambda: True)
+    assert result.get("ok") is True
+    assert result.get("result", {}).get("parent_run_id") == propose_run_id
+    assert result.get("artifacts", {}).get("patch_id") == full_patch_id
+    assert result.get("artifacts", {}).get("canceled") is True
+
+
 def test_edit_docs_apply_patch_id_mismatch_raises():
     """input.patch_id 与 parent artifacts.patch_id 不一致时 PatchMismatch。"""
     runner = TaskRunner()

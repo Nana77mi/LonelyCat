@@ -5,6 +5,8 @@ from unittest.mock import Mock
 import pytest
 
 from worker.runner import TaskRunner
+from worker.tools import ToolCatalog, ToolRuntime
+from worker.tools.catalog import get_default_catalog
 
 
 def test_research_report_output_has_trace_id_steps_and_task_type():
@@ -114,3 +116,27 @@ def test_research_report_steps_order_stable():
     names = [s["name"] for s in result["steps"]]
     expected = ["tool.web.search", "tool.web.fetch", "extract", "dedupe_rank", "write_report"]
     assert names == expected
+
+
+def test_research_report_tool_fetch_missing_returns_ok_false_tool_not_found():
+    """工具调用失败路径可回放：取消注册 web.fetch 后触发 research_report，output.ok=false、error.code=ToolNotFound、steps 中 tool.web.fetch.ok=false、trace_lines 含 trace_id。"""
+    catalog = ToolCatalog()
+    meta = get_default_catalog().get("web.search")
+    assert meta is not None
+    catalog.register(meta)
+    # web.fetch 不注册，触发 ToolNotFound
+    runtime = ToolRuntime(catalog=catalog)
+    runner = TaskRunner()
+    trace_id = "c" * 32
+    run = Mock()
+    run.input_json = {"query": "x", "trace_id": trace_id}
+    result = runner._handle_research_report(run, lambda: True, runtime=runtime)
+    assert result.get("ok") is False
+    assert result.get("error", {}).get("code") == "ToolNotFound"
+    steps = result.get("steps", [])
+    fetch_step = next((s for s in steps if s["name"] == "tool.web.fetch"), None)
+    assert fetch_step is not None
+    assert fetch_step.get("ok") is False
+    assert fetch_step.get("error_code")
+    assert "trace_lines" in result
+    assert any(trace_id in line for line in result["trace_lines"])
