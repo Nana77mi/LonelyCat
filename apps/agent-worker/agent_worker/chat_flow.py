@@ -16,6 +16,7 @@ from agent_worker.router import (
 )
 from agent_worker.run import execute_decision
 from agent_worker.trace import TraceCollector
+from agent_worker.utils.facts import fetch_active_facts
 
 
 PERSONA_REGISTRY = PersonaRegistry.load_default()
@@ -57,6 +58,8 @@ def chat_flow(
     memory_client: MemoryClient | None,
     config: ChatConfig | None,
     history_messages: list[dict[str, str]] | None = None,
+    conversation_id: str | None = None,
+    active_facts: list[dict] | None = None,
 ) -> ChatResult:
     config = config or ChatConfig.from_env()
     trace = TraceCollector.from_env()
@@ -66,19 +69,36 @@ def chat_flow(
     gate_llm = JsonOnlyLLMWrapper(llm)
     persona = PERSONA_REGISTRY.get(persona_id or config.persona_default)
 
-    active_facts: list[dict] = []
+    facts_list: list[dict] = []
     memory_client_in_use: MemoryClient | None = None
-    if config.memory_enabled:
+    if active_facts is not None:
+        # 调用方已传入 facts（例如 core-api 内直接查 store，避免同进程 HTTP 自调用阻塞）
+        facts_list = list(active_facts)
+        trace.record("memory.list_facts.source", "provided")
+        trace.record("memory.list_facts.schema_version", "1")
+        trace.record("memory.list_facts.finish", f"count={len(facts_list)}")
+        if facts_list:
+            trace.record("memory.list_facts.sample", str(facts_list[0]) if len(facts_list) > 0 else "")
+        memory_client_in_use = memory_client or (MemoryClient() if config.memory_enabled else None)
+    elif config.memory_enabled:
         memory_client_in_use = memory_client or MemoryClient()
         try:
             trace.record("memory.list_facts.start")
-            active_facts = memory_client_in_use.list_facts(
-                scope="global", status="active"
+            facts_list = fetch_active_facts(
+                memory_client_in_use,
+                conversation_id=conversation_id,
             )
-            trace.record("memory.list_facts.finish")
-        except Exception:
-            trace.record("memory.list_facts.error")
-            active_facts = []
+            trace.record("memory.list_facts.finish", f"count={len(facts_list)}")
+            if facts_list:
+                trace.record("memory.list_facts.sample", str(facts_list[0]) if len(facts_list) > 0 else "")
+            else:
+                trace.record("memory.list_facts.empty", "No active facts found")
+        except Exception as exc:
+            import traceback
+            error_detail = f"{type(exc).__name__}: {str(exc)}"
+            trace.record("memory.list_facts.error", error_detail)
+            trace.record("memory.list_facts.error_traceback", traceback.format_exc()[:500])
+            facts_list = []
     else:
         trace.record("memory.disabled")
 
@@ -109,7 +129,7 @@ def chat_flow(
                 persona,
                 user_message,
                 history_messages,
-                active_facts,
+                facts_list,
                 trace=trace,
             )
         else:
@@ -117,7 +137,7 @@ def chat_flow(
             assistant_reply, _memory_hint = responder.reply(
                 persona,
                 user_message,
-                active_facts,
+                facts_list,
                 trace=trace,
             )
     except Exception as exc:
@@ -129,7 +149,7 @@ def chat_flow(
         assistant_reply = FALLBACK_REPLY
 
     try:
-        decision = gate.decide(user_message, active_facts, trace=trace)
+        decision = gate.decide(user_message, facts_list, trace=trace)
     except Exception as exc:
         if trace:
             trace.record("gate.error", str(exc))
