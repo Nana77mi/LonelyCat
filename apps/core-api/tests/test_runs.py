@@ -12,7 +12,8 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy import create_engine
 
 from app.api import runs
-from app.db import Base, ConversationModel, RunModel, RunStatus
+from app.api import conversations
+from app.db import Base, ConversationModel, RunModel, RunStatus, MessageModel
 
 # 添加 agent-worker 路径以便导入 worker 模块
 agent_worker_path = Path(__file__).parent.parent.parent / "agent-worker"
@@ -562,6 +563,114 @@ def test_complete_success_clears_lease(temp_db) -> None:
     assert db_run.error is None
 
 
+def test_complete_success_emits_message_with_conversation_id(temp_db, monkeypatch) -> None:
+    """测试 complete_success 会调用内部 API 发送消息到现有 conversation
+    
+    注意：由于 worker 现在调用 HTTP API，我们在测试中 mock HTTP 调用，
+    直接调用服务函数来验证功能。
+    """
+    from app.services import run_messages
+    
+    db, _ = temp_db
+    
+    # 创建 conversation
+    conv_request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(conv_request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # 创建 queued run（关联到 conversation）
+    request = runs.RunCreateRequest(
+        type="test_task",
+        title="Test Task",
+        conversation_id=conversation_id,
+        input={"test": "input"}
+    )
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # Mock HTTP 调用，直接调用服务函数
+    def mock_call_api(run_id_param: str) -> None:
+        # 查询 run 并调用服务函数
+        run_obj = db.query(RunModel).filter(RunModel.id == run_id_param).first()
+        if run_obj:
+            run_messages.emit_run_message(db, run_obj)
+    
+    # 替换 worker 的 HTTP 调用为直接调用服务函数
+    from worker import queue
+    monkeypatch.setattr(queue, "_call_emit_run_message_api", mock_call_api)
+    
+    # 完成任务（成功）
+    output_json = {"summary": "Task completed successfully"}
+    complete_success(db, run_id, output_json)
+    _commit_db(db)
+    
+    # 验证消息已创建
+    messages_response = asyncio.run(conversations._get_conversation_messages(conversation_id, db))
+    assert len(messages_response["items"]) == 1
+    
+    message = messages_response["items"][0]
+    assert message["role"] == "assistant"
+    assert "任务已完成" in message["content"]
+    assert message["source_ref"] == {"kind": "run", "ref_id": run_id, "excerpt": None}
+    
+    # 验证 conversation.has_unread = True（动态计算）
+    from app.services.run_messages import _compute_has_unread
+    conversation = db.query(ConversationModel).filter(ConversationModel.id == conversation_id).first()
+    assert _compute_has_unread(conversation) is True
+
+
+def test_complete_success_emits_message_without_conversation_id(temp_db, monkeypatch) -> None:
+    """测试 complete_success 会调用内部 API 创建新 conversation"""
+    from app.services import run_messages
+    
+    db, _ = temp_db
+    
+    # 创建 queued run（没有 conversation_id）
+    request = runs.RunCreateRequest(
+        type="test_task",
+        title="Nightly Job",
+        input={"test": "input"}
+    )
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # Mock HTTP 调用，直接调用服务函数
+    def mock_call_api(run_id_param: str) -> None:
+        run_obj = db.query(RunModel).filter(RunModel.id == run_id_param).first()
+        if run_obj:
+            run_messages.emit_run_message(db, run_obj)
+    
+    from worker import queue
+    monkeypatch.setattr(queue, "_call_emit_run_message_api", mock_call_api)
+    
+    # 完成任务（成功）
+    output_json = {"result": "OK"}
+    complete_success(db, run_id, output_json)
+    _commit_db(db)
+    
+    # 验证新 conversation 已创建
+    conversations_list = asyncio.run(conversations._list_conversations(db))
+    assert len(conversations_list["items"]) == 1
+    
+    new_conv = conversations_list["items"][0]
+    assert new_conv["title"] == "Task completed: Nightly Job"
+    assert new_conv["has_unread"] is True
+    assert new_conv["meta_json"] == {
+        "kind": "system_run",
+        "run_id": run_id,
+        "origin": "run",
+        "channel_hint": "web",
+    }
+    
+    # 验证消息已创建
+    messages_response = asyncio.run(conversations._get_conversation_messages(new_conv["id"], db))
+    assert len(messages_response["items"]) == 1
+    assert messages_response["items"][0]["role"] == "assistant"
+
+
 def test_complete_failed_clears_lease(temp_db) -> None:
     """测试失败完成任务后清除租约"""
     db, _ = temp_db
@@ -591,6 +700,53 @@ def test_complete_failed_clears_lease(temp_db) -> None:
     assert db_run.status == RunStatus.FAILED
     assert db_run.lease_expires_at is None
     assert db_run.error == error_msg
+
+
+def test_complete_failed_emits_message(temp_db, monkeypatch) -> None:
+    """测试 complete_failed 会调用内部 API"""
+    from app.services import run_messages
+    
+    db, _ = temp_db
+    
+    # 创建 conversation
+    conv_request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(conv_request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # 创建 queued run
+    request = runs.RunCreateRequest(
+        type="test_task",
+        title="Test Task",
+        conversation_id=conversation_id,
+        input={"test": "input"}
+    )
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # Mock HTTP 调用，直接调用服务函数
+    def mock_call_api(run_id_param: str) -> None:
+        run_obj = db.query(RunModel).filter(RunModel.id == run_id_param).first()
+        if run_obj:
+            run_messages.emit_run_message(db, run_obj)
+    
+    from worker import queue
+    monkeypatch.setattr(queue, "_call_emit_run_message_api", mock_call_api)
+    
+    # 完成任务（失败）
+    error_msg = "Task execution failed"
+    complete_failed(db, run_id, error_msg)
+    _commit_db(db)
+    
+    # 验证消息已创建
+    messages_response = asyncio.run(conversations._get_conversation_messages(conversation_id, db))
+    assert len(messages_response["items"]) == 1
+    
+    message = messages_response["items"][0]
+    assert message["role"] == "assistant"
+    assert "任务执行失败" in message["content"]
+    assert error_msg in message["content"]
 
 
 def test_fetch_and_claim_run(temp_db) -> None:
@@ -1029,3 +1185,50 @@ def test_complete_canceled(temp_db) -> None:
     assert db_run.status == RunStatus.CANCELED
     assert db_run.error == "Canceled during execution"
     assert db_run.lease_expires_at is None
+
+
+def test_complete_canceled_emits_message(temp_db, monkeypatch) -> None:
+    """测试 complete_canceled 会调用内部 API"""
+    from app.services import run_messages
+    
+    db, _ = temp_db
+    
+    # 创建 conversation
+    conv_request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(conv_request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # 创建 queued run
+    request = runs.RunCreateRequest(
+        type="test_task",
+        title="Test Task",
+        conversation_id=conversation_id,
+        input={"test": "input"}
+    )
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # Mock HTTP 调用，直接调用服务函数
+    def mock_call_api(run_id_param: str) -> None:
+        run_obj = db.query(RunModel).filter(RunModel.id == run_id_param).first()
+        if run_obj:
+            run_messages.emit_run_message(db, run_obj)
+    
+    from worker import queue
+    monkeypatch.setattr(queue, "_call_emit_run_message_api", mock_call_api)
+    
+    # 标记为 canceled
+    cancel_reason = "Canceled by user"
+    complete_canceled(db, run_id, cancel_reason)
+    _commit_db(db)
+    
+    # 验证消息已创建
+    messages_response = asyncio.run(conversations._get_conversation_messages(conversation_id, db))
+    assert len(messages_response["items"]) == 1
+    
+    message = messages_response["items"][0]
+    assert message["role"] == "assistant"
+    assert "任务已取消" in message["content"]
+    assert "Test Task" in message["content"]

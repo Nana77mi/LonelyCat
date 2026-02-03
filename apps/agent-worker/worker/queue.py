@@ -8,6 +8,57 @@ from sqlalchemy.orm import Session
 
 from worker.db import RunModel, RunStatus
 
+# 调用内部 API 发送 run 完成消息
+import os
+from typing import Optional
+
+try:
+    import httpx
+    HTTPX_AVAILABLE = True
+except ImportError:
+    HTTPX_AVAILABLE = False
+
+# 获取 core-api 的 URL（默认本地）
+CORE_API_URL = os.getenv("CORE_API_URL", "http://localhost:5173")
+
+
+def _call_emit_run_message_api(run_id: str) -> None:
+    """调用 core-api 的内部 API 发送 run 完成消息
+    
+    如果调用失败，记录 warning（含 run_id），便于未来补发。
+    失败不影响 run 的完成状态。
+    
+    Args:
+        run_id: Run ID
+    """
+    if not HTTPX_AVAILABLE:
+        print(f"[WARNING] Run {run_id}: httpx not available, skipping emit run message. Future retry needed.")
+        return
+    
+    try:
+        url = f"{CORE_API_URL}/internal/runs/{run_id}/emit-message"
+        with httpx.Client(timeout=5.0) as client:
+            response = client.post(url)
+            if response.status_code == 204:
+                # 成功
+                return
+            elif response.status_code == 404:
+                # Run 不存在，记录警告但不抛出异常
+                print(f"[WARNING] Run {run_id}: Not found when emitting message. May need retry.")
+            elif response.status_code == 400:
+                # Run 不是终态，记录警告但不抛出异常
+                print(f"[WARNING] Run {run_id}: Not in final state when emitting message. May need retry.")
+            else:
+                # 其他错误，记录但不抛出异常
+                print(f"[WARNING] Run {run_id}: Failed to emit run message (status={response.status_code}). May need retry. Response: {response.text}")
+    except httpx.RequestError as e:
+        # 网络错误，记录但不抛出异常（避免影响 run 的完成状态）
+        # 未来可以有一个"补发扫描任务"来重试这些失败的请求
+        print(f"[WARNING] Run {run_id}: Network error when calling emit run message API: {e}. May need retry.")
+    except Exception as e:
+        # 其他异常，记录但不抛出异常
+        print(f"[WARNING] Run {run_id}: Unexpected error when calling emit run message API: {e}. May need retry.")
+
 
 def fetch_runnable_candidate(db: Session, now: datetime) -> Optional[str]:
     """获取可执行的候选 run ID
@@ -214,12 +265,23 @@ def complete_success(
     - lease_expires_at = NULL
     - updated_at = now
     
+    然后调用内部 API 发送消息到对应的 conversation（仅在状态从非终态→终态时调用）。
+    
     Args:
         db: 数据库会话
         run_id: Run ID
         output_json: 任务输出
     """
     now = datetime.now(UTC)
+    
+    # 先查询当前状态，判断是否是状态转换
+    current_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    if current_run is None:
+        return
+    
+    # 终态列表
+    final_statuses = {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}
+    is_transition_to_final = current_run.status not in final_statuses
     
     stmt = (
         update(RunModel)
@@ -235,6 +297,10 @@ def complete_success(
     )
     db.execute(stmt)
     db.commit()
+    
+    # 只在状态从非终态→终态时调用内部 API 发送消息（避免重复请求）
+    if is_transition_to_final:
+        _call_emit_run_message_api(run_id)
 
 
 def complete_failed(
@@ -252,6 +318,8 @@ def complete_failed(
     - lease_expires_at = NULL
     - updated_at = now
     
+    然后调用内部 API 发送消息到对应的 conversation（仅在状态从非终态→终态时调用）。
+    
     Args:
         db: 数据库会话
         run_id: Run ID
@@ -259,6 +327,15 @@ def complete_failed(
         output_json: 可选的输出 JSON（用于保存部分结果或调试信息）
     """
     now = datetime.now(UTC)
+    
+    # 先查询当前状态，判断是否是状态转换
+    current_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    if current_run is None:
+        return
+    
+    # 终态列表
+    final_statuses = {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}
+    is_transition_to_final = current_run.status not in final_statuses
     
     values = {
         "status": RunStatus.FAILED,
@@ -277,6 +354,10 @@ def complete_failed(
     )
     db.execute(stmt)
     db.commit()
+    
+    # 只在状态从非终态→终态时调用内部 API 发送消息（避免重复请求）
+    if is_transition_to_final:
+        _call_emit_run_message_api(run_id)
 
 
 def complete_canceled(
@@ -292,12 +373,23 @@ def complete_canceled(
     - lease_expires_at = NULL
     - updated_at = now
     
+    然后调用内部 API 发送消息到对应的 conversation（仅在状态从非终态→终态时调用）。
+    
     Args:
         db: 数据库会话
         run_id: Run ID
         error_str: 错误信息（默认 "Canceled by user"）
     """
     now = datetime.now(UTC)
+    
+    # 先查询当前状态，判断是否是状态转换
+    current_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    if current_run is None:
+        return
+    
+    # 终态列表
+    final_statuses = {RunStatus.SUCCEEDED, RunStatus.FAILED, RunStatus.CANCELED}
+    is_transition_to_final = current_run.status not in final_statuses
     
     stmt = (
         update(RunModel)
@@ -311,3 +403,7 @@ def complete_canceled(
     )
     db.execute(stmt)
     db.commit()
+    
+    # 只在状态从非终态→终态时调用内部 API 发送消息（避免重复请求）
+    if is_transition_to_final:
+        _call_emit_run_message_api(run_id)
