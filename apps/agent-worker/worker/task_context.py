@@ -6,10 +6,14 @@ steps (context manager), ok/error, and artifacts/result structure.
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from contextlib import contextmanager
 from typing import Any, Callable, Dict, List, Optional
+
+# 输出大小超过此阈值时在 trace 中记录 task.output.too_large（不阻塞）
+OUTPUT_SIZE_WARN_THRESHOLD = 1024 * 1024  # 1 MiB
 
 from protocol.run_constants import is_valid_trace_id
 
@@ -67,11 +71,11 @@ class TaskContext:
             yield step_meta
         except Exception as e:
             step_ok = False
-            error_code = type(e).__name__ or "Error"
+            error_code = getattr(e, "code", None) or type(e).__name__ or "Error"
             if self._ok:
                 self._ok = False
                 self._error = {
-                    "code": error_code,
+                    "code": str(error_code),
                     "message": str(e)[:500],
                     "retryable": False,
                     "step": name,
@@ -104,6 +108,13 @@ class TaskContext:
             out["facts_snapshot_id"] = self._facts_snapshot_id
         if self._facts_snapshot_source is not None:
             out["facts_snapshot_source"] = self._facts_snapshot_source
+        try:
+            payload = json.dumps(out, default=str, ensure_ascii=False)
+            if len(payload) > OUTPUT_SIZE_WARN_THRESHOLD:
+                self.trace.record("task.output.too_large", str(len(payload)))
+                out["trace_lines"] = self.trace.render_lines()
+        except Exception:
+            pass
         return out
 
 
@@ -116,8 +127,14 @@ def run_task_with_steps(
 
     Creates TaskContext, calls handler_fn(ctx); handler uses ctx.step("name")
     and sets ctx.result / ctx.artifacts / ctx.set_facts_snapshot. Returns
-    full task_result_v0 dict (handler may catch step exceptions and not re-raise).
+    full task_result_v0 dict. On handler exception, still returns build_output()
+    so failed runs remain diagnosable (ok=false, error, steps, trace_lines).
     """
     ctx = TaskContext(run, task_type)
-    handler_fn(ctx)
+    try:
+        handler_fn(ctx)
+    except Exception:
+        # Step context already recorded failure and set ctx._ok/_error; re-raise
+        # only after returning so caller can get structured output for storage.
+        pass
     return ctx.build_output()

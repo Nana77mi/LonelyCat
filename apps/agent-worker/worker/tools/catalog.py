@@ -30,6 +30,10 @@ class ToolCatalog:
     def get(self, name: str) -> Optional[ToolMeta]:
         return self._by_name.get(name)
 
+    def unregister(self, name: str) -> None:
+        """Remove tool from catalog (e.g. for tests: simulate missing tool)."""
+        self._by_name.pop(name, None)
+
     def list_builtin(self) -> List[ToolMeta]:
         return list(self._by_name.values())
 

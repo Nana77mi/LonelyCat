@@ -14,7 +14,9 @@ PREVIEW_MAX = 200
 
 
 class ToolNotFoundError(ValueError):
-    """Tool not in catalog or no implementation; error.code = ToolNotFoundError for UI/debug."""
+    """Tool not in catalog or no implementation; error.code = ToolNotFound for UI/debug."""
+
+    code: str = "ToolNotFound"
 
     def __init__(self, name: str, detail: str = "") -> None:
         self.name = name
@@ -65,15 +67,14 @@ class ToolRuntime:
         llm: Optional[Any] = None,
     ) -> Any:
         """Run tool in one step; step name = tool.{name}; meta = args_preview, result_preview. Raises on error."""
-        meta = self._catalog.get(name)
-        if not meta:
-            raise ToolNotFoundError(name, "not in catalog")
-        impl = self._impls.get(name)
-        if not impl:
-            raise ToolNotFoundError(name, "no implementation")
-
         step_name = f"tool.{name}"
         with ctx.step(step_name) as step_meta:
+            meta = self._catalog.get(name)
+            if not meta:
+                raise ToolNotFoundError(name, "not in catalog")
+            impl = self._impls.get(name)
+            if not impl:
+                raise ToolNotFoundError(name, "no implementation")
             step_meta["args_preview"] = _preview(args)
             step_meta["tool_name"] = name
             step_meta["risk_level"] = meta.risk_level
