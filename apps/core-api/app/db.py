@@ -6,6 +6,7 @@ from enum import Enum
 from typing import Any, Optional
 
 from sqlalchemy import (
+    Boolean,
     Integer,
     JSON,
     Column,
@@ -65,6 +66,8 @@ class ConversationModel(Base):
     title = Column(String, nullable=False)
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+    last_read_at = Column(DateTime, nullable=True)  # 最后阅读时间，用于计算 has_unread（动态计算，不存储 bool）
+    meta_json = Column(JSON, nullable=True)  # 元数据，用于系统创建的对话（如 {"kind": "system_run", "run_id": "...", "origin": "...", "channel_hint": "..."}）
 
     # 关系
     messages = relationship("MessageModel", back_populates="conversation", cascade="all, delete-orphan")
@@ -134,6 +137,8 @@ def init_db() -> None:
     _migrate_add_client_msg_id()
     # 迁移：添加取消相关字段（如果不存在）
     _migrate_add_cancel_fields()
+    # 迁移：添加 conversation 相关字段（如果不存在）
+    _migrate_add_conversation_fields()
 
 
 def _migrate_add_client_msg_id() -> None:
@@ -190,6 +195,38 @@ def _migrate_add_cancel_fields() -> None:
     except Exception as e:
         # 迁移失败不影响启动，只记录错误
         print(f"Warning: Failed to migrate cancel fields: {e}")
+
+
+def _migrate_add_conversation_fields() -> None:
+    """迁移：为 conversations 表添加 last_read_at 和 meta_json 字段（如果不存在）
+    
+    注意：has_unread 不再存储为字段，改为序列化时动态计算。
+    如果数据库中已有 has_unread 列，保留但不使用（向后兼容）。
+    """
+    try:
+        inspector = inspect(engine)
+        # 检查表是否存在
+        if "conversations" not in inspector.get_table_names():
+            return
+        
+        columns = [col["name"] for col in inspector.get_columns("conversations")]
+        
+        with engine.connect() as conn:
+            # 添加 last_read_at 列
+            if "last_read_at" not in columns:
+                conn.execute(text("ALTER TABLE conversations ADD COLUMN last_read_at DATETIME"))
+            
+            # 添加 meta_json 列
+            if "meta_json" not in columns:
+                conn.execute(text("ALTER TABLE conversations ADD COLUMN meta_json JSON"))
+            
+            # 注意：has_unread 列如果存在则保留（向后兼容），但不再使用
+            # 新代码中 has_unread 是动态计算的，不存储
+            
+            conn.commit()
+    except Exception as e:
+        # 迁移失败不影响启动，只记录错误
+        print(f"Warning: Failed to migrate conversation fields: {e}")
 
 
 def get_db():

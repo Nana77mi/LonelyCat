@@ -57,6 +57,9 @@ class ConversationResponse(BaseModel):
     title: str
     created_at: datetime
     updated_at: datetime
+    has_unread: bool = False
+    last_read_at: Optional[datetime] = None
+    meta_json: Optional[Dict[str, Any]] = None
 
 
 class MessageResponse(BaseModel):
@@ -71,7 +74,14 @@ class MessageResponse(BaseModel):
 
 
 def _serialize_conversation(conv: ConversationModel) -> Dict[str, Any]:
-    """序列化 Conversation 为字典"""
+    """序列化 Conversation 为字典
+    
+    注意：has_unread 是动态计算的，不存储。计算规则：
+    - 如果 last_read_at is None：has_unread = (updated_at > created_at)
+    - 如果 last_read_at is not None：has_unread = (updated_at > last_read_at)
+    """
+    from app.services.run_messages import _compute_has_unread
+    
     # 确保时间包含时区信息（Z 表示 UTC）
     created_at_str = conv.created_at.isoformat()
     if not created_at_str.endswith('Z') and '+' not in created_at_str:
@@ -80,11 +90,24 @@ def _serialize_conversation(conv: ConversationModel) -> Dict[str, Any]:
     if not updated_at_str.endswith('Z') and '+' not in updated_at_str:
         updated_at_str += 'Z'
     
+    last_read_at_str = None
+    if conv.last_read_at:
+        last_read_at_str = conv.last_read_at.isoformat()
+        if not last_read_at_str.endswith('Z') and '+' not in last_read_at_str:
+            last_read_at_str += 'Z'
+    
+    # 动态计算 has_unread（不存储，避免不一致）
+    # 注意：在序列化时重新查询 conversation 确保获取最新的 updated_at
+    has_unread = _compute_has_unread(conv)
+    
     return {
         "id": conv.id,
         "title": conv.title,
         "created_at": created_at_str,
         "updated_at": updated_at_str,
+        "has_unread": has_unread,  # 动态计算
+        "last_read_at": last_read_at_str,
+        "meta_json": conv.meta_json,
     }
 
 
@@ -166,6 +189,64 @@ async def _update_conversation(
     return _serialize_conversation(conversation)
 
 
+async def _mark_conversation_read(
+    conversation_id: str,
+    db: Session,
+) -> Dict[str, Any]:
+    """标记对话为已读（设置 last_read_at = now）（内部函数，便于测试）
+    
+    注意：has_unread 不再存储，改为序列化时动态计算。
+    设置 last_read_at = max(now, updated_at)，确保 last_read_at >= updated_at。
+    """
+    conversation = db.query(ConversationModel).filter(ConversationModel.id == conversation_id).first()
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    
+    # 刷新 conversation 确保获取最新的 updated_at
+    db.refresh(conversation)
+    
+    # 设置 last_read_at = now，但确保它 > updated_at
+    # 如果 now <= updated_at，则设置为 updated_at + 1微秒，确保 last_read_at > updated_at
+    from datetime import timedelta
+    
+    now = datetime.now(UTC)
+    if conversation.updated_at.tzinfo is None:
+        updated_at_aware = conversation.updated_at.replace(tzinfo=UTC)
+    else:
+        updated_at_aware = conversation.updated_at
+    
+    # 确保 last_read_at > updated_at（严格大于）
+    # 总是设置为 max(now, updated_at) + 至少1微秒，确保严格大于 updated_at
+    # 注意：updated_at 有 onupdate 触发器，在 commit 时可能会自动更新
+    # 所以我们先设置一个足够大的值，然后在 commit 后检查并调整
+    conversation.last_read_at = max(now, updated_at_aware) + timedelta(microseconds=1000)  # 使用1毫秒而不是1微秒，更安全
+    
+    db.commit()
+    
+    # 重新查询 conversation 确保获取最新的状态（updated_at 可能有 onupdate 触发器）
+    db.refresh(conversation)
+    
+    # 如果 updated_at 在 commit 后被更新（由于 onupdate 触发器），再次确保 last_read_at > updated_at
+    if conversation.updated_at.tzinfo is None:
+        current_updated_at = conversation.updated_at.replace(tzinfo=UTC)
+    else:
+        current_updated_at = conversation.updated_at
+    
+    # 确保 last_read_at 也是 timezone-aware
+    if conversation.last_read_at.tzinfo is None:
+        last_read_at_aware = conversation.last_read_at.replace(tzinfo=UTC)
+    else:
+        last_read_at_aware = conversation.last_read_at
+    
+    if last_read_at_aware <= current_updated_at:
+        # 如果 last_read_at <= updated_at（由于 onupdate 触发器），设置为 updated_at + 1毫秒
+        conversation.last_read_at = current_updated_at + timedelta(milliseconds=1)
+        db.commit()
+        db.refresh(conversation)
+    
+    return _serialize_conversation(conversation)
+
+
 async def _delete_conversation(conversation_id: str, db: Session) -> None:
     """删除对话（内部函数，便于测试）
     
@@ -208,6 +289,8 @@ async def _get_conversation_messages(
     messages = query.all()
     
     return {"items": [_serialize_message(msg) for msg in messages]}
+
+
 
 
 async def _create_message(
@@ -482,6 +565,18 @@ async def update_conversation(
     目前支持更新标题。
     """
     return await _update_conversation(conversation_id, request, db)
+
+
+@router.patch("/{conversation_id}/mark-read", response_model=Dict[str, Any])
+async def mark_conversation_read(
+    conversation_id: str,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """标记对话为已读
+    
+    清除 has_unread 标记。前端在打开对话时调用此端点。
+    """
+    return await _mark_conversation_read(conversation_id, db)
 
 
 @router.get("/{conversation_id}/runs", response_model=Dict[str, Any])
