@@ -29,5 +29,8 @@ configs/config.yaml
 # PIDs
 .pids/
 
+# Docker / local data (SQLite, etc.)
+data/
+
 # Lock files (optional - some projects prefer to commit these)
 # pnpm-lock.yaml
