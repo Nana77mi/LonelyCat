@@ -228,8 +228,7 @@ def _commit_db(db):
     db.commit()
 
 
-@pytest.mark.asyncio
-async def test_fetch_active_facts_from_store_vs_http_equivalent_structure(temp_db):
+def test_fetch_active_facts_from_store_vs_http_equivalent_structure(temp_db):
     """
     回归：同一套 seed 数据，store fetch 与「HTTP 等价」结果结构等价、排序稳定。
     HTTP 等价 = GET global active + GET session(conv_id) active，按 key 去重（session 覆盖 global），
@@ -240,56 +239,59 @@ async def test_fetch_active_facts_from_store_vs_http_equivalent_structure(temp_d
     from app.api import memory as memory_api
     from memory.schemas import ProposalPayload, SourceRef, SourceKind
 
-    db, _ = temp_db
-    store = MemoryStore(db=db)
-    conv_id = "conv-regression-test"
+    async def run():
+        db, _ = temp_db
+        store = MemoryStore(db=db)
+        conv_id = "conv-regression-test"
 
-    # Seed: global fact + session fact（同 key 覆盖）
-    req_global = memory_api.ProposalCreateRequest(
-        payload=ProposalPayload(key="likes", value="cats", tags=[], ttl_seconds=None),
-        source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="r1", excerpt=None),
-    )
-    prop_global = asyncio.run(memory_api.create_proposal(req_global, store=store))
-    _commit_db(db)
-    asyncio.run(memory_api.accept_proposal(prop_global["proposal"]["id"], memory_api.ProposalAcceptRequest(scope=Scope.GLOBAL), store=store))
-    _commit_db(db)
+        # Seed: global fact + session fact（同 key 覆盖）
+        req_global = memory_api.ProposalCreateRequest(
+            payload=ProposalPayload(key="likes", value="cats", tags=[], ttl_seconds=None),
+            source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="r1", excerpt=None),
+        )
+        prop_global = await memory_api.create_proposal(req_global, store=store)
+        _commit_db(db)
+        await memory_api.accept_proposal(prop_global["proposal"]["id"], memory_api.ProposalAcceptRequest(scope=Scope.GLOBAL), store=store)
+        _commit_db(db)
 
-    req_session = memory_api.ProposalCreateRequest(
-        payload=ProposalPayload(key="likes", value="dogs", tags=[], ttl_seconds=None),
-        source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="r2", excerpt=None),
-    )
-    prop_session = asyncio.run(memory_api.create_proposal(req_session, store=store))
-    _commit_db(db)
-    asyncio.run(memory_api.accept_proposal(prop_session["proposal"]["id"], memory_api.ProposalAcceptRequest(scope=Scope.SESSION, session_id=conv_id), store=store))
-    _commit_db(db)
+        req_session = memory_api.ProposalCreateRequest(
+            payload=ProposalPayload(key="likes", value="dogs", tags=[], ttl_seconds=None),
+            source_ref=SourceRef(kind=SourceKind.MANUAL, ref_id="r2", excerpt=None),
+        )
+        prop_session = await memory_api.create_proposal(req_session, store=store)
+        _commit_db(db)
+        await memory_api.accept_proposal(prop_session["proposal"]["id"], memory_api.ProposalAcceptRequest(scope=Scope.SESSION, session_id=conv_id), store=store)
+        _commit_db(db)
 
-    # 1) Store fetch（当前实现）
-    store_list, source = await fetch_active_facts_from_store(store, conversation_id=conv_id)
-    assert source == "store"
-    assert len(store_list) >= 1
-    # session 覆盖 global，应为 dogs
-    likes = next((f for f in store_list if f.get("key") == "likes"), None)
-    assert likes is not None
-    assert likes.get("value") == "dogs"
+        # 1) Store fetch（当前实现）
+        store_list, source = await fetch_active_facts_from_store(store, conversation_id=conv_id)
+        assert source == "store"
+        assert len(store_list) >= 1
+        # session 覆盖 global，应为 dogs
+        likes = next((f for f in store_list if f.get("key") == "likes"), None)
+        assert likes is not None
+        assert likes.get("value") == "dogs"
 
-    # 2) HTTP 等价：list_facts global + list_facts session，按 key 去重，fact_to_dict
-    global_facts = await store.list_facts(scope=Scope.GLOBAL, status=FactStatus.ACTIVE)
-    session_facts = await store.list_facts(scope=Scope.SESSION, session_id=conv_id, status=FactStatus.ACTIVE)
-    by_key = {}
-    for f in global_facts:
-        if f.key:
-            by_key[f.key] = f
-    for f in session_facts:
-        if f.key:
-            by_key[f.key] = f
-    http_equivalent = sorted([fact_to_dict(f) for f in by_key.values()], key=lambda x: (x.get("key") or "", x.get("id") or ""))
+        # 2) HTTP 等价：list_facts global + list_facts session，按 key 去重，fact_to_dict
+        global_facts = await store.list_facts(scope=Scope.GLOBAL, status=FactStatus.ACTIVE)
+        session_facts = await store.list_facts(scope=Scope.SESSION, session_id=conv_id, status=FactStatus.ACTIVE)
+        by_key = {}
+        for f in global_facts:
+            if f.key:
+                by_key[f.key] = f
+        for f in session_facts:
+            if f.key:
+                by_key[f.key] = f
+        http_equivalent = sorted([fact_to_dict(f) for f in by_key.values()], key=lambda x: (x.get("key") or "", x.get("id") or ""))
 
-    # 3) 结构等价：相同 key 集合、条数；每条字段一致（store 侧可能 limit 截断，只比较前 N 条）
-    store_keys = {f.get("key") for f in store_list if f.get("key")}
-    http_keys = {f.get("key") for f in http_equivalent if f.get("key")}
-    assert store_keys == http_keys, "store vs HTTP equivalent key set mismatch"
-    assert len(store_list) == len(http_equivalent), "store vs HTTP equivalent length mismatch"
-    for i, (s, h) in enumerate(zip(store_list, http_equivalent)):
-        assert set(s.keys()) == set(h.keys()), f"index {i} keys mismatch"
-        for k in s:
-            assert s.get(k) == h.get(k), f"index {i} key {k} value mismatch"
+        # 3) 结构等价：相同 key 集合、条数；每条字段一致（store 侧可能 limit 截断，只比较前 N 条）
+        store_keys = {f.get("key") for f in store_list if f.get("key")}
+        http_keys = {f.get("key") for f in http_equivalent if f.get("key")}
+        assert store_keys == http_keys, "store vs HTTP equivalent key set mismatch"
+        assert len(store_list) == len(http_equivalent), "store vs HTTP equivalent length mismatch"
+        for i, (s, h) in enumerate(zip(store_list, http_equivalent)):
+            assert set(s.keys()) == set(h.keys()), f"index {i} keys mismatch"
+            for k in s:
+                assert s.get(k) == h.get(k), f"index {i} key {k} value mismatch"
+
+    asyncio.run(run())
