@@ -184,6 +184,49 @@
   overflow-y: auto;
 }
 
+.run-drawer-sources {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run-drawer-source-item {
+  padding: 10px 12px;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  background-color: #fafafa;
+}
+
+.run-drawer-source-item:last-child {
+  margin-bottom: 0;
+}
+
+.run-drawer-source-link {
+  font-size: 14px;
+  font-weight: 500;
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.run-drawer-source-link:hover {
+  text-decoration: underline;
+}
+
+.run-drawer-source-snippet {
+  margin: 6px 0 0 0;
+  font-size: 13px;
+  color: #6b7280;
+  line-height: 1.4;
+}
+
+.run-drawer-source-provider {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: #9ca3af;
+}
+
 .run-drawer-steps {
   list-style: none;
   margin: 0;
@@ -221,6 +264,44 @@
   margin-left: auto;
   color: #ef4444;
   font-size: 12px;
+}
+
+.run-drawer-diff {
+  margin: 0 0 12px 0;
+  padding: 12px;
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: ui-monospace, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.run-drawer-wait-confirm-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.run-drawer-apply-btn {
+  background-color: #10b981;
+  color: #ffffff;
+}
+
+.run-drawer-apply-btn:hover {
+  background-color: #059669;
+}
+
+.run-drawer-cancel-edit-btn {
+  background-color: #f3f4f6;
+  color: #374151;
+}
+
+.run-drawer-cancel-edit-btn:hover {
+  background-color: #e5e7eb;
 }
 
 .run-drawer-error {

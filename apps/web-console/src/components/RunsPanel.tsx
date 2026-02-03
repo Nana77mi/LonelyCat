@@ -13,6 +13,8 @@ type RunsPanelProps = {
   onDeleteRun?: (runId: string) => void;
   onRetryRun?: (run: Run) => void;
   onCancelRun?: (runId: string) => void;
+  onApplyEditDocs?: (run: Run) => void;
+  onCancelEditDocs?: (run: Run) => void;
 };
 
 export const RunsPanel = ({
@@ -24,6 +26,8 @@ export const RunsPanel = ({
   onDeleteRun,
   onRetryRun,
   onCancelRun,
+  onApplyEditDocs,
+  onCancelEditDocs,
 }: RunsPanelProps) => {
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
   const [selectedRun, setSelectedRun] = useState<Run | null>(null);
@@ -259,6 +263,8 @@ export const RunsPanel = ({
         run={selectedRun}
         onClose={() => setSelectedRun(null)}
         onRetryRun={onRetryRun}
+        onApplyEditDocs={onApplyEditDocs}
+        onCancelEditDocs={onCancelEditDocs}
       />
     </div>
   );

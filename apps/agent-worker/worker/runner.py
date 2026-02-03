@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from typing import Any, Callable, Dict, List, Optional
@@ -10,6 +11,7 @@ from agent_worker.llm import BaseLLM
 from worker.db import RunModel
 from worker.db_models import MessageModel, MessageRole
 from worker.task_context import TaskContext, run_task_with_steps
+from worker.tools import ToolRuntime
 
 
 class TaskRunner:
@@ -63,6 +65,14 @@ class TaskRunner:
             return self._handle_sleep(run, heartbeat_callback)
         elif run.type == "summarize_conversation":
             return self._handle_summarize_conversation(run, db, llm, heartbeat_callback)
+        elif run.type == "research_report":
+            return self._handle_research_report(run, heartbeat_callback)
+        elif run.type == "edit_docs_propose":
+            return self._handle_edit_docs_propose(run, heartbeat_callback)
+        elif run.type == "edit_docs_apply":
+            return self._handle_edit_docs_apply(run, db, heartbeat_callback)
+        elif run.type == "edit_docs_cancel":
+            return self._handle_edit_docs_cancel(run, db, heartbeat_callback)
         else:
             raise ValueError(f"Unknown task type: {run.type}")
 
@@ -71,46 +81,232 @@ class TaskRunner:
         run: RunModel,
         heartbeat_callback: Callable[[], bool],
     ) -> Dict[str, Any]:
-        """处理 sleep 任务
-        
-        Args:
-            run: Run 模型
-            heartbeat_callback: 心跳回调函数
-            
-        Returns:
-            {"ok": True, "slept": seconds}
-            
-        Raises:
-            ValueError: 输入格式错误
-            RuntimeError: 心跳失败，任务被接管
-        """
-        # 解析输入
+        """处理 sleep 任务；使用 run_task_with_steps 统一 trace/steps/artifacts。"""
         input_json = run.input_json
         if not isinstance(input_json, dict):
             raise ValueError("input_json must be a dict")
-        
-        seconds = input_json.get("seconds")
-        if not isinstance(seconds, (int, float)) or seconds < 0:
-            raise ValueError("input_json['seconds'] must be a non-negative number")
-        
-        seconds = int(seconds)
-        
-        # 每秒 sleep(1)，更新 progress，调用 heartbeat
-        slept = 0
-        while slept < seconds:
-            # 检查心跳（如果失败说明任务被接管，应该停止）
-            if not heartbeat_callback():
-                raise RuntimeError("Heartbeat failed, task was taken over by another worker")
-            
-            # Sleep 1 秒
-            time.sleep(1)
-            slept += 1
-            
-            # 更新进度（可选）
-            # 注意：这里不直接更新数据库，因为 heartbeat 已经更新了 updated_at
-            # 如果需要更新 progress，可以在 heartbeat 回调中一起更新
-        
-        return {"ok": True, "slept": slept}
+        seconds_val = input_json.get("seconds")
+        if not isinstance(seconds_val, (int, float)) or seconds_val < 0:
+            raise ValueError("seconds must be >= 0")
+        seconds = int(seconds_val)
+
+        def body(ctx: TaskContext) -> None:
+            slept = 0
+            with ctx.step("sleep") as step_meta:
+                step_meta["seconds_requested"] = seconds
+                while slept < seconds:
+                    if not heartbeat_callback():
+                        raise RuntimeError(
+                            "Heartbeat failed, task was taken over by another worker"
+                        )
+                    time.sleep(1)
+                    slept += 1
+                step_meta["slept"] = slept
+                ctx.result["slept"] = slept
+                ctx.artifacts["duration_seconds"] = slept
+
+        return run_task_with_steps(run, "sleep", body)
+
+    def _handle_research_report(
+        self,
+        run: RunModel,
+        heartbeat_callback: Callable[[], bool],
+    ) -> Dict[str, Any]:
+        """处理 research_report 任务；stub 搜索/抓取，产出 report + sources（含 provider）。"""
+        input_json = run.input_json
+        if not isinstance(input_json, dict):
+            raise ValueError("input_json must be a dict")
+        query = input_json.get("query")
+        if not query or not isinstance(query, str):
+            raise ValueError("input_json['query'] must be a non-empty string")
+        max_sources = input_json.get("max_sources", 5)
+        if not isinstance(max_sources, int) or max_sources < 1:
+            max_sources = 5
+        max_sources = min(max_sources, 20)
+
+        runtime = ToolRuntime()
+
+        def body(ctx: TaskContext) -> None:
+            self._research_report_body(ctx, query, max_sources, runtime)
+
+        return run_task_with_steps(run, "research_report", body)
+
+    def _research_report_body(
+        self,
+        ctx: TaskContext,
+        query: str,
+        max_sources: int,
+        runtime: ToolRuntime,
+    ) -> None:
+        """research_report 业务逻辑：ToolRuntime 调用 search/fetch_pages，再 extract → dedupe_rank → write_report。"""
+        raw_sources: List[Dict[str, Any]] = runtime.invoke(ctx, "web.search", {"query": query})
+        raw_sources = raw_sources[:max_sources]
+        for s in raw_sources:
+            s.setdefault("provider", "stub")
+
+        fetch_result = runtime.invoke(
+            ctx,
+            "web.fetch",
+            {"urls": [s.get("url", "") for s in raw_sources]},
+        )
+        contents = fetch_result.get("contents") or {}
+        for s in raw_sources:
+            s["content"] = contents.get(s.get("url", ""), "")
+
+        with ctx.step("extract"):
+            excerpts = [s.get("snippet", "") or s.get("content", "")[:200] for s in raw_sources]
+
+        with ctx.step("dedupe_rank"):
+            # 简单去重/排序（stub 下可不变）
+            ranked = list(raw_sources)
+
+        with ctx.step("write_report"):
+            _MAX_URL, _MAX_SNIPPET = 2048, 4096
+            report_text = f"# Research Report (stub)\n\nQuery: {query}\n\n## Sources\n\n"
+            for i, s in enumerate(ranked, 1):
+                u = (s.get("url") or "")[:_MAX_URL]
+                sn = (s.get("snippet") or "")[:_MAX_SNIPPET]
+                report_text += f"- [{s.get('title', '')[:200]}]({u}): {sn}\n"
+            ctx.result["query"] = query
+            ctx.result["source_count"] = len(ranked)
+            ctx.artifacts["report"] = {"text": report_text, "format": "markdown"}
+            sources_out = []
+            for s in ranked:
+                url = (s.get("url") or "")[:_MAX_URL]
+                snippet = (s.get("snippet") or "")[:_MAX_SNIPPET]
+                title = (s.get("title") or "")[:512]
+                sources_out.append({
+                    "title": title,
+                    "url": url,
+                    "snippet": snippet,
+                    "provider": s.get("provider", "stub"),
+                })
+            ctx.artifacts["sources"] = sources_out
+            ctx.artifacts["evidence"] = [
+                {"quote": ex[:100], "source_index": i}
+                for i, ex in enumerate(excerpts[:5]) if ex
+            ]
+
+    def _handle_edit_docs_propose(
+        self,
+        run: RunModel,
+        heartbeat_callback: Callable[[], bool],
+    ) -> Dict[str, Any]:
+        """edit_docs_propose：只读，产出 diff + WAIT_CONFIRM，正常 SUCCEEDED。"""
+        input_json = run.input_json or {}
+        if not isinstance(input_json, dict):
+            raise ValueError("input_json must be a dict")
+        target_path = input_json.get("target_path", "/sandbox/example.txt")
+        if not isinstance(target_path, str):
+            target_path = "/sandbox/example.txt"
+
+        def body(ctx: TaskContext) -> None:
+            self._edit_docs_propose_body(ctx, target_path)
+
+        return run_task_with_steps(run, "edit_docs_propose", body)
+
+    def _edit_docs_propose_body(self, ctx: TaskContext, target_path: str) -> None:
+        """Steps: read_file → propose_patch → present_diff；产出 artifacts.diff + task_state=WAIT_CONFIRM。"""
+        content = ""
+        with ctx.step("read_file"):
+            content = f"stub content for {target_path}\nline2\n"
+
+        diff_text = ""
+        with ctx.step("propose_patch"):
+            diff_text = f"""--- a{target_path}
++++ b{target_path}
+@@ -1,2 +1,2 @@
+-stub content for {target_path}
++stub content for {target_path} (patched)
+ line2
+"""
+
+        with ctx.step("present_diff"):
+            patch_id_full = hashlib.sha256(diff_text.encode()).hexdigest()
+            patch_id_short = patch_id_full[:16]
+            ctx.result["task_state"] = "WAIT_CONFIRM"
+            ctx.artifacts["diff"] = diff_text
+            ctx.artifacts["files"] = [target_path]
+            ctx.artifacts["patch_id"] = patch_id_full
+            ctx.artifacts["patch_id_short"] = patch_id_short
+            ctx.artifacts["applied"] = False
+
+    def _handle_edit_docs_apply(
+        self,
+        run: RunModel,
+        db: Session,
+        heartbeat_callback: Callable[[], bool],
+    ) -> Dict[str, Any]:
+        """edit_docs_apply：从 parent run 读 diff，执行 apply_patch（v0 仅记录 applied）。"""
+        input_json = run.input_json or {}
+        if not isinstance(input_json, dict):
+            raise ValueError("input_json must be a dict")
+        parent_run_id = input_json.get("parent_run_id")
+        patch_id = input_json.get("patch_id")
+        if not parent_run_id or not isinstance(parent_run_id, str):
+            raise ValueError("input_json['parent_run_id'] must be a non-empty string")
+        if not patch_id or not isinstance(patch_id, str):
+            raise ValueError("input_json['patch_id'] must be a non-empty string")
+
+        parent_run = db.query(RunModel).filter(RunModel.id == parent_run_id).first()
+        if not parent_run or not parent_run.output_json:
+            raise ValueError(f"Parent run {parent_run_id} not found or has no output")
+        artifacts = parent_run.output_json.get("artifacts") or {}
+        diff_text = artifacts.get("diff")
+        if not diff_text:
+            raise ValueError("Parent run artifacts.diff is missing")
+        parent_patch_id = artifacts.get("patch_id") or ""
+        if not parent_patch_id:
+            raise ValueError("Parent run artifacts.patch_id is missing")
+        if parent_patch_id != patch_id and (len(parent_patch_id) < 16 or parent_patch_id[:16] != patch_id):
+            raise ValueError(
+                "PatchMismatch: input.patch_id does not match parent run artifacts.patch_id"
+            )
+
+        def body(ctx: TaskContext) -> None:
+            self._edit_docs_apply_body(ctx, diff_text, parent_patch_id)
+
+        return run_task_with_steps(run, "edit_docs_apply", body)
+
+    def _edit_docs_apply_body(
+        self, ctx: TaskContext, diff_text: str, patch_id: str
+    ) -> None:
+        """Steps: apply_patch（v0 不落盘，仅设 applied）→ 可选 lint。"""
+        with ctx.step("apply_patch"):
+            # v0: 不真实写文件，只记录已“应用”
+            ctx.artifacts["applied"] = True
+            ctx.artifacts["patch_id"] = patch_id
+        with ctx.step("lint"):
+            ctx.artifacts["lint_ok"] = True
+
+    def _handle_edit_docs_cancel(
+        self,
+        run: RunModel,
+        db: Session,
+        heartbeat_callback: Callable[[], bool],
+    ) -> Dict[str, Any]:
+        """edit_docs_cancel：只读、无副作用，记录用户拒绝；artifacts.patch_id + canceled=True。"""
+        input_json = run.input_json or {}
+        if not isinstance(input_json, dict):
+            raise ValueError("input_json must be a dict")
+        parent_run_id = input_json.get("parent_run_id")
+        if not parent_run_id or not isinstance(parent_run_id, str):
+            raise ValueError("input_json['parent_run_id'] must be a non-empty string")
+        patch_id = input_json.get("patch_id")
+        if not patch_id or not isinstance(patch_id, str):
+            parent_run = db.query(RunModel).filter(RunModel.id == parent_run_id).first()
+            if parent_run and parent_run.output_json:
+                artifacts = parent_run.output_json.get("artifacts") or {}
+                patch_id = artifacts.get("patch_id") or ""
+            if not patch_id:
+                raise ValueError("patch_id required or parent run must have artifacts.patch_id")
+
+        def body(ctx: TaskContext) -> None:
+            with ctx.step("record_cancel"):
+                ctx.artifacts["patch_id"] = patch_id
+                ctx.artifacts["canceled"] = True
+
+        return run_task_with_steps(run, "edit_docs_cancel", body)
 
     def _handle_summarize_conversation(
         self,

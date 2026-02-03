@@ -37,6 +37,10 @@ def _read_list_env(name: str, default: List[str]) -> List[str]:
 DEFAULT_ALLOWED_RUN_TYPES = [
     "sleep",
     "summarize_conversation",
+    "research_report",
+    "edit_docs_propose",
+    "edit_docs_apply",
+    "edit_docs_cancel",
     # "index_repo",  # Optional, uncomment if needed
     # "fetch_web",   # Optional, uncomment if needed
 ]

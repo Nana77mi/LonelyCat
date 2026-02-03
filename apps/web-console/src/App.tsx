@@ -523,6 +523,59 @@ const App = () => {
     }
   }, [conversationId, location.pathname, startPolling]);
 
+  const handleCancelEditDocs = useCallback(async (run: Run) => {
+    const output = run.output as Record<string, unknown> | undefined;
+    const artifacts = (output?.artifacts as Record<string, unknown> | undefined) ?? {};
+    const patchId = (artifacts.patch_id as string) ?? (artifacts.patch_id_short as string);
+    if (!patchId) return;
+    try {
+      await createRun({
+        type: "edit_docs_cancel",
+        title: "Cancel patch",
+        conversation_id: run.conversation_id ?? undefined,
+        input: { parent_run_id: run.id, patch_id: patchId },
+        parent_run_id: run.id,
+      });
+      const pathMatch = location.pathname.match(/\/chat\/([^/]+)/);
+      const currentConvId = conversationId || (pathMatch ? pathMatch[1] : null);
+      if (currentConvId) {
+        const list = await listConversationRuns(currentConvId);
+        setRuns(list);
+      }
+    } catch {
+      // optional: ignore
+    }
+  }, [conversationId, location.pathname]);
+
+  const handleApplyEditDocs = useCallback(async (run: Run) => {
+    const output = run.output as Record<string, unknown> | undefined;
+    const artifacts = (output?.artifacts as Record<string, unknown> | undefined) ?? {};
+    const patchId = artifacts.patch_id as string | undefined;
+    if (!patchId) {
+      console.error("Apply edit: patch_id missing in run output");
+      return;
+    }
+    try {
+      const newRun = await createRun({
+        type: "edit_docs_apply",
+        title: "Apply patch",
+        conversation_id: run.conversation_id ?? undefined,
+        input: { parent_run_id: run.id, patch_id: patchId },
+        parent_run_id: run.id,
+      });
+      setRuns((prev) => [newRun, ...prev]);
+      const pathMatch = location.pathname.match(/\/chat\/([^/]+)/);
+      const currentConvId = conversationId || (pathMatch ? pathMatch[1] : null);
+      if (currentConvId && !pollingIntervalRef.current) {
+        startPolling(currentConvId);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "创建 Apply 任务失败";
+      console.error("Failed to create edit_docs_apply run:", error);
+      alert(errorMessage);
+    }
+  }, [conversationId, location.pathname, startPolling]);
+
   const handleCancelRun = useCallback(async (runId: string) => {
     // 乐观更新：立即更新本地 state
     const originalRuns = [...runs];
@@ -625,6 +678,8 @@ const App = () => {
               onDeleteRun={handleDeleteRun}
               onRetryRun={handleRetryRun}
               onCancelRun={handleCancelRun}
+              onApplyEditDocs={handleApplyEditDocs}
+              onCancelEditDocs={handleCancelEditDocs}
             />
           ) : undefined
         }

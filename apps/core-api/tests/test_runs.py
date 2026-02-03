@@ -580,8 +580,20 @@ def test_complete_success_clears_lease(temp_db) -> None:
     assert claimed_run is not None
     assert claimed_run.lease_expires_at is not None
     
-    # 完成任务（成功）
-    output_json = {"ok": True, "slept": 5}
+    # 完成任务（成功）- sleep 使用 task_result_v0 结构
+    output_json = {
+        "version": "task_result_v0",
+        "ok": True,
+        "trace_id": "a" * 32,
+        "task_type": "sleep",
+        "result": {"slept": 5},
+        "artifacts": {"duration_seconds": 5},
+        "steps": [
+            {"name": "sleep", "ok": True, "duration_ms": 0, "error_code": None, "meta": {}}
+        ],
+        "trace_lines": [],
+        "error": None,
+    }
     complete_success(db, run_id, output_json)
     _commit_db(db)
     
