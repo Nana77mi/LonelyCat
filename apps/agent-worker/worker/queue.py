@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
-from sqlalchemy import and_, or_, update
+from sqlalchemy import and_, or_, update, func
 from sqlalchemy.orm import Session
 
 from worker.db import RunModel, RunStatus
@@ -86,6 +86,7 @@ def claim_run(
     # 原子性 conditional update
     # 只有当 run 仍然处于可抢占状态时才更新
     # 使用 SQLAlchemy 的 update() 函数来处理 attempt + 1
+    # 注意：使用 synchronize_session=False 避免 Python 层面的 datetime 比较问题
     stmt = (
         update(RunModel)
         .where(
@@ -107,6 +108,7 @@ def claim_run(
             attempt=RunModel.attempt + 1,
             updated_at=now,
         )
+        .execution_options(synchronize_session=False)
     )
     result = db.execute(stmt)
     
