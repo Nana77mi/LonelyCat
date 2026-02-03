@@ -20,8 +20,9 @@ from agent_worker.trace import TraceCollector
 
 PERSONA_REGISTRY = PersonaRegistry.load_default()
 
-# Maximum number of conversation turns to keep in context
-MAX_TURNS = int(os.getenv("CHAT_MAX_TURNS", "10"))
+# Maximum number of messages to keep in context (after filtering user/assistant only)
+# Default: 40 messages (more robust than MAX_TURNS * 2 for non-strict alternation)
+MAX_MESSAGES = int(os.getenv("CHAT_MAX_MESSAGES", "40"))
 
 @dataclass(frozen=True)
 class ChatResult:
@@ -87,15 +88,19 @@ def chat_flow(
 
     # Apply context window limit if history messages are provided
     if history_messages is not None:
-        # Limit to last MAX_TURNS * 2 messages (each turn = user + assistant)
-        # Filter out system messages for counting (they're handled separately)
-        non_system_messages = [msg for msg in history_messages if msg.get("role") != "system"]
-        if len(non_system_messages) > MAX_TURNS * 2:
-            # Keep system messages and last MAX_TURNS * 2 non-system messages
-            system_messages = [msg for msg in history_messages if msg.get("role") == "system"]
-            limited_non_system = non_system_messages[-(MAX_TURNS * 2):]
-            history_messages = system_messages + limited_non_system
-            trace.record("chat_flow.context_window_limited", f"kept {len(history_messages)} messages")
+        # Filter to only user/assistant messages (system messages are handled separately in responder)
+        # Then truncate by message count (more robust than MAX_TURNS * 2 for non-strict alternation)
+        user_assistant_messages = [
+            msg for msg in history_messages 
+            if msg.get("role") in ("user", "assistant")
+        ]
+        if len(user_assistant_messages) > MAX_MESSAGES:
+            # Keep only the last MAX_MESSAGES user/assistant messages
+            history_messages = user_assistant_messages[-MAX_MESSAGES:]
+            trace.record("chat_flow.context_window_limited", f"kept {len(history_messages)} messages (max: {MAX_MESSAGES})")
+        else:
+            # Ensure only user/assistant messages are passed (filter out any system messages)
+            history_messages = user_assistant_messages
 
     try:
         if history_messages is not None:

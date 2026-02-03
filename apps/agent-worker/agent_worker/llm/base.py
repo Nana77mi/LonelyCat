@@ -22,11 +22,34 @@ class BaseLLM(ABC):
 
     def generate_messages(self, messages: list[dict[str, str]]) -> str:
         """
-        Takes a list of messages in format [{"role": "user|assistant|system", "content": "..."}, ...].
-        Returns raw text output from the model (string).
-        Default implementation converts messages to prompt string for backward compatibility.
-        Subclasses should override this for better message handling.
+        Takes a list of messages and returns raw text output from the model.
+        
+        Message format:
+        - Each message must be a dict with "role" and "content" keys
+        - role: Must be one of "system", "user", or "assistant" (case-sensitive)
+        - content: Must be a string
+        
+        Args:
+            messages: List of message dicts in format [{"role": "system|user|assistant", "content": "..."}, ...]
+            
+        Returns:
+            Raw text output from the model (string)
+            
+        Note:
+            Default implementation converts messages to prompt string for backward compatibility.
+            Subclasses should override this for better message handling.
         """
+        # Validate message format
+        for msg in messages:
+            if not isinstance(msg, dict):
+                raise ValueError(f"Message must be a dict, got {type(msg)}")
+            role = msg.get("role", "user")
+            if role not in ("system", "user", "assistant"):
+                raise ValueError(f"Role must be 'system', 'user', or 'assistant', got '{role}'")
+            content = msg.get("content", "")
+            if not isinstance(content, str):
+                raise ValueError(f"Content must be a string, got {type(content)}")
+        
         # Default implementation: convert messages to prompt string
         prompt_parts = []
         for msg in messages:
