@@ -636,3 +636,135 @@ def test_fetch_runnable_candidate_prioritizes_queued(temp_db) -> None:
     now = datetime.now(UTC)
     candidate_id = fetch_runnable_candidate(db, now)
     assert candidate_id == run2_id  # queued 优先
+
+
+def test_delete_run_success(temp_db) -> None:
+    """测试删除 run 成功"""
+    db, _ = temp_db
+    
+    # 创建一个 run
+    request = runs.RunCreateRequest(
+        type="sleep",
+        title="Test Sleep",
+        input={"seconds": 5}
+    )
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # 验证 run 存在
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert db_run is not None
+    assert db_run.type == "sleep"
+    
+    # 删除 run
+    asyncio.run(runs._delete_run(run_id, db))
+    _commit_db(db)
+    
+    # 验证 run 已被删除
+    deleted_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert deleted_run is None
+
+
+def test_delete_run_not_found(temp_db) -> None:
+    """测试删除不存在的 run 返回 404"""
+    db, _ = temp_db
+    
+    # 尝试删除不存在的 run
+    non_existent_id = str(uuid.uuid4())
+    
+    with pytest.raises(HTTPException) as exc_info:
+        asyncio.run(runs._delete_run(non_existent_id, db))
+    
+    assert exc_info.value.status_code == 404
+    assert "not found" in exc_info.value.detail.lower()
+
+
+def test_delete_run_with_different_statuses(temp_db) -> None:
+    """测试删除不同状态的 run"""
+    db, _ = temp_db
+    
+    # 创建不同状态的 runs
+    statuses = [
+        RunStatus.QUEUED,
+        RunStatus.RUNNING,
+        RunStatus.SUCCEEDED,
+        RunStatus.FAILED,
+        RunStatus.CANCELED,
+    ]
+    
+    created_run_ids = []
+    for status in statuses:
+        request = runs.RunCreateRequest(
+            type="sleep",
+            input={"seconds": 1}
+        )
+        run_response = asyncio.run(runs._create_run(request, db))
+        _commit_db(db)
+        run_id = run_response["id"]
+        
+        # 设置状态（除了 queued，其他状态需要手动设置）
+        if status != RunStatus.QUEUED:
+            db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+            db_run.status = status
+            _commit_db(db)
+        
+        created_run_ids.append(run_id)
+    
+    # 验证所有 runs 都存在
+    for run_id in created_run_ids:
+        db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+        assert db_run is not None
+    
+    # 删除所有 runs
+    for run_id in created_run_ids:
+        asyncio.run(runs._delete_run(run_id, db))
+        _commit_db(db)
+    
+    # 验证所有 runs 都已删除
+    for run_id in created_run_ids:
+        deleted_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+        assert deleted_run is None
+
+
+def test_delete_run_with_conversation_id(temp_db) -> None:
+    """测试删除有 conversation_id 的 run"""
+    db, _ = temp_db
+    
+    # 创建一个 conversation
+    conv_id = str(uuid.uuid4())
+    conversation = ConversationModel(
+        id=conv_id,
+        title="Test Conversation",
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    db.add(conversation)
+    _commit_db(db)
+    
+    # 创建一个关联到 conversation 的 run
+    request = runs.RunCreateRequest(
+        type="sleep",
+        title="Test Sleep",
+        conversation_id=conv_id,
+        input={"seconds": 5}
+    )
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # 验证 run 存在且关联到 conversation
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert db_run is not None
+    assert db_run.conversation_id == conv_id
+    
+    # 删除 run
+    asyncio.run(runs._delete_run(run_id, db))
+    _commit_db(db)
+    
+    # 验证 run 已被删除，但 conversation 仍然存在
+    deleted_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert deleted_run is None
+    
+    db_conv = db.query(ConversationModel).filter(ConversationModel.id == conv_id).first()
+    assert db_conv is not None

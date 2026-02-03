@@ -243,3 +243,25 @@ async def list_runs(
     支持按 status 过滤和分页参数 limit 和 offset。
     """
     return await _list_runs(db, status=status, limit=limit, offset=offset)
+
+
+async def _delete_run(run_id: str, db: Session) -> None:
+    """删除 Run（内部函数，便于测试）"""
+    run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    db.delete(run)
+    db.commit()
+
+
+@router.delete("/{run_id}", status_code=204)
+async def delete_run(
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> None:
+    """删除 Run
+    
+    如果 Run 不存在，返回 404。
+    """
+    await _delete_run(run_id, db)
