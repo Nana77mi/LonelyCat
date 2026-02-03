@@ -2,7 +2,7 @@ import asyncio
 import os
 import tempfile
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
@@ -160,7 +160,7 @@ def test_create_message(temp_db) -> None:
     
     # 直接创建消息（测试数据库模型）
     message_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     
     message = MessageModel(
         id=message_id,
@@ -201,7 +201,7 @@ def test_get_conversation_messages(temp_db) -> None:
         conversation_id=conv["id"],
         role=MessageRole.USER,
         content="First message",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
     db.add(message1)
     _commit_db(db)
@@ -214,7 +214,7 @@ def test_get_conversation_messages(temp_db) -> None:
         conversation_id=conv["id"],
         role=MessageRole.ASSISTANT,
         content="Second message",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
     db.add(message2)
     _commit_db(db)
@@ -226,7 +226,7 @@ def test_get_conversation_messages(temp_db) -> None:
         conversation_id=conv["id"],
         role=MessageRole.SYSTEM,
         content="Third message",
-        created_at=datetime.utcnow(),
+        created_at=datetime.now(UTC),
     )
     db.add(message3)
     _commit_db(db)

@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Optional
 
 from sqlalchemy import (
+    Integer,
     JSON,
     Column,
     DateTime,
@@ -26,6 +27,15 @@ class MessageRole(str, Enum):
     USER = "user"
     ASSISTANT = "assistant"
     SYSTEM = "system"
+
+
+class RunStatus(str, Enum):
+    """Run 状态枚举"""
+    QUEUED = "queued"
+    RUNNING = "running"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELED = "canceled"
 
 
 # 数据库配置
@@ -53,8 +63,8 @@ class ConversationModel(Base):
 
     id = Column(String, primary_key=True, index=True)
     title = Column(String, nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
 
     # 关系
     messages = relationship("MessageModel", back_populates="conversation", cascade="all, delete-orphan")
@@ -73,7 +83,7 @@ class MessageModel(Base):
     conversation_id = Column(String, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
     role = Column(SQLEnum(MessageRole), nullable=False, index=True)
     content = Column(Text, nullable=False)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     source_ref = Column(JSON, nullable=True)  # 格式：{"kind": "chat|run|connector|manual", "ref_id": "...", "excerpt": "..."}
     meta_json = Column(JSON, nullable=True)
     client_msg_id = Column(String, nullable=True, index=True)  # 客户端消息 ID，用于幂等性去重
@@ -84,6 +94,32 @@ class MessageModel(Base):
     # 复合索引：用于查询某个对话的消息并按 created_at 排序
     __table_args__ = (
         Index("idx_messages_conversation_created", "conversation_id", "created_at"),
+    )
+
+
+class RunModel(Base):
+    """Run 数据库模型"""
+    __tablename__ = "runs"
+
+    id = Column(String, primary_key=True, index=True)
+    type = Column(String, nullable=False)  # 任务类型，例如 "sleep", "summarize", "index_repo"
+    status = Column(SQLEnum(RunStatus), nullable=False, index=True)
+    conversation_id = Column(String, ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True, index=True)
+    input_json = Column(JSON, nullable=False)  # 任务输入
+    output_json = Column(JSON, nullable=True)  # 任务输出
+    error = Column(Text, nullable=True)  # 失败信息
+    worker_id = Column(String, nullable=True)  # worker ID（用于抢占/恢复）
+    lease_expires_at = Column(DateTime, nullable=True)  # 租约过期时间
+    attempt = Column(Integer, nullable=False, default=0)  # 重试次数
+    progress = Column(Integer, nullable=True)  # 进度 0~100
+    title = Column(String, nullable=True)  # UI 显示用
+    created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+
+    # 复合索引：用于 worker 查询 queued 任务
+    # 索引：用于会话页查询
+    __table_args__ = (
+        Index("idx_runs_status_updated", "status", "updated_at"),
     )
 
 
