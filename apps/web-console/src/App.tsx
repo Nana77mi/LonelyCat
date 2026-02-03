@@ -101,11 +101,13 @@ const App = () => {
       try {
         const runsList = await listConversationRuns(currentConvId);
         setRuns(runsList);
+        previousRunsRef.current = runsList; // 初始化 previousRunsRef
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : "加载任务失败";
         setRunsError(errorMessage);
         console.error("Failed to load runs:", error);
         setRuns([]);
+        previousRunsRef.current = []; // 重置 previousRunsRef
       } finally {
         setRunsLoading(false);
       }
@@ -115,6 +117,7 @@ const App = () => {
 
   // 轮询 runs（持续轮询，自动检测活跃任务）
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const previousRunsRef = useRef<Run[]>([]); // 保存上一次的 runs 状态，用于检测状态变化
   
   // 启动或重启轮询的函数
   const startPolling = useCallback((convId: string) => {
@@ -128,10 +131,40 @@ const App = () => {
     const pollRuns = async () => {
       try {
         const currentRuns = await listConversationRuns(convId);
-        const hasActive = currentRuns.some(r => r.status === "queued" || r.status === "running");
         
-        // 更新 runs 状态
+        // 检查是否有 run 状态从非终态变为终态（可能产生了新消息）
+        const previousRuns = previousRunsRef.current;
+        const previousRunStatuses = new Map(previousRuns.map(r => [r.id, r.status]));
+        const finalStatuses = new Set(["succeeded", "failed", "canceled"]);
+        
+        let shouldRefreshMessages = false;
+        for (const run of currentRuns) {
+          const previousStatus = previousRunStatuses.get(run.id);
+          // 如果 run 状态从非终态变为终态，需要刷新消息
+          if (previousStatus && !finalStatuses.has(previousStatus) && finalStatuses.has(run.status)) {
+            shouldRefreshMessages = true;
+            break;
+          }
+        }
+        
+        // 更新 runs 状态和 ref
         setRuns(currentRuns);
+        previousRunsRef.current = currentRuns;
+        
+        // 如果有 run 完成，立即刷新消息列表（获取 run 完成后的主动消息）
+        if (shouldRefreshMessages) {
+          try {
+            const response = await listMessages(convId);
+            const sortedMessages = [...response.items].sort((a, b) => 
+              new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+            );
+            setMessages(sortedMessages);
+          } catch (error) {
+            console.error("Failed to refresh messages after run completion:", error);
+          }
+        }
+        
+        const hasActive = currentRuns.some(r => r.status === "queued" || r.status === "running");
         
         // 如果没有活跃任务，停止轮询
         if (!hasActive) {
@@ -333,6 +366,22 @@ const App = () => {
 
           return allMessages;
         });
+
+        // 立即刷新任务列表（Agent Decision 可能创建了新的 run）
+        // 确保轮询正在运行，并立即执行一次
+        if (targetConversationId) {
+          if (!pollingIntervalRef.current) {
+            startPolling(targetConversationId);
+          } else {
+            // 如果轮询已在运行，立即执行一次
+            try {
+              const currentRuns = await listConversationRuns(targetConversationId);
+              setRuns(currentRuns);
+            } catch (error) {
+              console.error("Failed to refresh runs after sending message:", error);
+            }
+          }
+        }
 
         // A3.4: 更新会话标题（第一条消息后）- 在 setMessages 外部处理异步操作
         if (previousMessageCount === 0 && response.user_message) {

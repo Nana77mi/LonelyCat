@@ -516,11 +516,18 @@ async def _create_message(
                 
                 if decision.run:
                     try:
+                        # For summarize_conversation, ensure conversation_id is in input
+                        run_input = decision.run.input.copy() if decision.run.input else {}
+                        if decision.run.type == "summarize_conversation":
+                            # Ensure conversation_id is in input (required by handler)
+                            if "conversation_id" not in run_input or not run_input.get("conversation_id"):
+                                run_input["conversation_id"] = decision.run.conversation_id or conversation_id
+                        
                         run_request = RunCreateRequest(
                             type=decision.run.type,
                             title=decision.run.title,
                             conversation_id=decision.run.conversation_id,
-                            input=decision.run.input,
+                            input=run_input,
                         )
                         run_result = await _create_run(run_request, db)
                         decision_run_id = run_result.get("id")
