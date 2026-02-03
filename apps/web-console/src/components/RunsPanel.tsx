@@ -1,0 +1,156 @@
+import type { Run } from "../api/runs";
+import { formatTime } from "../utils/time";
+import "./RunsPanel.css";
+
+type RunsPanelProps = {
+  runs: Run[];
+  loading?: boolean;
+  error?: string | null;
+  onRetry?: () => void;
+  onCreateRun?: () => void;
+  onDeleteRun?: (runId: string) => void;
+};
+
+export const RunsPanel = ({
+  runs,
+  loading = false,
+  error = null,
+  onRetry,
+  onCreateRun,
+  onDeleteRun,
+}: RunsPanelProps) => {
+  const getStatusColor = (status: Run["status"]): string => {
+    switch (status) {
+      case "queued":
+        return "#9ca3af"; // 灰色
+      case "running":
+        return "#3b82f6"; // 蓝色
+      case "succeeded":
+        return "#10b981"; // 绿色
+      case "failed":
+        return "#ef4444"; // 红色
+      case "canceled":
+        return "#6b7280"; // 深灰色
+      default:
+        return "#9ca3af";
+    }
+  };
+
+  const getStatusText = (status: Run["status"]): string => {
+    switch (status) {
+      case "queued":
+        return "排队中";
+      case "running":
+        return "运行中";
+      case "succeeded":
+        return "成功";
+      case "failed":
+        return "失败";
+      case "canceled":
+        return "已取消";
+      default:
+        return status;
+    }
+  };
+
+  const truncateError = (error: string | null | undefined): string => {
+    if (!error) return "";
+    return error.length > 100 ? `${error.slice(0, 100)}…` : error;
+  };
+
+  return (
+    <div className="runs-panel">
+      <div className="runs-panel-header">
+        <h3 className="runs-panel-title">Tasks</h3>
+        {onCreateRun && (
+          <button className="runs-panel-create-btn" onClick={onCreateRun} aria-label="创建任务">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path
+                d="M8 3v10M3 8h10"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      <div className="runs-panel-content">
+        {loading ? (
+          <div className="runs-panel-empty">
+            <p>Loading tasks…</p>
+          </div>
+        ) : error ? (
+          <div className="runs-panel-empty">
+            <p>Failed to load tasks</p>
+            {onRetry && (
+              <button className="runs-panel-retry-btn" onClick={onRetry}>
+                重试
+              </button>
+            )}
+          </div>
+        ) : runs.length === 0 ? (
+          <div className="runs-panel-empty">
+            <p>No tasks yet</p>
+          </div>
+        ) : (
+          <div className="runs-list">
+            {runs.map((run) => (
+              <div key={run.id} className="run-item">
+                <div className="run-item-header">
+                  <span
+                    className="run-status-badge"
+                    style={{ backgroundColor: getStatusColor(run.status) }}
+                  >
+                    {getStatusText(run.status)}
+                  </span>
+                  <span className="run-title">
+                    {run.title || run.type}
+                  </span>
+                  <span className="run-time">{formatTime(run.updated_at)}</span>
+                  {onDeleteRun && (
+                    <button
+                      className="run-delete-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDeleteRun(run.id);
+                      }}
+                      aria-label="删除任务"
+                      title="删除任务"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                        <path
+                          d="M3.5 3.5l7 7M10.5 3.5l-7 7"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+                {run.progress !== null && run.progress !== undefined && (
+                  <div className="run-progress">
+                    <div className="run-progress-bar">
+                      <div
+                        className="run-progress-fill"
+                        style={{ width: `${run.progress}%` }}
+                      />
+                    </div>
+                    <span className="run-progress-text">{run.progress}%</span>
+                  </div>
+                )}
+                {run.status === "failed" && run.error && (
+                  <div className="run-error">
+                    {truncateError(run.error)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};

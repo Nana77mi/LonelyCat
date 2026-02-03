@@ -201,6 +201,7 @@
   transition: border-color 0.2s;
 }
 
+
 .chat-input-container:focus-within {
   border-color: #3b82f6;
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);

@@ -12,8 +12,10 @@ PIP  := $(VENV)/bin/pip
 
 PID_DIR := .pids
 API_PID := $(PID_DIR)/core-api.pid
+WORKER_PID := $(PID_DIR)/agent-worker.pid
 
 CORE_API_DIR := apps/core-api
+AGENT_WORKER_DIR := apps/agent-worker
 WEB_CONSOLE_DIR := apps/web-console
 
 API_HOST := 127.0.0.1
@@ -70,13 +72,18 @@ setup-py:
 
 .PHONY: setup-web
 setup-web:
-	@cd $(WEB_CONSOLE_DIR) && corepack enable && pnpm install
+	@cd $(WEB_CONSOLE_DIR) && corepack enable && \
+	if [ -d node_modules ] && [ ! -w node_modules/@testing-library 2>/dev/null ]; then \
+		echo "Fixing permissions on node_modules..."; \
+		chmod -R u+w node_modules 2>/dev/null || true; \
+	fi && \
+	pnpm install --no-frozen-lockfile
 
 # -------------------------
 # Run
 # -------------------------
 .PHONY: up
-up: up-api
+up: up-api up-worker
 	@echo ""
 	@echo "=========================================="
 	@echo "  LonelyCat 服务启动中..."
@@ -115,6 +122,26 @@ up-api: setup-py
 		fi; \
 	fi
 
+.PHONY: up-worker
+up-worker: setup-py
+	@mkdir -p $(PID_DIR)
+	@if [ -f $(WORKER_PID) ] && kill -0 $$(cat $(WORKER_PID)) 2>/dev/null; then \
+		echo "⚠️  agent-worker 已在运行 (pid=$$(cat $(WORKER_PID)))"; \
+	else \
+		echo "🚀 启动 agent-worker..."; \
+		nohup env PYTHONPATH=$(PYTHONPATH):$(AGENT_WORKER_DIR) $(PY) -m worker.main \
+			> $(PID_DIR)/agent-worker.log 2>&1 & \
+		echo $$! > $(WORKER_PID); \
+		sleep 1; \
+		if kill -0 $$(cat $(WORKER_PID)) 2>/dev/null; then \
+			echo "✓ agent-worker 启动成功 (pid=$$(cat $(WORKER_PID)))"; \
+			echo "  日志文件: $(PID_DIR)/agent-worker.log"; \
+		else \
+			echo "✗ agent-worker 启动失败，请查看日志: $(PID_DIR)/agent-worker.log"; \
+			exit 1; \
+		fi; \
+	fi
+
 .PHONY: up-web
 up-web: setup-web
 	@echo "🚀 启动用户界面 (端口 $(WEB_PORT))..."
@@ -147,6 +174,18 @@ down:
 		rm -f $(API_PID); \
 	else \
 		echo "⚠️  未找到 core-api pid 文件"; \
+	fi
+	@if [ -f $(WORKER_PID) ]; then \
+		PID=$$(cat $(WORKER_PID)); \
+		if kill -0 $$PID 2>/dev/null; then \
+			echo "✓ 停止 agent-worker (pid=$$PID)"; \
+			kill $$PID || true; \
+		else \
+			echo "⚠️  agent-worker 未运行 (pid 文件已过期)"; \
+		fi; \
+		rm -f $(WORKER_PID); \
+	else \
+		echo "⚠️  未找到 agent-worker pid 文件"; \
 	fi
 	@echo ""
 	@echo "注意: web-console 在前台运行，请在运行它的终端中按 Ctrl+C 停止"

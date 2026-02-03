@@ -1,12 +1,15 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { Routes, Route, Navigate, useParams, useNavigate, useLocation } from "react-router-dom";
 import { Layout } from "./components/Layout";
 import { Sidebar } from "./components/Sidebar";
 import { ChatPage } from "./components/ChatPage";
+import { RunsPanel } from "./components/RunsPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { MemoryPage } from "./pages/MemoryPage";
 import { listConversations, createConversation, listMessages, sendMessage, deleteConversation, updateConversation } from "./api/conversations";
+import { listConversationRuns, createRun, deleteRun } from "./api/runs";
 import type { Conversation, Message } from "./api/conversations";
+import type { Run } from "./api/runs";
 import "./App.css";
 
 const App = () => {
@@ -23,6 +26,9 @@ const App = () => {
   const [messages, setMessages] = useState<Message[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [messagesError, setMessagesError] = useState<string | null>(null);
+  const [runs, setRuns] = useState<Run[]>([]);
+  const [runsLoading, setRunsLoading] = useState(false);
+  const [runsError, setRunsError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -77,6 +83,101 @@ const App = () => {
     };
     loadMessages();
   }, [conversationId, location.pathname]);
+
+  // 加载 runs
+  useEffect(() => {
+    const pathMatch = location.pathname.match(/\/chat\/([^/]+)/);
+    const currentConvId = conversationId || (pathMatch ? pathMatch[1] : null);
+    
+    if (!currentConvId) {
+      setRuns([]);
+      setRunsError(null);
+      return;
+    }
+
+    const loadRuns = async () => {
+      setRunsLoading(true);
+      setRunsError(null);
+      try {
+        const runsList = await listConversationRuns(currentConvId);
+        setRuns(runsList);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : "加载任务失败";
+        setRunsError(errorMessage);
+        console.error("Failed to load runs:", error);
+        setRuns([]);
+      } finally {
+        setRunsLoading(false);
+      }
+    };
+    loadRuns();
+  }, [conversationId, location.pathname]);
+
+  // 轮询 runs（持续轮询，自动检测活跃任务）
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  
+  // 启动或重启轮询的函数
+  const startPolling = useCallback((convId: string) => {
+    // 如果已经有轮询在运行，先清理
+    if (pollingIntervalRef.current) {
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+
+    // 轮询函数
+    const pollRuns = async () => {
+      try {
+        const currentRuns = await listConversationRuns(convId);
+        const hasActive = currentRuns.some(r => r.status === "queued" || r.status === "running");
+        
+        // 更新 runs 状态
+        setRuns(currentRuns);
+        
+        // 如果没有活跃任务，停止轮询
+        if (!hasActive) {
+          if (pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to poll runs:", error);
+        // 轮询失败时不停止，继续尝试
+      }
+    };
+
+    // 立即执行一次
+    pollRuns();
+
+    // 设置轮询（每 2 秒）
+    pollingIntervalRef.current = setInterval(pollRuns, 2000);
+  }, []);
+
+  useEffect(() => {
+    const pathMatch = location.pathname.match(/\/chat\/([^/]+)/);
+    const currentConvId = conversationId || (pathMatch ? pathMatch[1] : null);
+    
+    if (!currentConvId) {
+      // 清理之前的轮询
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+      return;
+    }
+
+    // 启动轮询
+    startPolling(currentConvId);
+
+    // 清理函数
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    };
+  }, [conversationId, location.pathname, startPolling]);
 
   const handleNewConversation = useCallback(async () => {
     try {
@@ -300,6 +401,70 @@ const App = () => {
     [conversationId, navigate, location]
   );
 
+  const handleCreateRun = useCallback(async () => {
+    const pathMatch = location.pathname.match(/\/chat\/([^/]+)/);
+    const currentConvId = conversationId || (pathMatch ? pathMatch[1] : null);
+    
+    if (!currentConvId) {
+      alert("请先选择一个对话");
+      return;
+    }
+
+    try {
+      const newRun = await createRun({
+        type: "sleep",
+        title: "Sleep 5s",
+        conversation_id: currentConvId,
+        input: { seconds: 5 },
+      });
+      // 乐观更新：将新 run 插入列表顶部
+      setRuns((prev) => [newRun, ...prev]);
+      
+      // 如果有新任务创建，确保轮询正在运行
+      if (!pollingIntervalRef.current) {
+        startPolling(currentConvId);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "创建任务失败";
+      console.error("Failed to create run:", error);
+      alert(errorMessage);
+    }
+  }, [conversationId, location.pathname, startPolling]);
+
+  const handleDeleteRun = useCallback(async (runId: string) => {
+    try {
+      await deleteRun(runId);
+      // 从列表中移除
+      setRuns((prev) => prev.filter((run) => run.id !== runId));
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "删除任务失败";
+      console.error("Failed to delete run:", error);
+      alert(errorMessage);
+    }
+  }, []);
+
+  const handleRetryRuns = useCallback(async () => {
+    const pathMatch = location.pathname.match(/\/chat\/([^/]+)/);
+    const currentConvId = conversationId || (pathMatch ? pathMatch[1] : null);
+    
+    if (!currentConvId) {
+      return;
+    }
+
+    setRunsLoading(true);
+    setRunsError(null);
+    try {
+      const runsList = await listConversationRuns(currentConvId);
+      setRuns(runsList);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "加载任务失败";
+      setRunsError(errorMessage);
+      console.error("Failed to load runs:", error);
+    } finally {
+      setRunsLoading(false);
+    }
+  }, [conversationId, location.pathname]);
+
   return (
     <>
       <Layout
@@ -320,7 +485,21 @@ const App = () => {
               <Route
                 path="/chat/:conversationId"
                 element={
-                  <ChatPage messages={messages} onSendMessage={handleSendMessage} loading={loading || messagesLoading} />
+                  <div className="chat-page-with-runs">
+                    <ChatPage 
+                      messages={messages} 
+                      onSendMessage={handleSendMessage} 
+                      loading={loading || messagesLoading}
+                    />
+                    <RunsPanel
+                      runs={runs}
+                      loading={runsLoading}
+                      error={runsError}
+                      onRetry={handleRetryRuns}
+                      onCreateRun={handleCreateRun}
+                      onDeleteRun={handleDeleteRun}
+                    />
+                  </div>
                 }
               />
               <Route
