@@ -1,8 +1,10 @@
 import asyncio
 import os
+import sys
 import tempfile
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -11,6 +13,20 @@ from sqlalchemy import create_engine
 
 from app.api import runs
 from app.db import Base, ConversationModel, RunModel, RunStatus
+
+# 添加 agent-worker 路径以便导入 worker 模块
+agent_worker_path = Path(__file__).parent.parent.parent / "agent-worker"
+if str(agent_worker_path) not in sys.path:
+    sys.path.insert(0, str(agent_worker_path))
+
+from worker.queue import (
+    claim_run,
+    complete_failed,
+    complete_success,
+    fetch_and_claim_run,
+    fetch_runnable_candidate,
+    heartbeat,
+)
 
 
 def _commit_db(db):
@@ -328,3 +344,295 @@ def test_list_runs_invalid_status(temp_db) -> None:
         asyncio.run(runs._list_runs(db, status="invalid_status"))
     assert excinfo.value.status_code == 400
     assert "Invalid status" in str(excinfo.value.detail)
+
+
+# ========== PR-Run-2 测试：抢占、心跳、互斥 ==========
+
+
+def test_claim_queued_run_single_worker(temp_db) -> None:
+    """测试单个 worker 抢占 queued run"""
+    db, _ = temp_db
+    
+    # 创建 queued run
+    request = runs.RunCreateRequest(type="sleep", input={"seconds": 5})
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # Worker A 抢占
+    worker_a = "worker-a"
+    lease_seconds = 60
+    claimed_run = claim_run(db, run_id, worker_a, lease_seconds)
+    _commit_db(db)
+    
+    # 验证抢占成功
+    assert claimed_run is not None
+    assert claimed_run.id == run_id
+    assert claimed_run.status == RunStatus.RUNNING
+    assert claimed_run.worker_id == worker_a
+    assert claimed_run.lease_expires_at is not None
+    assert claimed_run.attempt == 1
+    
+    # 验证数据库中的状态
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert db_run.status == RunStatus.RUNNING
+    assert db_run.worker_id == worker_a
+    assert db_run.attempt == 1
+
+
+def test_claim_is_exclusive_two_workers(temp_db) -> None:
+    """测试两个 worker 抢占互斥"""
+    db, _ = temp_db
+    
+    # 创建 queued run
+    request = runs.RunCreateRequest(type="sleep", input={"seconds": 5})
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # Worker A 抢占成功
+    worker_a = "worker-a"
+    worker_b = "worker-b"
+    lease_seconds = 60
+    
+    claimed_run_a = claim_run(db, run_id, worker_a, lease_seconds)
+    _commit_db(db)
+    assert claimed_run_a is not None
+    assert claimed_run_a.worker_id == worker_a
+    
+    # Worker B 尝试抢占同一个 run（应该失败）
+    claimed_run_b = claim_run(db, run_id, worker_b, lease_seconds)
+    _commit_db(db)
+    assert claimed_run_b is None  # 抢占失败
+    
+    # 验证 run 仍然属于 Worker A
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert db_run.worker_id == worker_a
+    assert db_run.attempt == 1  # 只有 Worker A 抢占了一次
+
+
+def test_reclaim_expired_run(temp_db) -> None:
+    """测试抢占过期的 running run"""
+    db, _ = temp_db
+    
+    # 创建 queued run
+    request = runs.RunCreateRequest(type="sleep", input={"seconds": 5})
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # Worker A 抢占
+    worker_a = "worker-a"
+    lease_seconds = 60
+    claimed_run_a = claim_run(db, run_id, worker_a, lease_seconds)
+    _commit_db(db)
+    assert claimed_run_a is not None
+    
+    # 手动设置 lease_expires_at 为过去（模拟过期）
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    db_run.lease_expires_at = datetime.now(UTC) - timedelta(seconds=10)
+    db_run.status = RunStatus.RUNNING  # 确保状态是 running
+    _commit_db(db)
+    
+    # Worker B 应该能够接管过期的 run
+    worker_b = "worker-b"
+    claimed_run_b = claim_run(db, run_id, worker_b, lease_seconds)
+    _commit_db(db)
+    
+    # 验证 Worker B 接管成功
+    assert claimed_run_b is not None
+    assert claimed_run_b.worker_id == worker_b
+    assert claimed_run_b.attempt == 2  # Worker A 一次，Worker B 一次
+    
+    # 验证数据库中的状态
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert db_run.worker_id == worker_b
+    assert db_run.attempt == 2
+
+
+def test_heartbeat_requires_owner(temp_db) -> None:
+    """测试心跳必须由 owner 执行"""
+    db, _ = temp_db
+    
+    # 创建 queued run
+    request = runs.RunCreateRequest(type="sleep", input={"seconds": 5})
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # Worker A 抢占
+    worker_a = "worker-a"
+    worker_b = "worker-b"
+    lease_seconds = 60
+    
+    claimed_run = claim_run(db, run_id, worker_a, lease_seconds)
+    _commit_db(db)
+    assert claimed_run is not None
+    
+    # 记录原始的 lease_expires_at
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    original_lease = db_run.lease_expires_at
+    
+    # Worker B 尝试心跳（应该失败）
+    success_b = heartbeat(db, run_id, worker_b, lease_seconds)
+    _commit_db(db)
+    assert success_b is False
+    
+    # 验证 lease_expires_at 没有改变
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert db_run.lease_expires_at == original_lease
+
+
+def test_heartbeat_updates_lease(temp_db) -> None:
+    """测试 owner 心跳成功更新租约"""
+    db, _ = temp_db
+    
+    # 创建 queued run
+    request = runs.RunCreateRequest(type="sleep", input={"seconds": 5})
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # Worker A 抢占
+    worker_a = "worker-a"
+    lease_seconds = 60
+    
+    claimed_run = claim_run(db, run_id, worker_a, lease_seconds)
+    _commit_db(db)
+    assert claimed_run is not None
+    
+    # 记录原始的 lease_expires_at
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    original_lease = db_run.lease_expires_at
+    
+    # 等待一小段时间
+    import time
+    time.sleep(0.1)
+    
+    # Worker A 心跳（应该成功）
+    success = heartbeat(db, run_id, worker_a, lease_seconds)
+    _commit_db(db)
+    assert success is True
+    
+    # 验证 lease_expires_at 已更新
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert db_run.lease_expires_at is not None
+    assert db_run.lease_expires_at > original_lease
+
+
+def test_complete_success_clears_lease(temp_db) -> None:
+    """测试成功完成任务后清除租约"""
+    db, _ = temp_db
+    
+    # 创建 queued run
+    request = runs.RunCreateRequest(type="sleep", input={"seconds": 5})
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # Worker 抢占
+    worker_id = "worker-1"
+    lease_seconds = 60
+    
+    claimed_run = claim_run(db, run_id, worker_id, lease_seconds)
+    _commit_db(db)
+    assert claimed_run is not None
+    assert claimed_run.lease_expires_at is not None
+    
+    # 完成任务（成功）
+    output_json = {"ok": True, "slept": 5}
+    complete_success(db, run_id, output_json)
+    _commit_db(db)
+    
+    # 验证状态和租约
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert db_run.status == RunStatus.SUCCEEDED
+    assert db_run.lease_expires_at is None
+    assert db_run.output_json == output_json
+    assert db_run.progress == 100
+    assert db_run.error is None
+
+
+def test_complete_failed_clears_lease(temp_db) -> None:
+    """测试失败完成任务后清除租约"""
+    db, _ = temp_db
+    
+    # 创建 queued run
+    request = runs.RunCreateRequest(type="sleep", input={"seconds": 5})
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # Worker 抢占
+    worker_id = "worker-1"
+    lease_seconds = 60
+    
+    claimed_run = claim_run(db, run_id, worker_id, lease_seconds)
+    _commit_db(db)
+    assert claimed_run is not None
+    assert claimed_run.lease_expires_at is not None
+    
+    # 完成任务（失败）
+    error_msg = "Task execution failed"
+    complete_failed(db, run_id, error_msg)
+    _commit_db(db)
+    
+    # 验证状态和租约
+    db_run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    assert db_run.status == RunStatus.FAILED
+    assert db_run.lease_expires_at is None
+    assert db_run.error == error_msg
+
+
+def test_fetch_and_claim_run(temp_db) -> None:
+    """测试 fetch_and_claim_run 包装函数"""
+    db, _ = temp_db
+    
+    # 创建 queued run
+    request = runs.RunCreateRequest(type="sleep", input={"seconds": 5})
+    run_response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    run_id = run_response["id"]
+    
+    # 使用 fetch_and_claim_run
+    worker_id = "worker-1"
+    lease_seconds = 60
+    claimed_run = fetch_and_claim_run(db, worker_id, lease_seconds)
+    _commit_db(db)
+    
+    # 验证抢占成功
+    assert claimed_run is not None
+    assert claimed_run.id == run_id
+    assert claimed_run.status == RunStatus.RUNNING
+    assert claimed_run.worker_id == worker_id
+
+
+def test_fetch_runnable_candidate_prioritizes_queued(temp_db) -> None:
+    """测试 fetch_runnable_candidate 优先返回 queued 任务"""
+    db, _ = temp_db
+    
+    # 创建一个过期的 running run
+    request1 = runs.RunCreateRequest(type="sleep", input={"seconds": 1})
+    run1_response = asyncio.run(runs._create_run(request1, db))
+    _commit_db(db)
+    run1_id = run1_response["id"]
+    
+    # 抢占并设置为过期
+    worker_a = "worker-a"
+    claimed_run1 = claim_run(db, run1_id, worker_a, 60)
+    _commit_db(db)
+    db_run1 = db.query(RunModel).filter(RunModel.id == run1_id).first()
+    db_run1.lease_expires_at = datetime.now(UTC) - timedelta(seconds=10)
+    db_run1.status = RunStatus.RUNNING
+    _commit_db(db)
+    
+    # 创建一个 queued run（后创建，但应该优先）
+    request2 = runs.RunCreateRequest(type="sleep", input={"seconds": 2})
+    run2_response = asyncio.run(runs._create_run(request2, db))
+    _commit_db(db)
+    run2_id = run2_response["id"]
+    
+    # fetch_runnable_candidate 应该返回 queued 的 run2，而不是过期的 run1
+    now = datetime.now(UTC)
+    candidate_id = fetch_runnable_candidate(db, now)
+    assert candidate_id == run2_id  # queued 优先
