@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 
 from agent_worker.config import ChatConfig
@@ -18,6 +19,9 @@ from agent_worker.trace import TraceCollector
 
 
 PERSONA_REGISTRY = PersonaRegistry.load_default()
+
+# Maximum number of conversation turns to keep in context
+MAX_TURNS = int(os.getenv("CHAT_MAX_TURNS", "10"))
 
 @dataclass(frozen=True)
 class ChatResult:
@@ -51,6 +55,7 @@ def chat_flow(
     llm: BaseLLM | None,
     memory_client: MemoryClient | None,
     config: ChatConfig | None,
+    history_messages: list[dict[str, str]] | None = None,
 ) -> ChatResult:
     config = config or ChatConfig.from_env()
     trace = TraceCollector.from_env()
@@ -80,13 +85,36 @@ def chat_flow(
     gate = MemoryGate(gate_llm)
     had_error = False
 
+    # Apply context window limit if history messages are provided
+    if history_messages is not None:
+        # Limit to last MAX_TURNS * 2 messages (each turn = user + assistant)
+        # Filter out system messages for counting (they're handled separately)
+        non_system_messages = [msg for msg in history_messages if msg.get("role") != "system"]
+        if len(non_system_messages) > MAX_TURNS * 2:
+            # Keep system messages and last MAX_TURNS * 2 non-system messages
+            system_messages = [msg for msg in history_messages if msg.get("role") == "system"]
+            limited_non_system = non_system_messages[-(MAX_TURNS * 2):]
+            history_messages = system_messages + limited_non_system
+            trace.record("chat_flow.context_window_limited", f"kept {len(history_messages)} messages")
+
     try:
-        assistant_reply, _memory_hint = responder.reply(
-            persona,
-            user_message,
-            active_facts,
-            trace=trace,
-        )
+        if history_messages is not None:
+            # Use message-based reply with history
+            assistant_reply, _memory_hint = responder.reply_with_messages(
+                persona,
+                user_message,
+                history_messages,
+                active_facts,
+                trace=trace,
+            )
+        else:
+            # Use original prompt-based reply for backward compatibility
+            assistant_reply, _memory_hint = responder.reply(
+                persona,
+                user_message,
+                active_facts,
+                trace=trace,
+            )
     except Exception as exc:
         if trace:
             trace.record("responder.error", str(exc))

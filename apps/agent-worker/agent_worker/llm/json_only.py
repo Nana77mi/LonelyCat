@@ -31,6 +31,34 @@ class JsonOnlyLLMWrapper(BaseLLM):
             return "NO_ACTION"
         return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
 
+    def generate_messages(self, messages: list[dict[str, str]]) -> str:
+        """Generate response from a list of messages, wrapping with JSON-only instructions."""
+        # Wrap the last user message with JSON-only instructions
+        wrapped_messages = []
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            # Add JSON-only prefix/suffix to the last user message
+            if role == "user" and i == len(messages) - 1:
+                wrapped_content = f"{JSON_ONLY_PREFIX}\n{content}\n{JSON_ONLY_SUFFIX}"
+                wrapped_messages.append({"role": role, "content": wrapped_content})
+            else:
+                wrapped_messages.append({"role": role, "content": content})
+        
+        raw = self._llm.generate_messages(wrapped_messages)
+        if raw is None:
+            return "NO_ACTION"
+        if not isinstance(raw, str):
+            raw = str(raw)
+        candidate = _extract_json_block(raw.strip())
+        if not candidate:
+            return "NO_ACTION"
+        try:
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            return "NO_ACTION"
+        return json.dumps(parsed, ensure_ascii=False, separators=(",", ":"))
+
     def _wrap_prompt(self, prompt: str) -> str:
         return f"{JSON_ONLY_PREFIX}\n{prompt}\n{JSON_ONLY_SUFFIX}"
 

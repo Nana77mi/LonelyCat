@@ -305,7 +305,31 @@ async def _create_message(
             detail=f"Failed to save user message: {str(e)}"
         )
     
-    # 2. 调用 worker 处理消息
+    # 2. 查询历史消息并转换为 LLM 消息格式
+    history_messages: list[dict[str, str]] = []
+    if AGENT_WORKER_AVAILABLE and chat_flow is not None:
+        try:
+            # 查询该对话的所有历史消息（按创建时间升序）
+            history_messages_query = (
+                db.query(MessageModel)
+                .filter(MessageModel.conversation_id == conversation_id)
+                .order_by(MessageModel.created_at.asc())
+                .all()
+            )
+            
+            # 转换为 LLM 消息格式（只包含 USER 和 ASSISTANT 角色，跳过 SYSTEM）
+            for msg in history_messages_query:
+                if msg.role == MessageRole.USER:
+                    history_messages.append({"role": "user", "content": msg.content})
+                elif msg.role == MessageRole.ASSISTANT:
+                    history_messages.append({"role": "assistant", "content": msg.content})
+                # 跳过 SYSTEM 角色的消息（错误消息等）
+        except Exception as e:
+            # 历史消息查询失败不影响主流程，只记录错误
+            print(f"[WARNING] Failed to query history messages: {e}")
+            history_messages = []
+    
+    # 3. 调用 worker 处理消息
     worker_error = None
     assistant_content = None
     
@@ -321,6 +345,7 @@ async def _create_message(
                 llm=None,
                 memory_client=None,
                 config=None,
+                history_messages=history_messages if history_messages else None,
             )
             assistant_content = result.assistant_reply
         except Exception as e:
@@ -332,7 +357,7 @@ async def _create_message(
             worker_error = str(e)
             assistant_content = None
     
-    # 3. 创建 assistant/system 消息
+    # 4. 创建 assistant/system 消息
     assistant_now = datetime.utcnow()
     
     if worker_error:
@@ -364,7 +389,7 @@ async def _create_message(
     
     db.add(assistant_message)
     
-    # 4. 更新 conversation 的 updated_at（以 assistant/system 消息时间为准）
+    # 5. 更新 conversation 的 updated_at（以 assistant/system 消息时间为准）
     conversation.updated_at = assistant_now
     try:
         db.commit()

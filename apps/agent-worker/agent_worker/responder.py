@@ -95,3 +95,67 @@ class Responder:
             if maybe_decision.action != "NO_ACTION" and "assistant_reply" not in raw:
                 return FALLBACK_REPLY, "NO_ACTION"
         return parse_responder_output(raw)
+
+    def reply_with_messages(
+        self,
+        persona: Persona,
+        user_message: str,
+        history_messages: list[dict[str, str]],
+        active_facts: list[dict],
+        trace: TraceCollector | None = None,
+    ) -> tuple[str, str]:
+        """Reply with history messages support.
+        
+        Args:
+            persona: Persona configuration
+            user_message: Current user message
+            history_messages: List of previous messages in format [{"role": "user|assistant", "content": "..."}, ...]
+            active_facts: List of active facts from memory
+            trace: Optional trace collector
+            
+        Returns:
+            Tuple of (assistant_reply, memory_hint)
+        """
+        # Build messages list
+        messages: list[dict[str, str]] = []
+        
+        # Add system prompt (only once, at the beginning)
+        # History messages should not contain system messages, but we filter them out for safety
+        system_content = (
+            f"{persona.system_prompt}\n\n"
+            f"{POLICY_PROMPT}\n"
+            f"{RETURN_TEXT_ONLY}"
+        )
+        messages.append({"role": "system", "content": system_content})
+        
+        # Add history messages (filter out any system messages to avoid duplication)
+        for msg in history_messages:
+            role = msg.get("role", "user")
+            # Skip system messages (they shouldn't be in history, but filter for safety)
+            if role == "system":
+                continue
+            messages.append({"role": role, "content": msg.get("content", "")})
+        
+        # Build current user message with active_facts
+        facts_json = json.dumps(active_facts, separators=(",", ":"))
+        current_user_content = (
+            f"user_message: {user_message}\n"
+            f"active_facts: {facts_json}"
+        )
+        messages.append({"role": "user", "content": current_user_content})
+        
+        if trace:
+            trace.record("responder.messages", json.dumps(messages, indent=2))
+        
+        # Generate response using messages
+        raw = self._llm.generate_messages(messages)
+        
+        if trace:
+            trace.record("responder.response", str(raw))
+        
+        if raw is not None and isinstance(raw, str):
+            maybe_decision = parse_llm_output(raw)
+            if maybe_decision.action != "NO_ACTION" and "assistant_reply" not in raw:
+                return FALLBACK_REPLY, "NO_ACTION"
+        
+        return parse_responder_output(raw)
