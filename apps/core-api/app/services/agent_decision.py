@@ -28,6 +28,7 @@ from app.agent_loop_config import (
     AGENT_ALLOWED_RUN_TYPES,
     AGENT_DECISION_TIMEOUT_SECONDS,
 )
+from app.services.facts import fetch_active_facts
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +108,7 @@ class AgentDecision:
             user_message: Current user message
             conversation_id: Current conversation ID
             history_messages: Recent conversation history
-            active_facts: Active facts from memory (optional)
+            active_facts: Active facts from memory (optional, auto-fetched if None)
             recent_runs: Recent runs in this conversation (optional)
         
         Returns:
@@ -118,6 +119,16 @@ class AgentDecision:
         """
         if not self._llm:
             raise ValueError("Agent Decision LLM is not available")
+        
+        # Auto-fetch active_facts if not provided
+        if active_facts is None:
+            if self._memory_client:
+                active_facts = fetch_active_facts(
+                    self._memory_client,
+                    conversation_id=conversation_id,
+                )
+            else:
+                active_facts = []
         
         # Build decision prompt
         prompt = self._build_decision_prompt(
@@ -216,8 +227,8 @@ class AgentDecision:
         Returns:
             Prompt string
         """
-        # System prompt
-        system_prompt = """You are an AI assistant that decides how to respond to user messages.
+        # System block 1: 目标 + 决策类型 + JSON schema（稳定部分）
+        system_prompt_schema = """You are an AI assistant that decides how to respond to user messages.
 
 You can choose one of three actions:
 1. "reply" - Only reply to the user (normal conversation)
@@ -260,7 +271,39 @@ Rules:
             conversation_id=conversation_id,
         )
         
-        # Build context
+        # System block 2: Facts (动态部分)
+        # Include facts that are active or have no status (e.g. minimal test payloads)
+        facts_block = ""
+        if active_facts:
+            facts_list = []
+            for fact in active_facts:
+                status = fact.get("status")
+                if status in ("revoked", "archived"):
+                    continue
+                key = fact.get("key", "")
+                value = fact.get("value", "")
+                if not key:
+                    continue
+                if isinstance(value, (dict, list)):
+                    value_str = json.dumps(value, sort_keys=True, ensure_ascii=False)
+                else:
+                    value_str = str(value)
+                facts_list.append(f"- {key}: {value_str}")
+            
+            if facts_list:
+                facts_text = "\n".join(facts_list)
+                facts_block = f"""
+
+[KNOWN FACTS]
+{facts_text}
+[/KNOWN FACTS]
+
+Rules:
+- Use KNOWN FACTS when relevant.
+- Do not ask for info already in KNOWN FACTS.
+- If user contradicts a fact, ask for confirmation and propose an update."""
+        
+        # Context blocks (动态部分)
         context_parts = []
         
         # Add history messages (last 10 messages)
@@ -271,11 +314,6 @@ Rules:
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
                 context_parts.append(f"{role}: {content}")
-        
-        # Add active facts
-        if active_facts:
-            facts_json = json.dumps(active_facts, ensure_ascii=False, indent=2)
-            context_parts.append(f"\nActive facts:\n{facts_json}")
         
         # Add recent runs (optional, for avoiding duplicates)
         if recent_runs:
@@ -290,22 +328,29 @@ Rules:
         # Current user message
         context_parts.append(f"\nCurrent user message:\n{user_message}")
         
-        # Combine
-        prompt = f"{system_prompt}\n\n" + "\n".join(context_parts)
+        # Combine: system blocks + context
+        prompt = f"{system_prompt_schema}{facts_block}\n\n" + "\n".join(context_parts)
         
         return prompt
     
-    def get_active_facts(self) -> List[Dict[str, Any]]:
+    def get_active_facts(self, conversation_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """Get active facts from memory.
         
+        Args:
+            conversation_id: Optional conversation ID for session scope facts
+        
         Returns:
-            List of active facts
+            List of active facts (global + session scope, deduplicated)
         """
         if not self._memory_client:
             return []
         
         try:
-            return self._memory_client.list_facts(scope="global", status="active")
+            return fetch_active_facts(
+                self._memory_client,
+                conversation_id=conversation_id,
+            )
         except Exception as e:
-            logger.warning(f"Failed to fetch active facts: {e}")
+            logger.warning(f"Failed to fetch active facts: {e}", exc_info=True)
+            logger.warning(f"Error type: {type(e).__name__}")
             return []
