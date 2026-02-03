@@ -40,6 +40,22 @@ class TraceCollector:
                 level = TraceLevel.BASIC
         return cls(level=level)
 
+    @classmethod
+    def from_env_with_trace_id(cls, trace_id: str | None = None) -> "TraceCollector":
+        """Build TraceCollector from LONELYCAT_TRACE env, using given trace_id if provided."""
+        raw = os.getenv("LONELYCAT_TRACE")
+        if raw is None:
+            level = TraceLevel.BASIC
+        else:
+            normalized = raw.strip().lower()
+            if normalized in {"off", "0", "false", "none"}:
+                level = TraceLevel.OFF
+            elif normalized in {"full", "2"}:
+                level = TraceLevel.FULL
+            else:
+                level = TraceLevel.BASIC
+        return cls(level=level, trace_id=trace_id)
+
     def record(self, stage: str, detail: str | None = None) -> None:
         self.events.append(TraceEvent(stage=stage, detail=detail))
 
@@ -49,7 +65,19 @@ class TraceCollector:
         lines = []
         for event in self.events:
             if self.level is TraceLevel.BASIC:
-                lines.append(f"trace_id={self.trace_id} stage={event.stage}")
+                # Always include facts_snapshot_id in log when present (for 验收4); only allow 64-hex
+                if "facts_snapshot_id" in event.stage and event.detail:
+                    sid = event.detail.strip()
+                    if _FACTS_SNAPSHOT_ID_PATTERN.match(sid):
+                        lines.append(
+                            f"trace_id={self.trace_id} stage={event.stage} facts_snapshot_id={sid}"
+                        )
+                    else:
+                        lines.append(
+                            f"trace_id={self.trace_id} stage={event.stage} facts_snapshot_id=<invalid>"
+                        )
+                else:
+                    lines.append(f"trace_id={self.trace_id} stage={event.stage}")
             else:
                 detail = _truncate(_sanitize(event.detail or ""))
                 lines.append(
@@ -59,6 +87,8 @@ class TraceCollector:
 
 
 _KEY_PATTERN = re.compile(r"(OPENAI_API_KEY\s*[:=]\s*)([^\s\"']+)", re.IGNORECASE)
+# Only allow 64-char hex for facts_snapshot_id in log (avoid leaking facts if detail misused)
+_FACTS_SNAPSHOT_ID_PATTERN = re.compile(r"^[a-f0-9]{64}$")
 
 
 def _sanitize(text: str) -> str:

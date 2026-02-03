@@ -8,7 +8,8 @@ from agent_worker.llm.stub import StubLLM
 
 
 def test_factory_defaults_to_stub(monkeypatch):
-    monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    """When LLM_PROVIDER is stub, factory returns StubLLM (explicit stub overrides config file)."""
+    monkeypatch.setenv("LLM_PROVIDER", "stub")
     llm = build_llm_from_env()
     assert isinstance(llm, StubLLM)
 

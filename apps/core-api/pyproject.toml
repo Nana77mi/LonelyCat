@@ -8,6 +8,7 @@ dependencies = [
   "pydantic>=2.6",
   "uvicorn>=0.27",
   "lonelycat-memory",
+  "lonelycat-protocol",
 ]
 
 [project.optional-dependencies]

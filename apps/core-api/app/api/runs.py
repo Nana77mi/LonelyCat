@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+
+from protocol.run_constants import is_valid_trace_id
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -128,13 +130,18 @@ async def _create_run(request: RunCreateRequest, db: Session) -> Dict[str, Any]:
         if parent_run is None:
             raise HTTPException(status_code=404, detail="Parent run not found")
     
+    # 确保 input 含合法 trace_id（32 位小写 hex），便于贯穿到 trace + output
+    input_json = dict(request.input)
+    if not is_valid_trace_id(input_json.get("trace_id")):
+        input_json["trace_id"] = uuid.uuid4().hex
+    
     run = RunModel(
         id=run_id,
         type=request.type,
         title=request.title,
         status=RunStatus.QUEUED,
         conversation_id=request.conversation_id,
-        input_json=request.input,
+        input_json=input_json,
         output_json=None,
         error=None,
         worker_id=None,

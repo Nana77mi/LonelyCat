@@ -7,6 +7,7 @@ Active facts 定义（与 HTTP GET /memory/facts 一致）：
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -240,3 +241,44 @@ def fetch_active_facts(
         return list(facts_by_key.values())
     except Exception:
         return []
+
+
+def _canonical_value_for_snapshot(value: Any) -> str:
+    """Stable string for a fact value (for hashing). Must match agent_worker.utils.facts_format."""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    if value is None:
+        return ""
+    return str(value)
+
+
+def compute_facts_snapshot_id(active_facts: List[Dict[str, Any]]) -> str:
+    """
+    Compute a stable, content-based snapshot ID for a set of active facts.
+    Same fact set → same snapshot_id. Canonical rules must match agent_worker.utils.facts_format:
+    - Only status=="active", non-empty key.
+    - Sort by (id or ""), then key.
+    - Canonical uses only stable fields: id, key, value. Do NOT include created_at,
+      updated_at, source_ref, etc.
+    Returns 64-char hex string (SHA-256).
+    """
+    active = [f for f in active_facts if f.get("status") == "active" and f.get("key")]
+    ordered = sorted(
+        active,
+        key=lambda f: (f.get("id") or "", f.get("key") or ""),
+    )
+    canonical_list = [
+        {
+            "id": f.get("id"),
+            "key": f.get("key"),
+            "value": _canonical_value_for_snapshot(f.get("value")),
+        }
+        for f in ordered
+    ]
+    canonical_json = json.dumps(
+        canonical_list,
+        separators=(",", ":"),
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()

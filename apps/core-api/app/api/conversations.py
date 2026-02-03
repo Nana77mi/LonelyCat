@@ -4,6 +4,8 @@ import json
 import logging
 import uuid
 from datetime import UTC, datetime
+
+from protocol.run_constants import is_valid_trace_id
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -34,6 +36,7 @@ except ImportError:
     AgentDecision = None  # type: ignore
 
 # In-process facts fetch (avoid HTTP self-call from core-api to memory service)
+from app.services.facts import compute_facts_snapshot_id  # always available (core-api)
 try:
     from app.services.facts import fetch_active_facts_from_store
     from memory.facts import MemoryStore
@@ -492,11 +495,22 @@ async def _create_message(
                 # Create run only, no immediate reply (or optional hint message)
                 if decision.run:
                     try:
+                        run_input = dict(decision.run.input) if decision.run.input else {}
+                        if not is_valid_trace_id(run_input.get("trace_id")):
+                            run_input["trace_id"] = uuid.uuid4().hex
+                        conv_id = decision.run.conversation_id or conversation_id
+                        if decision.run.type == "summarize_conversation":
+                            if "conversation_id" not in run_input or not run_input.get("conversation_id"):
+                                run_input["conversation_id"] = conv_id
+                            if _FACTS_FROM_STORE_AVAILABLE and fetch_active_facts_from_store and MemoryStore is not None:
+                                store = MemoryStore()
+                                active_facts_for_run, _ = await fetch_active_facts_from_store(store, conversation_id=conv_id)
+                                run_input["facts_snapshot_id"] = compute_facts_snapshot_id(active_facts_for_run)
                         run_request = RunCreateRequest(
                             type=decision.run.type,
                             title=decision.run.title,
                             conversation_id=decision.run.conversation_id,
-                            input=decision.run.input,
+                            input=run_input,
                         )
                         run_result = await _create_run(run_request, db)
                         decision_run_id = run_result.get("id")
@@ -524,12 +538,17 @@ async def _create_message(
                 
                 if decision.run:
                     try:
-                        # For summarize_conversation, ensure conversation_id is in input
+                        # For summarize_conversation, ensure conversation_id and facts_snapshot_id in input
                         run_input = decision.run.input.copy() if decision.run.input else {}
+                        if not is_valid_trace_id(run_input.get("trace_id")):
+                            run_input["trace_id"] = uuid.uuid4().hex
                         if decision.run.type == "summarize_conversation":
-                            # Ensure conversation_id is in input (required by handler)
                             if "conversation_id" not in run_input or not run_input.get("conversation_id"):
                                 run_input["conversation_id"] = decision.run.conversation_id or conversation_id
+                            if _FACTS_FROM_STORE_AVAILABLE and fetch_active_facts_from_store and MemoryStore is not None:
+                                store = MemoryStore()
+                                active_facts_for_run, _ = await fetch_active_facts_from_store(store, conversation_id=run_input["conversation_id"])
+                                run_input["facts_snapshot_id"] = compute_facts_snapshot_id(active_facts_for_run)
                         
                         run_request = RunCreateRequest(
                             type=decision.run.type,

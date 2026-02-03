@@ -2,9 +2,41 @@
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
+import httpx
+
 from agent_worker.memory_client import MemoryClient
+
+
+def fetch_active_facts_via_api(
+    base_url: str,
+    *,
+    conversation_id: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> list[dict]:
+    """
+    Fetch active facts from core-api GET /memory/facts/active (single entry point).
+    Worker and chat_flow use this instead of MemoryClient.list_facts for read path.
+    """
+    url = f"{base_url.rstrip('/')}/memory/facts/active"
+    params: dict = {}
+    if conversation_id is not None:
+        params["conversation_id"] = conversation_id
+    if limit is not None:
+        params["limit"] = limit
+    try:
+        with httpx.Client(timeout=10.0) as client:
+            response = client.get(url, params=params or None)
+            response.raise_for_status()
+            data = response.json()
+    except Exception:
+        return []
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+    return [f for f in items if isinstance(f, dict)]
 
 
 def fetch_active_facts(
