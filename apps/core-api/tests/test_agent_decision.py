@@ -39,7 +39,8 @@ class MockMemoryClient:
     def __init__(self, facts: list[dict] = None):
         self.facts = facts or []
     
-    def list_facts(self, scope: str = "global", status: str = "active") -> list[dict]:
+    def list_facts(self, scope: str = "global", status: str = "active", 
+                   session_id: str = None, project_id: str = None) -> list[dict]:
         return self.facts
 
 
@@ -426,19 +427,61 @@ def test_agent_decision_build_prompt():
 
 
 @patch("app.services.agent_decision.AGENT_WORKER_AVAILABLE", True)
-def test_agent_decision_get_active_facts():
+@patch("app.services.agent_decision.fetch_active_facts")
+def test_agent_decision_get_active_facts(mock_fetch_active_facts):
     """Test AgentDecision.get_active_facts() returns facts from memory client."""
-    facts = [
-        {"key": "fact1", "value": "value1"},
-        {"key": "fact2", "value": "value2"},
+    global_facts = [
+        {"key": "fact1", "value": "value1", "status": "active"},
+        {"key": "fact2", "value": "value2", "status": "active"},
     ]
-    mock_memory_client = MockMemoryClient(facts=facts)
+    mock_fetch_active_facts.return_value = global_facts
+    mock_memory_client = MockMemoryClient(facts=global_facts)
     
     agent_decision = AgentDecision()
     agent_decision._memory_client = mock_memory_client
     
     result = agent_decision.get_active_facts()
-    assert result == facts
+    assert result == global_facts
+    assert len(result) == 2
+    assert result[0]["key"] == "fact1"
+    assert result[1]["key"] == "fact2"
+
+
+@patch("app.services.agent_decision.AGENT_WORKER_AVAILABLE", True)
+@patch("app.services.agent_decision.fetch_active_facts")
+def test_agent_decision_get_active_facts_with_conversation_id(mock_fetch_active_facts):
+    """Test AgentDecision.get_active_facts() with conversation_id for session scope."""
+    global_facts = [
+        {"key": "fact1", "value": "value1", "status": "active"},
+    ]
+    session_facts = [
+        {"key": "fact2", "value": "value2", "status": "active"},
+    ]
+    merged = global_facts + session_facts  # expected: both scopes
+    mock_fetch_active_facts.return_value = merged
+    
+    class MockMemoryClientWithSession:
+        def __init__(self):
+            self.global_facts = global_facts
+            self.session_facts = {"conv1": session_facts}
+        
+        def list_facts(self, scope: str = "global", status: str = "active",
+                      session_id: str = None, project_id: str = None) -> list[dict]:
+            if scope == "global":
+                return self.global_facts
+            elif scope == "session" and session_id:
+                return self.session_facts.get(session_id, [])
+            return []
+    
+    mock_memory_client = MockMemoryClientWithSession()
+    agent_decision = AgentDecision()
+    agent_decision._memory_client = mock_memory_client
+    
+    result = agent_decision.get_active_facts(conversation_id="conv1")
+    assert len(result) == 2
+    keys = {f["key"] for f in result}
+    assert "fact1" in keys
+    assert "fact2" in keys
 
 
 @patch("app.services.agent_decision.AGENT_WORKER_AVAILABLE", False)
