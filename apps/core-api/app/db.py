@@ -113,6 +113,10 @@ class RunModel(Base):
     attempt = Column(Integer, nullable=False, default=0)  # 重试次数
     progress = Column(Integer, nullable=True)  # 进度 0~100
     title = Column(String, nullable=True)  # UI 显示用
+    parent_run_id = Column(String, ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True)  # 父 run ID（用于追踪重试关系）
+    canceled_at = Column(DateTime, nullable=True)  # 取消时间
+    canceled_by = Column(String, nullable=True)  # 取消者（"user"/"system"）
+    cancel_reason = Column(Text, nullable=True)  # 取消原因（可选）
     created_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC))
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
 
@@ -128,6 +132,8 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     # 迁移：添加 client_msg_id 列（如果不存在）
     _migrate_add_client_msg_id()
+    # 迁移：添加取消相关字段（如果不存在）
+    _migrate_add_cancel_fields()
 
 
 def _migrate_add_client_msg_id() -> None:
@@ -148,6 +154,42 @@ def _migrate_add_client_msg_id() -> None:
     except Exception as e:
         # 迁移失败不影响启动，只记录错误
         print(f"Warning: Failed to migrate client_msg_id column: {e}")
+
+
+def _migrate_add_cancel_fields() -> None:
+    """迁移：为 runs 表添加取消相关字段（如果不存在）"""
+    try:
+        inspector = inspect(engine)
+        # 检查表是否存在
+        if "runs" not in inspector.get_table_names():
+            return
+        
+        columns = [col["name"] for col in inspector.get_columns("runs")]
+        
+        with engine.connect() as conn:
+            # 添加 parent_run_id 列
+            if "parent_run_id" not in columns:
+                conn.execute(text("ALTER TABLE runs ADD COLUMN parent_run_id VARCHAR"))
+                # 添加外键约束（SQLite 需要先添加列，再添加外键）
+                # 注意：SQLite 的 ALTER TABLE 不支持直接添加外键，这里只添加列
+                # 外键约束会在新表创建时自动添加
+            
+            # 添加 canceled_at 列
+            if "canceled_at" not in columns:
+                conn.execute(text("ALTER TABLE runs ADD COLUMN canceled_at DATETIME"))
+            
+            # 添加 canceled_by 列
+            if "canceled_by" not in columns:
+                conn.execute(text("ALTER TABLE runs ADD COLUMN canceled_by VARCHAR"))
+            
+            # 添加 cancel_reason 列
+            if "cancel_reason" not in columns:
+                conn.execute(text("ALTER TABLE runs ADD COLUMN cancel_reason TEXT"))
+            
+            conn.commit()
+    except Exception as e:
+        # 迁移失败不影响启动，只记录错误
+        print(f"Warning: Failed to migrate cancel fields: {e}")
 
 
 def get_db():

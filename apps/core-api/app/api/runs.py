@@ -6,7 +6,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import desc
+from sqlalchemy import desc, update
 from sqlalchemy.orm import Session
 
 from app.db import ConversationModel, RunModel, RunStatus, SessionLocal
@@ -30,6 +30,7 @@ class RunCreateRequest(BaseModel):
     conversation_id: Optional[str] = None
     input: Dict[str, Any]  # 任务输入
     metadata: Optional[Dict[str, Any]] = None  # 元数据（可选）
+    parent_run_id: Optional[str] = None  # 父 run ID（用于追踪重试关系）
 
 
 class RunResponse(BaseModel):
@@ -46,8 +47,17 @@ class RunResponse(BaseModel):
     attempt: int
     worker_id: Optional[str] = None
     lease_expires_at: Optional[str] = None
+    parent_run_id: Optional[str] = None
+    canceled_at: Optional[str] = None
+    canceled_by: Optional[str] = None
+    cancel_reason: Optional[str] = None
     created_at: str
     updated_at: str
+
+
+class CancelRunRequest(BaseModel):
+    """取消 Run 请求"""
+    cancel_reason: Optional[str] = None
 
 
 class RunListResponse(BaseModel):
@@ -73,6 +83,12 @@ def _serialize_run(run: RunModel) -> Dict[str, Any]:
         if not lease_expires_at_str.endswith('Z') and '+' not in lease_expires_at_str:
             lease_expires_at_str += 'Z'
     
+    canceled_at_str = None
+    if run.canceled_at:
+        canceled_at_str = run.canceled_at.isoformat()
+        if not canceled_at_str.endswith('Z') and '+' not in canceled_at_str:
+            canceled_at_str += 'Z'
+    
     return {
         "id": run.id,
         "type": run.type,
@@ -86,6 +102,10 @@ def _serialize_run(run: RunModel) -> Dict[str, Any]:
         "attempt": run.attempt,
         "worker_id": run.worker_id,
         "lease_expires_at": lease_expires_at_str,
+        "parent_run_id": run.parent_run_id,
+        "canceled_at": canceled_at_str,
+        "canceled_by": run.canceled_by,
+        "cancel_reason": run.cancel_reason,
         "created_at": created_at_str,
         "updated_at": updated_at_str,
     }
@@ -102,6 +122,12 @@ async def _create_run(request: RunCreateRequest, db: Session) -> Dict[str, Any]:
         if conversation is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
     
+    # 验证 parent_run_id 是否存在（如果提供）
+    if request.parent_run_id:
+        parent_run = db.query(RunModel).filter(RunModel.id == request.parent_run_id).first()
+        if parent_run is None:
+            raise HTTPException(status_code=404, detail="Parent run not found")
+    
     run = RunModel(
         id=run_id,
         type=request.type,
@@ -115,6 +141,10 @@ async def _create_run(request: RunCreateRequest, db: Session) -> Dict[str, Any]:
         lease_expires_at=None,
         attempt=0,
         progress=None,
+        parent_run_id=request.parent_run_id,
+        canceled_at=None,
+        canceled_by=None,
+        cancel_reason=None,
         created_at=now,
         updated_at=now,
     )
@@ -253,6 +283,72 @@ async def _delete_run(run_id: str, db: Session) -> None:
     
     db.delete(run)
     db.commit()
+
+
+async def _cancel_run(run_id: str, cancel_reason: Optional[str], db: Session) -> Dict[str, Any]:
+    """取消 Run（内部函数，便于测试）
+    
+    Args:
+        run_id: Run ID
+        cancel_reason: 取消原因（可选）
+        db: 数据库会话
+        
+    Returns:
+        更新后的 Run 字典
+        
+    Raises:
+        HTTPException: Run 不存在或状态不允许取消
+    """
+    now = datetime.now(UTC)
+    
+    # 原子性更新：只能取消 queued 或 running 状态
+    stmt = (
+        update(RunModel)
+        .where(
+            RunModel.id == run_id,
+            RunModel.status.in_([RunStatus.QUEUED, RunStatus.RUNNING]),
+        )
+        .values(
+            status=RunStatus.CANCELED,
+            canceled_at=now,
+            canceled_by="user",
+            cancel_reason=cancel_reason,
+            lease_expires_at=None,
+            updated_at=now,
+        )
+    )
+    result = db.execute(stmt)
+    db.commit()
+    
+    if result.rowcount == 0:
+        # 检查 run 是否存在
+        run = db.query(RunModel).filter(RunModel.id == run_id).first()
+        if run is None:
+            raise HTTPException(status_code=404, detail="Run not found")
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot cancel run with status: {run.status.value}. Only queued or running runs can be canceled."
+            )
+    
+    # 重新查询以获取更新后的模型
+    run = db.query(RunModel).filter(RunModel.id == run_id).first()
+    return _serialize_run(run)
+
+
+@router.post("/{run_id}/cancel", response_model=Dict[str, Any])
+async def cancel_run(
+    run_id: str,
+    request: CancelRunRequest,
+    db: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """取消 Run
+    
+    只能取消 queued 或 running 状态的 Run。
+    如果 Run 不存在或状态不允许取消，返回相应的错误。
+    """
+    run = await _cancel_run(run_id, request.cancel_reason, db)
+    return {"run": run}
 
 
 @router.delete("/{run_id}", status_code=204)

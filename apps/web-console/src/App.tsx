@@ -7,7 +7,7 @@ import { RunsPanel } from "./components/RunsPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { MemoryPage } from "./pages/MemoryPage";
 import { listConversations, createConversation, listMessages, sendMessage, deleteConversation, updateConversation } from "./api/conversations";
-import { listConversationRuns, createRun, deleteRun } from "./api/runs";
+import { listConversationRuns, createRun, deleteRun, cancelRun, retryRun } from "./api/runs";
 import type { Conversation, Message } from "./api/conversations";
 import type { Run } from "./api/runs";
 import "./App.css";
@@ -443,6 +443,56 @@ const App = () => {
     }
   }, []);
 
+  const handleRetryRun = useCallback(async (run: Run) => {
+    try {
+      const newRun = await retryRun(run);
+      // 将新 run 插入列表顶部
+      setRuns((prev) => [newRun, ...prev]);
+      
+      // 如果有新任务创建，确保轮询正在运行
+      const pathMatch = location.pathname.match(/\/chat\/([^/]+)/);
+      const currentConvId = conversationId || (pathMatch ? pathMatch[1] : null);
+      if (currentConvId && !pollingIntervalRef.current) {
+        startPolling(currentConvId);
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : "重试任务失败";
+      console.error("Failed to retry run:", error);
+      alert(errorMessage);
+    }
+  }, [conversationId, location.pathname, startPolling]);
+
+  const handleCancelRun = useCallback(async (runId: string) => {
+    // 乐观更新：立即更新本地 state
+    const originalRuns = [...runs];
+    setRuns((prev) =>
+      prev.map((run) =>
+        run.id === runId
+          ? {
+              ...run,
+              status: "canceled" as const,
+              canceled_at: new Date().toISOString(),
+              canceled_by: "user",
+            }
+          : run
+      )
+    );
+
+    try {
+      const updatedRun = await cancelRun(runId);
+      // 更新为服务器返回的实际状态
+      setRuns((prev) =>
+        prev.map((run) => (run.id === runId ? updatedRun : run))
+      );
+    } catch (error) {
+      // 回滚状态
+      setRuns(originalRuns);
+      const errorMessage = error instanceof Error ? error.message : "取消任务失败";
+      console.error("Failed to cancel run:", error);
+      alert(errorMessage);
+    }
+  }, [runs]);
+
   const handleRetryRuns = useCallback(async () => {
     const pathMatch = location.pathname.match(/\/chat\/([^/]+)/);
     const currentConvId = conversationId || (pathMatch ? pathMatch[1] : null);
@@ -498,6 +548,8 @@ const App = () => {
                       onRetry={handleRetryRuns}
                       onCreateRun={handleCreateRun}
                       onDeleteRun={handleDeleteRun}
+                      onRetryRun={handleRetryRun}
+                      onCancelRun={handleCancelRun}
                     />
                   </div>
                 }

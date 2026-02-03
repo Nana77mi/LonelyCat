@@ -15,11 +15,13 @@ from worker.config import (
 )
 from worker.db import get_db_session
 from worker.queue import (
+    complete_canceled,
     complete_failed,
     complete_success,
     fetch_and_claim_run,
     heartbeat,
 )
+from worker.db import RunStatus
 from worker.runner import TaskRunner
 
 
@@ -82,6 +84,11 @@ def execute_with_heartbeat(
                 # 使用新的数据库会话
                 heartbeat_db = db_session_factory()
                 try:
+                    # 检查 run 是否已被取消
+                    current_run = heartbeat_db.query(RunModel).filter(RunModel.id == run_id).first()
+                    if current_run and current_run.status == RunStatus.CANCELED:
+                        raise RuntimeError("Task was canceled")
+                    
                     success = heartbeat(heartbeat_db, run_id, worker_id, lease_seconds)
                     if success:
                         last_heartbeat_time = current_time
@@ -130,6 +137,13 @@ def run_worker() -> None:
             
             print(f"Claimed run {run.id} (type={run.type}, attempt={run.attempt})")
             
+            # 执行前检查：如果 run 已被取消，直接 finalize
+            if run.status == RunStatus.CANCELED:
+                print(f"Run {run.id} was canceled before execution")
+                complete_canceled(db, run.id, "Canceled before execution")
+                db.close()
+                continue
+            
             # 检查最大重试次数
             if run.attempt > max_attempts:
                 print(f"Run {run.id} exceeded max attempts ({max_attempts}), marking as failed")
@@ -157,9 +171,15 @@ def run_worker() -> None:
                 complete_success(db, run.id, result)
                 
             except RuntimeError as e:
-                # 心跳失败，任务被接管
-                print(f"Run {run.id} heartbeat failed: {e}")
-                # 不需要调用 complete_failed，因为任务已经被其他 worker 接管
+                error_msg = str(e)
+                # 检查是否是取消异常
+                if "canceled" in error_msg.lower() or "Task was canceled" in error_msg:
+                    print(f"Run {run.id} was canceled during execution")
+                    complete_canceled(db, run.id, "Canceled by user")
+                else:
+                    # 心跳失败，任务被接管
+                    print(f"Run {run.id} heartbeat failed: {e}")
+                    # 不需要调用 complete_failed，因为任务已经被其他 worker 接管
                 db.close()
                 continue
                 
