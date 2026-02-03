@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -31,6 +32,16 @@ try:
 except ImportError:
     AGENT_DECISION_AVAILABLE = False
     AgentDecision = None  # type: ignore
+
+# In-process facts fetch (avoid HTTP self-call from core-api to memory service)
+try:
+    from app.services.facts import fetch_active_facts_from_store
+    from memory.facts import MemoryStore
+    _FACTS_FROM_STORE_AVAILABLE = True
+except ImportError:
+    fetch_active_facts_from_store = None  # type: ignore
+    MemoryStore = None  # type: ignore
+    _FACTS_FROM_STORE_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -446,9 +457,6 @@ async def _create_message(
             # Initialize Agent Decision service
             agent_decision = AgentDecision()
             
-            # Gather context for decision
-            active_facts = agent_decision.get_active_facts()
-            
             # Get recent runs (optional, for avoiding duplicates)
             recent_runs = []
             try:
@@ -458,13 +466,13 @@ async def _create_message(
                 logger.warning(f"Failed to query recent runs: {e}")
                 recent_runs = []
             
-            # Make decision
+            # Make decision (active_facts will be auto-fetched inside decide() if None)
             logger.info(f"Making Agent Decision for conversation {conversation_id}")
             decision = agent_decision.decide(
                 user_message=request.content,
                 conversation_id=conversation_id,
                 history_messages=history_messages,
-                active_facts=active_facts,
+                active_facts=None,  # Auto-fetch inside decide()
                 recent_runs=recent_runs,
             )
             
@@ -565,6 +573,32 @@ async def _create_message(
             assistant_content = None
         else:
             try:
+                # 从 MemoryStore 直接拉取 facts，避免同进程 HTTP 自调用阻塞/超时
+                active_facts_list: List[Dict[str, Any]] = []
+                facts_source = "none"
+                if _FACTS_FROM_STORE_AVAILABLE and fetch_active_facts_from_store and MemoryStore is not None:
+                    store = MemoryStore()
+                    active_facts_list, facts_source = await fetch_active_facts_from_store(
+                        store, conversation_id=conversation_id
+                    )
+                    logger.warning(
+                        "[FACTS_DEBUG] memory.list_facts.finish count=%s source=%s conversation_id=%s",
+                        len(active_facts_list),
+                        facts_source,
+                        conversation_id,
+                    )
+                # 透传前强制校验可序列化，避免 silent drop
+                try:
+                    json.dumps(active_facts_list)
+                except (TypeError, ValueError) as ser_err:
+                    logger.error(
+                        "[FACTS_DEBUG] memory.list_facts.serialization_fail conversation_id=%s error=%s",
+                        conversation_id,
+                        ser_err,
+                        exc_info=True,
+                    )
+                    active_facts_list = []
+                    facts_source = "fallback_zero"
                 result = chat_flow(
                     user_message=request.content,
                     persona_id=persona_id,
@@ -572,8 +606,26 @@ async def _create_message(
                     memory_client=None,
                     config=None,
                     history_messages=history_messages if history_messages else None,
+                    conversation_id=conversation_id,
+                    active_facts=active_facts_list,
                 )
                 assistant_content = result.assistant_reply
+                # 记录trace日志用于调试facts注入（用 WARNING 确保在默认日志级别下可见）
+                trace_count = len(result.trace_lines) if result.trace_lines else 0
+                logger.warning(f"[FACTS_DEBUG] Chat flow completed for conversation {conversation_id}, trace_lines count: {trace_count}")
+                if result.trace_lines:
+                    # 记录所有facts相关的trace
+                    facts_trace = [line for line in result.trace_lines if "facts" in line.lower() or "memory.list_facts" in line or "responder.facts" in line]
+                    if facts_trace:
+                        logger.warning(f"[FACTS_DEBUG] Facts trace for conversation {conversation_id}:")
+                        for line in facts_trace:
+                            logger.warning(f"  {line}")
+                    else:
+                        logger.warning(f"[FACTS_DEBUG] No facts trace in {len(result.trace_lines)} lines for conversation {conversation_id}. First 15 trace lines:")
+                        for i, line in enumerate(result.trace_lines[:15]):
+                            logger.warning(f"  [{i}] {line}")
+                else:
+                    logger.warning(f"[FACTS_DEBUG] No trace lines in result for conversation {conversation_id}, trace_id={result.trace_id}")
             except Exception as e:
                 # Worker 失败：记录错误，创建 system 错误消息
                 import traceback
