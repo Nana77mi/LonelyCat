@@ -6,6 +6,8 @@ type RunDetailsDrawerProps = {
   run: Run | null;
   onClose: () => void;
   onRetryRun?: (run: Run) => void;
+  onApplyEditDocs?: (run: Run) => void;
+  onCancelEditDocs?: (run: Run) => void;
 };
 
 type StepItem = {
@@ -56,7 +58,7 @@ function buildDebugBundle(run: Run): string {
   return lines.join("\n");
 }
 
-export const RunDetailsDrawer = ({ run, onClose, onRetryRun }: RunDetailsDrawerProps) => {
+export const RunDetailsDrawer = ({ run, onClose, onRetryRun, onApplyEditDocs, onCancelEditDocs }: RunDetailsDrawerProps) => {
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
 
   if (!run) {
@@ -65,10 +67,18 @@ export const RunDetailsDrawer = ({ run, onClose, onRetryRun }: RunDetailsDrawerP
 
   const input = (run.input || {}) as Record<string, unknown>;
   const output = (run.output || {}) as Record<string, unknown>;
+  const result = (output.result as Record<string, unknown> | undefined) ?? {};
   const traceId = (output.trace_id as string) ?? (input.trace_id as string) ?? "—";
   const steps = (output.steps as StepItem[] | undefined) ?? [];
   const artifacts = (output.artifacts as Record<string, unknown> | undefined) ?? {};
   const summaryArt = (artifacts.summary as { text?: string; format?: string } | undefined) ?? {};
+  const reportArt = (artifacts.report as { text?: string; format?: string } | undefined) ?? {};
+  const sourcesList = (artifacts.sources as Array<{ title?: string; url?: string; snippet?: string; provider?: string }> | undefined) ?? [];
+  const diffText = artifacts.diff as string | undefined;
+  const patchIdFull = artifacts.patch_id as string | undefined;
+  const patchIdShort = artifacts.patch_id_short as string | undefined;
+  const patchIdDisplay = patchIdShort ?? patchIdFull ?? patchIdFull?.slice(0, 16);
+  const waitConfirm = run.status === "succeeded" && result.task_state === "WAIT_CONFIRM" && diffText;
   const factsArt = (artifacts.facts as { snapshot_id?: string; source?: string } | undefined) ?? {};
   const factsSnapshotId = factsArt.snapshot_id ?? "—";
   const factsSnapshotSource = factsArt.source ?? "—";
@@ -156,6 +166,81 @@ export const RunDetailsDrawer = ({ run, onClose, onRetryRun }: RunDetailsDrawerP
               <h4 className="run-drawer-section-title">Artifacts — Summary</h4>
               <div className="run-drawer-block run-drawer-summary">
                 {summaryArt.text}
+              </div>
+            </div>
+          )}
+
+          {reportArt.text !== undefined && reportArt.text !== "" && (
+            <div className="run-drawer-section">
+              <h4 className="run-drawer-section-title">Artifacts — Report</h4>
+              <div className="run-drawer-block run-drawer-summary">
+                {reportArt.text}
+              </div>
+            </div>
+          )}
+
+          {sourcesList.length > 0 && (
+            <div className="run-drawer-section">
+              <h4 className="run-drawer-section-title">Artifacts — Sources</h4>
+              <ul className="run-drawer-sources">
+                {sourcesList.map((src, i) => (
+                  <li key={i} className="run-drawer-source-item">
+                    <a
+                      href={src.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="run-drawer-source-link"
+                    >
+                      {src.title ?? src.url ?? "—"}
+                    </a>
+                    {src.snippet && (
+                      <p className="run-drawer-source-snippet">{src.snippet}</p>
+                    )}
+                    {src.provider && (
+                      <span className="run-drawer-source-provider">{src.provider}</span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {waitConfirm && (
+            <div className="run-drawer-section">
+              <h4 className="run-drawer-section-title">Diff（待确认）</h4>
+              {patchIdDisplay && (
+                <div className="run-drawer-field run-drawer-patch-id">
+                  <strong>Patch ID:</strong> <code className="run-drawer-code">{patchIdDisplay}</code>
+                </div>
+              )}
+              <pre className="run-drawer-diff">{diffText}</pre>
+              <div className="run-drawer-wait-confirm-actions">
+                {onApplyEditDocs && patchIdFull && (
+                  <button
+                    type="button"
+                    className="run-drawer-btn run-drawer-apply-btn"
+                    onClick={() => {
+                      onApplyEditDocs(run);
+                      onClose();
+                    }}
+                    aria-label="应用变更"
+                  >
+                    Apply
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="run-drawer-btn run-drawer-cancel-edit-btn"
+                  onClick={() => {
+                    if (onCancelEditDocs && patchIdFull) {
+                      onCancelEditDocs(run);
+                    }
+                    onClose();
+                  }}
+                  aria-label="取消"
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           )}
