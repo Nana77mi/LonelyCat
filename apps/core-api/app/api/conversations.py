@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
+from app.api.runs import _list_conversation_runs
 from app.db import ConversationModel, MessageModel, MessageRole, SessionLocal
 
 router = APIRouter()
@@ -129,7 +130,7 @@ async def _list_conversations(
 async def _create_conversation(request: ConversationCreateRequest, db: Session) -> Dict[str, Any]:
     """创建新对话（内部函数，便于测试）"""
     conversation_id = str(uuid.uuid4())
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     
     conversation = ConversationModel(
         id=conversation_id,
@@ -157,7 +158,7 @@ async def _update_conversation(
     
     if request.title is not None:
         conversation.title = request.title
-        conversation.updated_at = datetime.utcnow()
+        conversation.updated_at = datetime.now(UTC)
     
     db.commit()
     db.refresh(conversation)
@@ -245,7 +246,7 @@ async def _create_message(
                 "duplicate": True,
             }
     
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     
     # 如果指定了 role，直接创建消息
     if request.role:
@@ -369,7 +370,7 @@ async def _create_message(
             assistant_content = None
     
     # 4. 创建 assistant/system 消息
-    assistant_now = datetime.utcnow()
+    assistant_now = datetime.now(UTC)
     
     if worker_error:
         # Worker 失败：创建 system 错误消息，确保对话不中断
@@ -481,6 +482,20 @@ async def update_conversation(
     目前支持更新标题。
     """
     return await _update_conversation(conversation_id, request, db)
+
+
+@router.get("/{conversation_id}/runs", response_model=Dict[str, Any])
+async def get_conversation_runs(
+    conversation_id: str,
+    db: Session = Depends(get_db),
+    limit: Optional[int] = Query(None, ge=1, le=1000, description="Maximum number of runs to return"),
+    offset: Optional[int] = Query(None, ge=0, description="Number of runs to skip"),
+) -> Dict[str, Any]:
+    """获取指定会话的所有 Run，按 updated_at 降序排列
+    
+    支持分页参数 limit 和 offset，便于后续扩展。
+    """
+    return await _list_conversation_runs(conversation_id, db, limit=limit, offset=offset)
 
 
 @router.delete("/{conversation_id}", status_code=204)
