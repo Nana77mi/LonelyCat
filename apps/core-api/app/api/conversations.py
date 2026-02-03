@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
@@ -9,7 +10,8 @@ from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from app.api.runs import _list_conversation_runs
+from app.agent_loop_config import AGENT_LOOP_ENABLED
+from app.api.runs import RunCreateRequest, _create_run, _list_conversation_runs
 from app.db import ConversationModel, MessageModel, MessageRole, SessionLocal
 
 router = APIRouter()
@@ -21,6 +23,16 @@ try:
 except ImportError:
     AGENT_WORKER_AVAILABLE = False
     chat_flow = None  # type: ignore
+
+# Try to import Agent Decision service
+try:
+    from app.services.agent_decision import AgentDecision
+    AGENT_DECISION_AVAILABLE = True
+except ImportError:
+    AGENT_DECISION_AVAILABLE = False
+    AgentDecision = None  # type: ignore
+
+logger = logging.getLogger(__name__)
 
 
 def get_db():
@@ -391,68 +403,180 @@ async def _create_message(
     
     # 2. 查询历史消息并转换为 LLM 消息格式
     history_messages: list[dict[str, str]] = []
-    if AGENT_WORKER_AVAILABLE and chat_flow is not None:
-        try:
-            # Query with limit to reduce DB load (MAX_MESSAGES + buffer for filtering)
-            # Default MAX_MESSAGES is 40 (from chat_flow), so query 60 messages to account for filtering
-            # Order by created_at DESC, then reverse to get ascending order
-            # This is more efficient than .all() for conversations with many messages
-            MAX_MESSAGES_LIMIT = 60  # MAX_MESSAGES (40) + buffer (20)
-            history_messages_query = (
-                db.query(MessageModel)
-                .filter(MessageModel.conversation_id == conversation_id)
-                .order_by(MessageModel.created_at.desc())
-                .limit(MAX_MESSAGES_LIMIT)
-                .all()
-            )
-            # Reverse to get ascending order (oldest first)
-            history_messages_query.reverse()
-            
-            # 转换为 LLM 消息格式（只包含 USER 和 ASSISTANT 角色，跳过 SYSTEM）
-            # 排除刚插入的最后一条 user message（避免重复，它会在 responder 中作为 current_user_message 添加）
-            for msg in history_messages_query:
-                # Skip the last user message that was just inserted (to avoid duplication)
-                if msg.id == user_message_id:
-                    continue
-                if msg.role == MessageRole.USER:
-                    history_messages.append({"role": "user", "content": msg.content})
-                elif msg.role == MessageRole.ASSISTANT:
-                    history_messages.append({"role": "assistant", "content": msg.content})
-                # 跳过 SYSTEM 角色的消息（错误消息等）
-        except Exception as e:
-            # 历史消息查询失败不影响主流程，只记录错误
-            print(f"[WARNING] Failed to query history messages: {e}")
-            history_messages = []
+    try:
+        # Query with limit to reduce DB load (MAX_MESSAGES + buffer for filtering)
+        # Default MAX_MESSAGES is 40 (from chat_flow), so query 60 messages to account for filtering
+        # Order by created_at DESC, then reverse to get ascending order
+        # This is more efficient than .all() for conversations with many messages
+        MAX_MESSAGES_LIMIT = 60  # MAX_MESSAGES (40) + buffer (20)
+        history_messages_query = (
+            db.query(MessageModel)
+            .filter(MessageModel.conversation_id == conversation_id)
+            .order_by(MessageModel.created_at.desc())
+            .limit(MAX_MESSAGES_LIMIT)
+            .all()
+        )
+        # Reverse to get ascending order (oldest first)
+        history_messages_query.reverse()
+        
+        # 转换为 LLM 消息格式（只包含 USER 和 ASSISTANT 角色，跳过 SYSTEM）
+        # 排除刚插入的最后一条 user message（避免重复，它会在 responder 中作为 current_user_message 添加）
+        for msg in history_messages_query:
+            # Skip the last user message that was just inserted (to avoid duplication)
+            if msg.id == user_message_id:
+                continue
+            if msg.role == MessageRole.USER:
+                history_messages.append({"role": "user", "content": msg.content})
+            elif msg.role == MessageRole.ASSISTANT:
+                history_messages.append({"role": "assistant", "content": msg.content})
+            # 跳过 SYSTEM 角色的消息（错误消息等）
+    except Exception as e:
+        # 历史消息查询失败不影响主流程，只记录错误
+        logger.warning(f"Failed to query history messages: {e}")
+        history_messages = []
     
-    # 3. 调用 worker 处理消息
+    # 3. Agent Decision Layer (if enabled)
+    decision_used = False
+    decision_run_id = None
     worker_error = None
     assistant_content = None
     
-    if not AGENT_WORKER_AVAILABLE or chat_flow is None:
-        # 如果 worker 不可用，创建 system 错误消息
-        worker_error = "Agent worker is not available"
-        assistant_content = None
-    else:
+    if AGENT_LOOP_ENABLED and AGENT_DECISION_AVAILABLE and AgentDecision is not None:
         try:
-            result = chat_flow(
+            # Initialize Agent Decision service
+            agent_decision = AgentDecision()
+            
+            # Gather context for decision
+            active_facts = agent_decision.get_active_facts()
+            
+            # Get recent runs (optional, for avoiding duplicates)
+            recent_runs = []
+            try:
+                runs_result = await _list_conversation_runs(conversation_id, db, limit=5, offset=0)
+                recent_runs = runs_result.get("items", [])
+            except Exception as e:
+                logger.warning(f"Failed to query recent runs: {e}")
+                recent_runs = []
+            
+            # Make decision
+            logger.info(f"Making Agent Decision for conversation {conversation_id}")
+            decision = agent_decision.decide(
                 user_message=request.content,
-                persona_id=persona_id,
-                llm=None,
-                memory_client=None,
-                config=None,
-                history_messages=history_messages if history_messages else None,
+                conversation_id=conversation_id,
+                history_messages=history_messages,
+                active_facts=active_facts,
+                recent_runs=recent_runs,
             )
-            assistant_content = result.assistant_reply
+            
+            decision_used = True
+            logger.info(
+                f"Decision made: decision={decision.decision}, "
+                f"confidence={decision.confidence}, conversation_id={conversation_id}"
+            )
+            
+            # Execute decision
+            if decision.decision == "reply":
+                # Only reply, no run
+                assistant_content = decision.reply.content if decision.reply else ""
+                logger.info(f"Decision: reply-only, conversation_id={conversation_id}")
+            
+            elif decision.decision == "run":
+                # Create run only, no immediate reply (or optional hint message)
+                if decision.run:
+                    try:
+                        run_request = RunCreateRequest(
+                            type=decision.run.type,
+                            title=decision.run.title,
+                            conversation_id=decision.run.conversation_id,
+                            input=decision.run.input,
+                        )
+                        run_result = await _create_run(run_request, db)
+                        decision_run_id = run_result.get("id")
+                        logger.info(
+                            f"Run created: run_id={decision_run_id}, type={decision.run.type}, "
+                            f"conversation_id={conversation_id}"
+                        )
+                        
+                        # Optional: Create hint message
+                        if decision.run.title:
+                            assistant_content = f"我已开始后台任务：{decision.run.title}，完成后会通知你。"
+                        else:
+                            assistant_content = f"我已开始后台任务：{decision.run.type}，完成后会通知你。"
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to create run: {e}, conversation_id={conversation_id}",
+                            exc_info=True
+                        )
+                        # Fallback: create error message
+                        assistant_content = f"抱歉，任务创建失败：{str(e)}"
+            
+            elif decision.decision == "reply_and_run":
+                # Reply AND create run
+                assistant_content = decision.reply.content if decision.reply else ""
+                
+                if decision.run:
+                    try:
+                        run_request = RunCreateRequest(
+                            type=decision.run.type,
+                            title=decision.run.title,
+                            conversation_id=decision.run.conversation_id,
+                            input=decision.run.input,
+                        )
+                        run_result = await _create_run(run_request, db)
+                        decision_run_id = run_result.get("id")
+                        logger.info(
+                            f"Run created: run_id={decision_run_id}, type={decision.run.type}, "
+                            f"conversation_id={conversation_id}"
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Failed to create run: {e}, conversation_id={conversation_id}",
+                            exc_info=True
+                        )
+                        # Still send reply, but add error note
+                        if assistant_content:
+                            assistant_content += f"\n\n（注：任务创建失败：{str(e)}）"
+                        else:
+                            assistant_content = f"抱歉，任务创建失败：{str(e)}"
+        
         except Exception as e:
-            # Worker 失败：记录错误，创建 system 错误消息
+            # Decision failed: fallback to chat_flow
             import traceback
             error_traceback = traceback.format_exc()
-            print(f"[ERROR] Worker failed: {e}")
-            print(f"[ERROR] Traceback:\n{error_traceback}")
-            worker_error = str(e)
-            assistant_content = None
+            logger.warning(
+                f"Agent Decision failed, falling back to chat_flow: {e}, "
+                f"conversation_id={conversation_id}"
+            )
+            logger.debug(f"Decision error traceback:\n{error_traceback}")
+            decision_used = False
     
-    # 4. 创建 assistant/system 消息
+    # 4. Fallback to chat_flow if Decision was not used or failed
+    if not decision_used:
+        if not AGENT_WORKER_AVAILABLE or chat_flow is None:
+            # 如果 worker 不可用，创建 system 错误消息
+            worker_error = "Agent worker is not available"
+            assistant_content = None
+        else:
+            try:
+                result = chat_flow(
+                    user_message=request.content,
+                    persona_id=persona_id,
+                    llm=None,
+                    memory_client=None,
+                    config=None,
+                    history_messages=history_messages if history_messages else None,
+                )
+                assistant_content = result.assistant_reply
+            except Exception as e:
+                # Worker 失败：记录错误，创建 system 错误消息
+                import traceback
+                error_traceback = traceback.format_exc()
+                logger.error(f"Worker failed: {e}, conversation_id={conversation_id}")
+                logger.debug(f"Worker error traceback:\n{error_traceback}")
+                worker_error = str(e)
+                assistant_content = None
+    
+    # 5. 创建 assistant/system 消息
     assistant_now = datetime.now(UTC)
     
     if worker_error:
@@ -469,22 +593,38 @@ async def _create_message(
             client_msg_id=None,
         )
     else:
-        # Worker 成功：创建 assistant 消息
+        # Worker/Decision 成功：创建 assistant 消息
         assistant_message_id = str(uuid.uuid4())
+        
+        # Build source_ref and meta_json based on whether Decision was used
+        if decision_used:
+            source_ref = {
+                "kind": "agent_decision",
+                "ref_id": conversation_id,
+                "excerpt": None,
+            }
+            meta_json = {
+                "agent_decision": True,
+                "run_id": decision_run_id,
+            }
+        else:
+            source_ref = {"kind": "chat", "ref_id": conversation_id, "excerpt": None}
+            meta_json = None
+        
         assistant_message = MessageModel(
             id=assistant_message_id,
             conversation_id=conversation_id,
             role=MessageRole.ASSISTANT,
-            content=assistant_content,
+            content=assistant_content or "",
             created_at=assistant_now,
-            source_ref={"kind": "chat", "ref_id": conversation_id, "excerpt": None},
-            meta_json=None,
+            source_ref=source_ref,
+            meta_json=meta_json,
             client_msg_id=None,
         )
     
     db.add(assistant_message)
     
-    # 5. 更新 conversation 的 updated_at（以 assistant/system 消息时间为准）
+    # 6. 更新 conversation 的 updated_at（以 assistant/system 消息时间为准）
     conversation.updated_at = assistant_now
     try:
         db.commit()

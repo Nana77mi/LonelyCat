@@ -1,8 +1,12 @@
 import asyncio
+import json
 import os
+import sys
 import tempfile
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
@@ -12,6 +16,11 @@ from app.api import conversations
 from app.db import Base, ConversationModel, MessageModel, MessageRole, RunModel, RunStatus
 from app.services import run_messages
 from sqlalchemy import create_engine
+
+# Add agent-worker path for imports
+agent_worker_path = Path(__file__).parent.parent.parent / "agent-worker"
+if str(agent_worker_path) not in sys.path:
+    sys.path.insert(0, str(agent_worker_path))
 
 
 def _commit_db(db):
@@ -1403,3 +1412,336 @@ def test_has_unread_with_last_read_at(temp_db) -> None:
     assert conversation.updated_at > conversation.last_read_at
     from app.services.run_messages import _compute_has_unread
     assert _compute_has_unread(conversation) is True
+
+
+# ============================================================================
+# Agent Loop Integration Tests
+# ============================================================================
+
+def test_agent_loop_decision_reply_only(temp_db, monkeypatch) -> None:
+    """Test Agent Loop: decision=reply, only reply, no run created."""
+    db, _ = temp_db
+    
+    # Create conversation
+    request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # Mock Agent Decision to return reply-only
+    decision_json = {
+        "decision": "reply",
+        "reply": {"content": "Hello! How can I help you?"},
+        "run": None,
+        "confidence": 0.9,
+        "reason": "User asked a question",
+    }
+    
+    def mock_decide(*args, **kwargs):
+        from app.services.agent_decision import Decision, ReplyContent
+        return Decision(
+            decision="reply",
+            reply=ReplyContent(content="Hello! How can I help you?"),
+            run=None,
+            confidence=0.9,
+            reason="User asked a question",
+        )
+    
+    # Enable Agent Loop and mock AgentDecision
+    monkeypatch.setattr(conversations, "AGENT_LOOP_ENABLED", True)
+    monkeypatch.setattr(conversations, "AGENT_DECISION_AVAILABLE", True)
+    
+    # Mock AgentDecision.decide directly
+    with patch("app.api.conversations.AgentDecision") as mock_agent_decision_class:
+        mock_agent_decision = MagicMock()
+        mock_agent_decision.decide = MagicMock(side_effect=mock_decide)
+        mock_agent_decision.get_active_facts = MagicMock(return_value=[])
+        mock_agent_decision_class.return_value = mock_agent_decision
+        
+        # Create message
+        message_request = conversations.MessageCreateRequest(content="Hello")
+        result = asyncio.run(conversations._create_message(conversation_id, message_request, db))
+        _commit_db(db)
+    
+    # Verify result
+    assert "user_message" in result
+    assert "assistant_message" in result
+    assert result["assistant_message"]["role"] == "assistant"
+    assert result["assistant_message"]["content"] == "Hello! How can I help you?"
+    
+    # Verify no run was created
+    from app.api.runs import _list_conversation_runs
+    runs_result = asyncio.run(_list_conversation_runs(conversation_id, db))
+    assert len(runs_result["items"]) == 0
+    
+    # Verify meta_json indicates agent_decision was used
+    assert result["assistant_message"]["meta_json"] is not None
+    assert result["assistant_message"]["meta_json"].get("agent_decision") is True
+
+
+def test_agent_loop_decision_run_only(temp_db, monkeypatch) -> None:
+    """Test Agent Loop: decision=run, create run with hint message."""
+    db, _ = temp_db
+    
+    # Create conversation
+    request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # Mock Agent Decision to return run-only
+    def mock_decide(*args, **kwargs):
+        from app.services.agent_decision import Decision, RunDecision
+        return Decision(
+            decision="run",
+            reply=None,
+            run=RunDecision(
+                type="sleep",
+                title="Sleep 5 seconds",
+                conversation_id=conversation_id,
+                input={"seconds": 5},
+            ),
+            confidence=0.95,
+            reason="User wants to sleep",
+        )
+    
+    # Enable Agent Loop and mock AgentDecision
+    monkeypatch.setattr(conversations, "AGENT_LOOP_ENABLED", True)
+    monkeypatch.setattr(conversations, "AGENT_DECISION_AVAILABLE", True)
+    
+    # Mock AgentDecision.decide directly
+    with patch("app.api.conversations.AgentDecision") as mock_agent_decision_class:
+        mock_agent_decision = MagicMock()
+        mock_agent_decision.decide = MagicMock(side_effect=mock_decide)
+        mock_agent_decision.get_active_facts = MagicMock(return_value=[])
+        mock_agent_decision_class.return_value = mock_agent_decision
+        
+        # Create message
+        message_request = conversations.MessageCreateRequest(content="Sleep for 5 seconds")
+        result = asyncio.run(conversations._create_message(conversation_id, message_request, db))
+        _commit_db(db)
+    
+    # Verify result
+    assert "user_message" in result
+    assert "assistant_message" in result
+    assert result["assistant_message"]["role"] == "assistant"
+    # Should have hint message
+    assert "我已开始后台任务" in result["assistant_message"]["content"]
+    assert "Sleep 5 seconds" in result["assistant_message"]["content"]
+    
+    # Verify run was created
+    from app.api.runs import _list_conversation_runs
+    runs_result = asyncio.run(_list_conversation_runs(conversation_id, db))
+    assert len(runs_result["items"]) == 1
+    run = runs_result["items"][0]
+    assert run["type"] == "sleep"
+    assert run["title"] == "Sleep 5 seconds"
+    assert run["conversation_id"] == conversation_id
+    assert run["input"] == {"seconds": 5}
+    assert run["status"] == "queued"
+
+
+def test_agent_loop_decision_reply_and_run(temp_db, monkeypatch) -> None:
+    """Test Agent Loop: decision=reply_and_run, reply + create run."""
+    db, _ = temp_db
+    
+    # Create conversation
+    request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # Mock Agent Decision to return reply_and_run
+    def mock_decide(*args, **kwargs):
+        from app.services.agent_decision import Decision, ReplyContent, RunDecision
+        return Decision(
+            decision="reply_and_run",
+            reply=ReplyContent(content="I'll start the sleep task for you."),
+            run=RunDecision(
+                type="sleep",
+                title="Sleep 5 seconds",
+                conversation_id=conversation_id,
+                input={"seconds": 5},
+            ),
+            confidence=0.98,
+            reason="User wants both reply and task",
+        )
+    
+    # Enable Agent Loop and mock AgentDecision
+    monkeypatch.setattr(conversations, "AGENT_LOOP_ENABLED", True)
+    monkeypatch.setattr(conversations, "AGENT_DECISION_AVAILABLE", True)
+    
+    # Mock AgentDecision.decide directly
+    with patch("app.api.conversations.AgentDecision") as mock_agent_decision_class:
+        mock_agent_decision = MagicMock()
+        mock_agent_decision.decide = MagicMock(side_effect=mock_decide)
+        mock_agent_decision.get_active_facts = MagicMock(return_value=[])
+        mock_agent_decision_class.return_value = mock_agent_decision
+        
+        # Create message
+        message_request = conversations.MessageCreateRequest(content="Please sleep for 5 seconds")
+        result = asyncio.run(conversations._create_message(conversation_id, message_request, db))
+        _commit_db(db)
+    
+    # Verify result
+    assert "user_message" in result
+    assert "assistant_message" in result
+    assert result["assistant_message"]["role"] == "assistant"
+    assert result["assistant_message"]["content"] == "I'll start the sleep task for you."
+    
+    # Verify run was created
+    from app.api.runs import _list_conversation_runs
+    runs_result = asyncio.run(_list_conversation_runs(conversation_id, db))
+    assert len(runs_result["items"]) == 1
+    run = runs_result["items"][0]
+    assert run["type"] == "sleep"
+    assert run["title"] == "Sleep 5 seconds"
+    assert run["conversation_id"] == conversation_id
+
+
+def test_agent_loop_decision_fallback_to_chat_flow(temp_db, monkeypatch) -> None:
+    """Test Agent Loop: Decision failure falls back to chat_flow."""
+    db, _ = temp_db
+    
+    # Create conversation
+    request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # Mock chat_flow to return a response
+    def mock_chat_flow(*args, **kwargs):
+        from agent_worker.chat_flow import ChatResult
+        return ChatResult(
+            assistant_reply="Fallback response from chat_flow",
+            memory_status="no_action",
+            trace_id="test-trace-id",
+            trace_lines=[],
+        )
+    
+    # Enable Agent Loop but make Decision fail
+    monkeypatch.setattr(conversations, "AGENT_LOOP_ENABLED", True)
+    monkeypatch.setattr(conversations, "AGENT_DECISION_AVAILABLE", True)
+    monkeypatch.setattr(conversations, "chat_flow", mock_chat_flow)
+    monkeypatch.setattr(conversations, "AGENT_WORKER_AVAILABLE", True)
+    
+    # Mock AgentDecision.decide directly
+    with patch("app.api.conversations.AgentDecision") as mock_agent_decision_class:
+        # Make Decision raise an error
+        mock_agent_decision = MagicMock()
+        mock_agent_decision.decide = MagicMock(side_effect=ValueError("Decision failed"))
+        mock_agent_decision.get_active_facts = MagicMock(return_value=[])
+        mock_agent_decision_class.return_value = mock_agent_decision
+        
+        # Create message
+        message_request = conversations.MessageCreateRequest(content="Test message")
+        result = asyncio.run(conversations._create_message(conversation_id, message_request, db))
+        _commit_db(db)
+    
+    # Verify fallback to chat_flow worked
+    assert "user_message" in result
+    assert "assistant_message" in result
+    assert result["assistant_message"]["role"] == "assistant"
+    assert result["assistant_message"]["content"] == "Fallback response from chat_flow"
+    
+    # Verify meta_json does NOT indicate agent_decision was used
+    assert result["assistant_message"]["meta_json"] is None or result["assistant_message"]["meta_json"].get("agent_decision") is not True
+
+
+def test_agent_loop_run_creation_failure(temp_db, monkeypatch) -> None:
+    """Test Agent Loop: Run creation failure still sends reply if available."""
+    db, _ = temp_db
+    
+    # Create conversation
+    request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # Mock Agent Decision to return reply_and_run
+    def mock_decide(*args, **kwargs):
+        from app.services.agent_decision import Decision, ReplyContent, RunDecision
+        return Decision(
+            decision="reply_and_run",
+            reply=ReplyContent(content="I'll try to create a task."),
+            run=RunDecision(
+                type="sleep",
+                title="Sleep 5 seconds",
+                conversation_id=conversation_id,
+                input={"seconds": 5},
+            ),
+            confidence=0.95,
+            reason="Test",
+        )
+    
+    # Enable Agent Loop and mock AgentDecision
+    monkeypatch.setattr(conversations, "AGENT_LOOP_ENABLED", True)
+    monkeypatch.setattr(conversations, "AGENT_DECISION_AVAILABLE", True)
+    
+    # Mock AgentDecision.decide directly
+    with patch("app.api.conversations.AgentDecision") as mock_agent_decision_class, \
+         patch("app.api.conversations._create_run") as mock_create_run:
+        mock_agent_decision = MagicMock()
+        mock_agent_decision.decide = MagicMock(side_effect=mock_decide)
+        mock_agent_decision.get_active_facts = MagicMock(return_value=[])
+        mock_agent_decision_class.return_value = mock_agent_decision
+        
+        # Make run creation fail
+        mock_create_run.side_effect = Exception("Run creation failed")
+        
+        # Create message
+        message_request = conversations.MessageCreateRequest(content="Create a task")
+        result = asyncio.run(conversations._create_message(conversation_id, message_request, db))
+        _commit_db(db)
+    
+    # Verify reply was still sent (with error note)
+    assert "user_message" in result
+    assert "assistant_message" in result
+    assert result["assistant_message"]["role"] == "assistant"
+    assert "I'll try to create a task" in result["assistant_message"]["content"]
+    assert "任务创建失败" in result["assistant_message"]["content"]
+    
+    # Verify no run was created
+    from app.api.runs import _list_conversation_runs
+    runs_result = asyncio.run(_list_conversation_runs(conversation_id, db))
+    assert len(runs_result["items"]) == 0
+
+
+def test_agent_loop_disabled_fallback_to_chat_flow(temp_db, monkeypatch) -> None:
+    """Test Agent Loop: When disabled, uses chat_flow normally."""
+    db, _ = temp_db
+    
+    # Create conversation
+    request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+    
+    # Mock chat_flow to return a response
+    def mock_chat_flow(*args, **kwargs):
+        from agent_worker.chat_flow import ChatResult
+        return ChatResult(
+            assistant_reply="Response from chat_flow",
+            memory_status="no_action",
+            trace_id="test-trace-id",
+            trace_lines=[],
+        )
+    
+    # Disable Agent Loop
+    monkeypatch.setattr(conversations, "AGENT_LOOP_ENABLED", False)
+    monkeypatch.setattr(conversations, "chat_flow", mock_chat_flow)
+    monkeypatch.setattr(conversations, "AGENT_WORKER_AVAILABLE", True)
+    
+    # Create message
+    message_request = conversations.MessageCreateRequest(content="Test message")
+    result = asyncio.run(conversations._create_message(conversation_id, message_request, db))
+    _commit_db(db)
+    
+    # Verify chat_flow was used
+    assert "user_message" in result
+    assert "assistant_message" in result
+    assert result["assistant_message"]["role"] == "assistant"
+    assert result["assistant_message"]["content"] == "Response from chat_flow"
+    
+    # Verify meta_json does NOT indicate agent_decision was used
+    assert result["assistant_message"]["meta_json"] is None or result["assistant_message"]["meta_json"].get("agent_decision") is not True
