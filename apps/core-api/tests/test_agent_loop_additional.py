@@ -273,10 +273,10 @@ def test_agent_decision_prompt_includes_active_facts(temp_db, monkeypatch) -> No
     _commit_db(db)
     conversation_id = conv["id"]
     
-    # Mock active facts
+    # Mock active facts (include status so fetch_active_facts in decide() keeps them)
     active_facts = [
-        {"key": "user_name", "value": "Alice"},
-        {"key": "favorite_color", "value": "blue"},
+        {"key": "user_name", "value": "Alice", "status": "active"},
+        {"key": "favorite_color", "value": "blue", "status": "active"},
     ]
     
     # Track the prompt that was passed to LLM
