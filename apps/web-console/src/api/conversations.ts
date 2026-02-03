@@ -75,6 +75,9 @@ export type Conversation = {
   title: string;
   created_at: string; // ISO 8601 格式
   updated_at: string; // ISO 8601 格式
+  has_unread?: boolean; // 是否有未读消息（动态计算）
+  last_read_at?: string | null; // ISO 8601 格式，最后阅读时间
+  meta_json?: Record<string, unknown> | null; // 元数据，例如 { kind: "system_run" }
 };
 
 export type Message = {
@@ -222,6 +225,23 @@ export const deleteConversation = async (conversationId: string): Promise<void> 
   if (!response.ok) {
     throw new Error(await buildErrorMessage("Failed to delete conversation", response));
   }
+};
+
+/**
+ * 标记对话为已读
+ * 
+ * @param conversationId 对话 ID
+ * @returns 更新后的对话对象（包含更新后的 has_unread 状态）
+ */
+export const markConversationRead = async (conversationId: string): Promise<Conversation> => {
+  const url = buildUrl(`/conversations/${conversationId}/mark-read`);
+  const response = await fetch(url, {
+    method: "PATCH",
+  });
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to mark conversation as read", response));
+  }
+  return await parseJson<Conversation>(response);
 };
 
 /**

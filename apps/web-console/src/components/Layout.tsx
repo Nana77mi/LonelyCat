@@ -4,15 +4,16 @@ import "./Layout.css";
 type LayoutProps = {
   sidebar: ReactNode;
   mainContent: ReactNode;
+  tasksPanel?: ReactNode; // 右侧固定 Tasks Panel（可选）
   onSettingsClick: () => void;
 };
 
-export const Layout = ({ sidebar, mainContent, onSettingsClick }: LayoutProps) => {
+export const Layout = ({ sidebar, mainContent, tasksPanel, onSettingsClick }: LayoutProps) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   return (
     <div className="layout">
-      {/* 侧边栏 */}
+      {/* 侧边栏 - 固定左侧 */}
       <aside className={`sidebar ${sidebarOpen ? "open" : "closed"}`}>
         <div className="sidebar-header">
           <button
@@ -34,7 +35,7 @@ export const Layout = ({ sidebar, mainContent, onSettingsClick }: LayoutProps) =
         {sidebar}
       </aside>
 
-      {/* 主内容区 */}
+      {/* 主内容区 - 中间弹性区域 */}
       <main className="main-content">
         {/* 顶部栏 */}
         <header className="top-bar">
@@ -78,6 +79,9 @@ export const Layout = ({ sidebar, mainContent, onSettingsClick }: LayoutProps) =
         </header>
         {mainContent}
       </main>
+
+      {/* Tasks Panel - 固定右侧 */}
+      {tasksPanel && <aside className="tasks-panel">{tasksPanel}</aside>}
     </div>
   );
 };

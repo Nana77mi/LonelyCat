@@ -130,6 +130,27 @@
   text-align: right;
 }
 
+/* 主动消息标识 */
+.message-proactive-badge {
+  margin-bottom: 6px;
+}
+
+.message-proactive-label {
+  display: inline-block;
+  padding: 2px 8px;
+  background-color: #dbeafe;
+  color: #1e40af;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.message.user .message-proactive-label {
+  background-color: #bfdbfe;
+  color: #1e3a8a;
+}
+
 /* 失败消息样式 */
 .message-failed .message-text {
   opacity: 0.7;

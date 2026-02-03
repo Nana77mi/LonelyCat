@@ -110,6 +110,12 @@
   background-color: #2f2f2f;
 }
 
+.conversation-icon {
+  flex-shrink: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+
 .conversation-content {
   flex: 1;
   display: flex;
@@ -118,12 +124,29 @@
   min-width: 0;
 }
 
+.conversation-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .conversation-title {
+  flex: 1;
   font-size: 14px;
   color: #ececec;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  min-width: 0;
+}
+
+.conversation-unread-badge {
+  flex-shrink: 0;
+  color: #3b82f6;
+  font-size: 10px;
+  line-height: 1;
+  margin-top: 2px;
 }
 
 .conversation-time {
