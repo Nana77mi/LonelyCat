@@ -541,7 +541,7 @@ def test_no_duplicate_last_user_message(temp_db, monkeypatch) -> None:
     
     monkeypatch.setattr(conversations, "chat_flow", mock_chat_flow)
     monkeypatch.setattr(conversations, "AGENT_WORKER_AVAILABLE", True)
-    
+    monkeypatch.setattr(conversations, "AGENT_LOOP_ENABLED", False)  # 走 chat_flow 路径以便断言参数
     # 发送一条消息
     test_content = "Test user message content"
     message_request = conversations.MessageCreateRequest(content=test_content)
@@ -613,7 +613,7 @@ def test_window_truncation_sanity(temp_db, monkeypatch) -> None:
     
     monkeypatch.setattr(conversations, "chat_flow", mock_chat_flow)
     monkeypatch.setattr(conversations, "AGENT_WORKER_AVAILABLE", True)
-    
+    monkeypatch.setattr(conversations, "AGENT_LOOP_ENABLED", False)  # 走 chat_flow 以便捕获 history_messages
     # 插入 30 条 user/assistant 消息（15 轮对话）
     # 注意：每次调用 _create_message 会创建 1 条 user + 1 条 assistant，所以总共会有 30 条消息
     for i in range(15):
@@ -1537,7 +1537,11 @@ def test_agent_loop_decision_run_only(temp_db, monkeypatch) -> None:
     assert run["type"] == "sleep"
     assert run["title"] == "Sleep 5 seconds"
     assert run["conversation_id"] == conversation_id
-    assert run["input"] == {"seconds": 5}
+    assert run["input"]["seconds"] == 5
+    # core-api may inject trace_id into input
+    if "trace_id" in run["input"]:
+        assert len(run["input"]["trace_id"]) == 32
+        assert all(c in "0123456789abcdef" for c in run["input"]["trace_id"].lower())
     assert run["status"] == "queued"
 
 

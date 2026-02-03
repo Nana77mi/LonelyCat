@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import random
 import socket
@@ -23,6 +24,8 @@ from worker.queue import (
 )
 from worker.db import RunStatus
 from worker.runner import TaskRunner
+
+logger = logging.getLogger(__name__)
 
 
 def generate_worker_id() -> str:
@@ -170,9 +173,29 @@ def run_worker() -> None:
                     heartbeat_seconds,
                 )
                 
-                # 任务成功完成
-                print(f"Run {run.id} completed successfully")
-                complete_success(db, run.id, result)
+                # Handler 必须返回 dict 且包含 ok: bool；RunStatus 由 main 根据 ok 决定
+                if "ok" not in result:
+                    logger.warning(
+                        "Run %s handler returned output without 'ok' field; treating as failure",
+                        run.id,
+                    )
+                    complete_failed(
+                        db,
+                        run.id,
+                        result.get("error", "Task output missing 'ok' field"),
+                        output_json=result,
+                    )
+                elif not result["ok"]:
+                    print(f"Run {run.id} completed with failure (ok=False)")
+                    complete_failed(
+                        db,
+                        run.id,
+                        result.get("error", "Task reported failure"),
+                        output_json=result,
+                    )
+                else:
+                    print(f"Run {run.id} completed successfully")
+                    complete_success(db, run.id, result)
                 
             except RuntimeError as e:
                 error_msg = str(e)

@@ -34,9 +34,11 @@ help:
 	@echo "  make up-api     - start core-api only (bg)"
 	@echo "  make up-web     - start web-console only (fg)"
 	@echo "  make down       - stop core-api (and best-effort stop web if running)"
-	@echo "  make test       - run python + web tests"
-	@echo "  make test-py    - run python tests"
-	@echo "  make test-web   - run web tests"
+	@echo "  make test           - run python + web tests"
+	@echo "  make test-py        - run core-api + agent-worker python tests"
+	@echo "  make test-core-api  - run core-api tests (needs fastapi/httpx via setup-py)"
+	@echo "  make test-agent-worker - run agent-worker tests"
+	@echo "  make test-web       - run web tests"
 	@echo "  make logs       - tail core-api logs"
 	@echo "  make clean      - remove venv + pids + caches"
 	@echo ""
@@ -68,6 +70,7 @@ setup-py:
 	@if [ -f packages/protocol/pyproject.toml ]; then $(PIP) install -e packages/protocol; fi
 	@if [ -f packages/kb/pyproject.toml ]; then $(PIP) install -e packages/kb; fi
 	@if [ -f apps/agent-worker/pyproject.toml ]; then $(PIP) install --no-build-isolation -e apps/agent-worker[test]; fi
+	@if [ -f apps/core-api/pyproject.toml ]; then $(PIP) install -e apps/core-api[test]; fi
 	@mkdir -p $(PID_DIR)
 
 .PHONY: setup-web
@@ -197,9 +200,18 @@ down:
 test: test-py test-web
 
 .PHONY: test-py
-test-py: setup-py
-	@echo "Running python tests..."
-	@env PYTHONPATH=$(PYTHONPATH) $(PY) -m pytest apps/agent-worker/tests -q
+test-py: test-core-api test-agent-worker
+	@echo "Python tests (core-api + agent-worker) done."
+
+.PHONY: test-core-api
+test-core-api: setup-py
+	@echo "Running core-api tests..."
+	@env PYTHONPATH=$(PYTHONPATH):$(CORE_API_DIR) $(PY) -m pytest $(CORE_API_DIR)/tests -q
+
+.PHONY: test-agent-worker
+test-agent-worker: setup-py
+	@echo "Running agent-worker tests..."
+	@env PYTHONPATH=$(PYTHONPATH):$(AGENT_WORKER_DIR) $(PY) -m pytest $(AGENT_WORKER_DIR)/tests -q
 
 .PHONY: test-web
 test-web:

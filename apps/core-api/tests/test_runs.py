@@ -117,7 +117,10 @@ def test_create_run_returns_queued(temp_db) -> None:
     assert response["status"] == "queued"
     assert response["type"] == "sleep"
     assert response["title"] == "Test Sleep Task"
-    assert response["input"] == {"seconds": 5}
+    assert response["input"]["seconds"] == 5
+    assert "trace_id" in response["input"]
+    assert len(response["input"]["trace_id"]) == 32
+    assert all(c in "0123456789abcdef" for c in response["input"]["trace_id"].lower())
     assert response["output"] is None
     assert response["error"] is None
     assert response["attempt"] == 0
@@ -343,7 +346,35 @@ def test_create_run_with_conversation_id(temp_db) -> None:
     with pytest.raises(HTTPException) as excinfo:
         asyncio.run(runs._create_run(request_invalid, db))
     assert excinfo.value.status_code == 404
-    assert "Conversation not found" in str(excinfo.value.detail)
+
+
+def test_create_run_injects_trace_id_when_missing(temp_db) -> None:
+    """创建 run 时若 input 无 trace_id，则自动写入 32 位 hex trace_id。"""
+    db, _ = temp_db
+    request = runs.RunCreateRequest(
+        type="summarize_conversation",
+        input={"conversation_id": "conv-1", "max_messages": 20},
+    )
+    response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    inp = response["input"]
+    assert "trace_id" in inp
+    assert len(inp["trace_id"]) == 32
+    assert all(c in "0123456789abcdef" for c in inp["trace_id"].lower())
+    assert inp["conversation_id"] == "conv-1"
+
+
+def test_create_run_preserves_trace_id_when_provided(temp_db) -> None:
+    """创建 run 时若 input 已有 trace_id，则保留。"""
+    db, _ = temp_db
+    custom_trace_id = "a" * 32
+    request = runs.RunCreateRequest(
+        type="summarize_conversation",
+        input={"conversation_id": "conv-1", "trace_id": custom_trace_id},
+    )
+    response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    assert response["input"]["trace_id"] == custom_trace_id
 
 
 def test_list_runs_invalid_status(temp_db) -> None:

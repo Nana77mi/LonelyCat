@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 
 from agent_worker.config import ChatConfig
+from agent_worker.utils.facts_format import compute_facts_snapshot_id
 from agent_worker.llm import BaseLLM, JsonOnlyLLMWrapper, build_llm_from_env
 from agent_worker.memory_client import MemoryClient
 from agent_worker.memory_gate import MemoryGate
@@ -16,7 +17,7 @@ from agent_worker.router import (
 )
 from agent_worker.run import execute_decision
 from agent_worker.trace import TraceCollector
-from agent_worker.utils.facts import fetch_active_facts
+from agent_worker.utils.facts import fetch_active_facts, fetch_active_facts_via_api
 
 
 PERSONA_REGISTRY = PersonaRegistry.load_default()
@@ -79,13 +80,16 @@ def chat_flow(
         trace.record("memory.list_facts.finish", f"count={len(facts_list)}")
         if facts_list:
             trace.record("memory.list_facts.sample", str(facts_list[0]) if len(facts_list) > 0 else "")
+        facts_snapshot_id = compute_facts_snapshot_id(facts_list)
+        trace.record("memory.list_facts.facts_snapshot_id", facts_snapshot_id)
         memory_client_in_use = memory_client or (MemoryClient() if config.memory_enabled else None)
     elif config.memory_enabled:
         memory_client_in_use = memory_client or MemoryClient()
         try:
             trace.record("memory.list_facts.start")
-            facts_list = fetch_active_facts(
-                memory_client_in_use,
+            base_url = os.getenv("LONELYCAT_CORE_API_URL", "http://localhost:5173")
+            facts_list = fetch_active_facts_via_api(
+                base_url,
                 conversation_id=conversation_id,
             )
             trace.record("memory.list_facts.finish", f"count={len(facts_list)}")
@@ -93,6 +97,8 @@ def chat_flow(
                 trace.record("memory.list_facts.sample", str(facts_list[0]) if len(facts_list) > 0 else "")
             else:
                 trace.record("memory.list_facts.empty", "No active facts found")
+            facts_snapshot_id = compute_facts_snapshot_id(facts_list)
+            trace.record("memory.list_facts.facts_snapshot_id", facts_snapshot_id)
         except Exception as exc:
             import traceback
             error_detail = f"{type(exc).__name__}: {str(exc)}"

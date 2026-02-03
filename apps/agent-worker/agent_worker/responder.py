@@ -7,6 +7,7 @@ from agent_worker.llm import BaseLLM
 from agent_worker.router import parse_llm_output
 from agent_worker.trace import TraceCollector
 from agent_worker.persona import Persona
+from agent_worker.utils.facts_format import format_facts_block
 
 POLICY_PROMPT = """You are an assistant responding to the user.
 Use the active_facts as context when helpful.
@@ -119,29 +120,24 @@ class Responder:
         # Build messages list
         messages: list[dict[str, str]] = []
         
-        # Add system prompt (only once, at the beginning)
-        # History messages should not contain system messages, but we filter them out for safety
-        system_content = (
-            f"{persona.system_prompt}\n\n"
-            f"{POLICY_PROMPT}\n"
-            f"{RETURN_TEXT_ONLY}"
-        )
+        # Add system prompt with facts in system message (not user). History filtered below.
+        facts_block = format_facts_block(active_facts)
+        system_parts = [persona.system_prompt, "", POLICY_PROMPT]
+        if facts_block:
+            system_parts.append(facts_block)
+        system_parts.append(RETURN_TEXT_ONLY)
+        system_content = "\n".join(system_parts)
         messages.append({"role": "system", "content": system_content})
         
         # Add history messages (filter out any system messages to avoid duplication)
         for msg in history_messages:
             role = msg.get("role", "user")
-            # Skip system messages (they shouldn't be in history, but filter for safety)
             if role == "system":
                 continue
             messages.append({"role": role, "content": msg.get("content", "")})
         
-        # Build current user message with active_facts
-        facts_json = json.dumps(active_facts, separators=(",", ":"))
-        current_user_content = (
-            f"user_message: {user_message}\n"
-            f"active_facts: {facts_json}"
-        )
+        # Current user message: only user text (facts are in system message)
+        current_user_content = f"user_message: {user_message}"
         messages.append({"role": "user", "content": current_user_content})
         
         if trace:

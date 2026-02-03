@@ -1,0 +1,234 @@
+.run-drawer-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: rgba(0, 0, 0, 0.5);
+  z-index: 1001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: runDrawerFadeIn 0.2s;
+}
+
+.run-drawer {
+  background-color: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+  max-width: 560px;
+  width: 90%;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  animation: runDrawerSlideUp 0.3s ease-out;
+}
+
+@keyframes runDrawerFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes runDrawerSlideUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.run-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 20px 24px;
+  border-bottom: 1px solid #e5e5e5;
+}
+
+.run-drawer-header h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.run-drawer-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.run-drawer-btn {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.run-drawer-copy-btn {
+  background-color: #f3f4f6;
+  color: #374151;
+}
+
+.run-drawer-copy-btn:hover {
+  background-color: #e5e7eb;
+  color: #111827;
+}
+
+.run-drawer-rerun-btn {
+  background-color: #3b82f6;
+  color: #ffffff;
+}
+
+.run-drawer-rerun-btn:hover {
+  background-color: #2563eb;
+}
+
+.run-drawer-close {
+  background: none;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  padding: 8px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 0.2s, color 0.2s;
+}
+
+.run-drawer-close:hover {
+  background-color: #f3f4f6;
+  color: #111827;
+}
+
+.run-drawer-content {
+  padding: 24px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.run-drawer-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.run-drawer-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.run-drawer-content::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 4px;
+}
+
+.run-drawer-content::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+.run-drawer-section {
+  margin-bottom: 20px;
+}
+
+.run-drawer-section:last-child {
+  margin-bottom: 0;
+}
+
+.run-drawer-section-title {
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.run-drawer-field {
+  font-size: 14px;
+  color: #374151;
+  margin-top: 8px;
+}
+
+.run-drawer-field strong {
+  color: #111827;
+  margin-right: 8px;
+}
+
+.run-drawer-code {
+  display: block;
+  margin-top: 4px;
+  padding: 6px 8px;
+  background-color: #f9fafb;
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: 12px;
+  word-break: break-all;
+  color: #374151;
+}
+
+.run-drawer-block {
+  padding: 12px;
+  background-color: #f9fafb;
+  border-radius: 6px;
+  font-size: 14px;
+  color: #374151;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.run-drawer-summary {
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.run-drawer-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.run-drawer-step-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  background-color: #fafafa;
+}
+
+.run-drawer-step-item:last-child {
+  margin-bottom: 0;
+}
+
+.run-drawer-step-name {
+  font-weight: 500;
+  color: #111827;
+  min-width: 120px;
+}
+
+.run-drawer-step-meta {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.run-drawer-step-bad {
+  margin-left: auto;
+  color: #ef4444;
+  font-size: 12px;
+}
+
+.run-drawer-error {
+  padding: 12px;
+  background-color: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #991b1b;
+  word-break: break-word;
+}

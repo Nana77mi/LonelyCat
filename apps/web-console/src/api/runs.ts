@@ -67,6 +67,17 @@ const buildErrorMessage = async (prefix: string, response: Response): Promise<st
 };
 
 // ============================================================================
+// Constants (same semantics as backend protocol.run_constants)
+// ============================================================================
+
+/** 32 lowercase hex; matches backend TRACE_ID_PATTERN. */
+export const TRACE_ID_PATTERN = /^[a-f0-9]{32}$/;
+
+export function isValidTraceId(s: string | null | undefined): boolean {
+  return typeof s === "string" && TRACE_ID_PATTERN.test(s);
+}
+
+// ============================================================================
 // Type Definitions
 // ============================================================================
 

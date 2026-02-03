@@ -362,6 +362,30 @@ async def list_facts(
     return {"items": [_serialize_fact(f) for f in facts]}
 
 
+@router.get("/facts/active", response_model=Dict[str, Any])
+async def list_active_facts(
+    conversation_id: Optional[str] = None,
+    limit: Optional[int] = None,
+    store: MemoryStore = Depends(_get_memory_store),
+) -> Dict[str, Any]:
+    """Active facts for worker/UI: global + session(conversation_id), ACTIVE only. Single entry point for fetch_active_facts."""
+    from app.services.facts import compute_facts_snapshot_id, fetch_active_facts_from_store
+
+    items_list, _source = await fetch_active_facts_from_store(
+        store,
+        conversation_id=conversation_id,
+        limit=limit,
+    )
+    snapshot_id = compute_facts_snapshot_id(items_list) if items_list else None
+    out: Dict[str, Any] = {
+        "items": items_list,
+        "schema_version": 1,
+    }
+    if snapshot_id is not None:
+        out["snapshot_id"] = snapshot_id
+    return out
+
+
 @router.get("/facts/{fact_id}", response_model=Dict[str, Any])
 async def get_fact(
     fact_id: str,

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Run } from "../api/runs";
 import { formatTime } from "../utils/time";
+import { RunDetailsDrawer } from "./RunDetailsDrawer";
 import "./RunsPanel.css";
 
 type RunsPanelProps = {
@@ -25,6 +26,7 @@ export const RunsPanel = ({
   onCancelRun,
 }: RunsPanelProps) => {
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
+  const [selectedRun, setSelectedRun] = useState<Run | null>(null);
 
   const toggleErrorExpansion = (runId: string) => {
     setExpandedErrors((prev) => {
@@ -134,7 +136,19 @@ export const RunsPanel = ({
         ) : (
           <div className="runs-list">
             {runs.map((run) => (
-              <div key={run.id} className="run-item">
+              <div
+                key={run.id}
+                className="run-item run-item-clickable"
+                role="button"
+                tabIndex={0}
+                onClick={() => setSelectedRun(run)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setSelectedRun(run);
+                  }
+                }}
+              >
                 <div className="run-item-header">
                   <span
                     className="run-status-badge"
@@ -152,6 +166,7 @@ export const RunsPanel = ({
                       className="run-action-btn run-cancel-btn run-header-action-btn"
                       onClick={(e) => {
                         e.stopPropagation();
+                        setSelectedRun(null);
                         onCancelRun(run.id);
                       }}
                       aria-label="取消任务"
@@ -166,6 +181,7 @@ export const RunsPanel = ({
                       className="run-delete-btn"
                       onClick={(e) => {
                         e.stopPropagation();
+                        setSelectedRun(null);
                         onDeleteRun(run.id);
                       }}
                       aria-label="删除任务"
@@ -198,10 +214,13 @@ export const RunsPanel = ({
                     <div className="run-error-content">
                       {expandedErrors.has(run.id) ? run.error : truncateError(run.error)}
                       {run.error.length > 100 && (
-                        <button
-                          className="run-error-toggle"
-                          onClick={() => toggleErrorExpansion(run.id)}
-                        >
+                      <button
+                            className="run-error-toggle"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleErrorExpansion(run.id);
+                            }}
+                          >
                           {expandedErrors.has(run.id) ? "收起" : "展开"}
                         </button>
                       )}
@@ -210,14 +229,20 @@ export const RunsPanel = ({
                       {run.status === "failed" && onRetryRun && (
                         <button
                           className="run-action-btn run-retry-btn"
-                          onClick={() => onRetryRun(run)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onRetryRun(run);
+                          }}
                         >
                           重试
                         </button>
                       )}
                       <button
                         className="run-action-btn run-copy-error-btn"
-                        onClick={() => copyErrorToClipboard(run.error || "")}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          copyErrorToClipboard(run.error || "");
+                        }}
                         title="复制错误信息"
                       >
                         复制错误
@@ -230,6 +255,11 @@ export const RunsPanel = ({
           </div>
         )}
       </div>
+      <RunDetailsDrawer
+        run={selectedRun}
+        onClose={() => setSelectedRun(null)}
+        onRetryRun={onRetryRun}
+      />
     </div>
   );
 };

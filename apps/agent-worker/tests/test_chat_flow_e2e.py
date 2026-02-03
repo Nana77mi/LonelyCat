@@ -160,3 +160,28 @@ def test_memory_disabled_skips_client_calls():
     assert memory.list_calls == 0
     assert memory.propose_calls == 0
     assert memory.retract_calls == 0
+
+
+def test_chat_flow_trace_records_facts_snapshot_id_when_facts_provided():
+    """Trace must record facts_snapshot_id (content hash, hex, predictable)."""
+    import re
+    from agent_worker.utils.facts_format import compute_facts_snapshot_id
+
+    llm = SwitchingLLM("Okay.", "NO_ACTION")
+    active_facts = [{"key": "likes", "value": "cats", "status": "active"}]
+
+    result = chat_flow(
+        user_message="Hi",
+        persona_id="lonelycat",
+        llm=llm,
+        memory_client=None,
+        config=ChatConfig(memory_enabled=False),
+        active_facts=active_facts,
+    )
+
+    assert any("facts_snapshot_id" in line for line in result.trace_lines)
+    snapshot_id = compute_facts_snapshot_id(active_facts)
+    assert re.match(r"^[a-f0-9]{64}$", snapshot_id), "snapshot_id must be 64-char hex (content hash)"
+    # BASIC level now includes facts_snapshot_id value in log (验收4)
+    assert any(snapshot_id in line for line in result.trace_lines), "trace must contain snapshot_id value"
+    assert snapshot_id == compute_facts_snapshot_id(active_facts)
