@@ -48,6 +48,14 @@ class TaskContext:
         self._facts_snapshot_source: Optional[str] = None
         self.artifact_dir: Optional[str] = None  # 可选；research_report 时设为 run 专属目录，供 web.fetch 落盘
 
+    def set_ok(self, ok: bool) -> None:
+        """允许 handler 在部分成功场景下将任务标记为成功（如 research_report 部分 fetch 失败仍产出报告）。"""
+        self._ok = ok
+
+    def clear_error(self) -> None:
+        """清除顶层 error，用于部分成功时不再展示整段失败。"""
+        self._error = None
+
     @property
     def result(self) -> Dict[str, Any]:
         return self._result

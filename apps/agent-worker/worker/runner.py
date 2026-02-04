@@ -104,7 +104,7 @@ class TaskRunner:
                     getattr(run, "id", "?"),
                 )
             try:
-                return self._handle_research_report(run, heartbeat_callback, runtime=runtime)
+                return self._handle_research_report(run, heartbeat_callback, runtime=runtime, llm=llm)
             finally:
                 if catalog is not None:
                     catalog.close_providers()
@@ -154,8 +154,9 @@ class TaskRunner:
         heartbeat_callback: Callable[[], bool],
         *,
         runtime: Optional[ToolRuntime] = None,
+        llm: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        """处理 research_report 任务；stub 搜索/抓取，产出 report + sources（含 provider）。"""
+        """处理 research_report 任务；stub 搜索/抓取，产出 report + sources（含 provider）+ 可选总结。"""
         input_json = run.input_json
         if not isinstance(input_json, dict):
             raise ValueError("input_json must be a dict")
@@ -174,7 +175,7 @@ class TaskRunner:
             runtime = ToolRuntime()
 
         def body(ctx: TaskContext) -> None:
-            self._research_report_body(ctx, query, max_sources, runtime)
+            self._research_report_body(ctx, query, max_sources, runtime, llm=llm)
 
         return run_task_with_steps(run, "research_report", body)
 
@@ -184,8 +185,10 @@ class TaskRunner:
         query: str,
         max_sources: int,
         runtime: ToolRuntime,
+        *,
+        llm: Optional[Any] = None,
     ) -> None:
-        """research_report 业务逻辑：ToolRuntime 调用 search/fetch_pages，再 extract → dedupe_rank → write_report。"""
+        """research_report 业务逻辑：ToolRuntime 调用 search/fetch_pages，再 extract → dedupe_rank → write_report（含可选总结）。"""
         search_result = runtime.invoke(ctx, "web.search", {"query": query})
         # web.search canonical 形状为 {"items": [...]}；list 仅历史兼容，后续淘汰
         raw_sources = (
@@ -210,9 +213,17 @@ class TaskRunner:
             except OSError:
                 ctx.artifact_dir = None
 
+        # 抓取间隔（秒），0=不启用；从 settings_snapshot 读取，可在设置中调节
+        input_json = getattr(ctx.run, "input_json", None) or {}
+        snapshot = (input_json.get("settings_snapshot") or {}) if isinstance(input_json, dict) else {}
+        fetch_cfg = (snapshot.get("web") or {}).get("fetch") or {}
+        raw_delay = fetch_cfg.get("fetch_delay_seconds", 0)
+        fetch_delay_seconds = max(0, int(raw_delay)) if isinstance(raw_delay, (int, float)) else 0
+
         fetch_artifacts_list: List[Dict[str, Any]] = []
         fetch_summaries: List[Dict[str, Any]] = []
-        for s in raw_sources:
+        fetch_failure_count = 0
+        for i, s in enumerate(raw_sources):
             url = s.get("url", "")
             if not url or not isinstance(url, str) or not (
                 url.strip().startswith("http://") or url.strip().startswith("https://")
@@ -220,7 +231,21 @@ class TaskRunner:
                 s["content"] = ""
                 continue
             url = url.strip()
-            fetch_result = runtime.invoke(ctx, "web.fetch", {"url": url})
+            # 非首次抓取且启用了间隔时，先等待，降低被同一站点限流概率
+            if i > 0 and fetch_delay_seconds > 0:
+                time.sleep(fetch_delay_seconds)
+            try:
+                fetch_result = runtime.invoke(ctx, "web.fetch", {"url": url})
+            except Exception as e:
+                error_code = getattr(e, "code", None) or type(e).__name__
+                s["content"] = ""
+                fetch_summaries.append({
+                    "url": url,
+                    "ok": False,
+                    "error_code": str(error_code),
+                })
+                fetch_failure_count += 1
+                continue
             s["content"] = fetch_result.get("text", "") if isinstance(fetch_result, dict) else ""
             if isinstance(fetch_result, dict):
                 if fetch_result.get("artifact_paths"):
@@ -237,6 +262,24 @@ class TaskRunner:
             ctx.artifacts["fetch_artifacts"] = fetch_artifacts_list
         if fetch_summaries:
             ctx.artifacts["fetch_summaries"] = fetch_summaries
+        if fetch_failure_count > 0:
+            ctx.artifacts["fetch_partial_failures"] = True
+        # 至少有一次 fetch 成功时视为部分成功，不因单次失败判定整段失败；全部失败时标记为失败
+        any_fetch_ok = any(f.get("ok") for f in fetch_summaries)
+        if any_fetch_ok and not ctx._ok:
+            ctx.set_ok(True)
+            ctx.clear_error()
+        elif not any_fetch_ok and fetch_summaries:
+            # 有 fetch 尝试但全部失败（如 ToolNotFound），异常可能在 step 外抛出，需显式标记失败
+            ctx.set_ok(False)
+            first_fail = next((f for f in fetch_summaries if not f.get("ok")), None)
+            if first_fail and ctx._error is None:
+                ctx._error = {
+                    "code": first_fail.get("error_code", "Error"),
+                    "message": "所有来源抓取均失败",
+                    "retryable": True,
+                    "step": "tool.web.fetch",
+                }
 
         with ctx.step("extract"):
             # 每段取 snippet 或 content 前 200 字作为候选 excerpt；产出 evidence（quote + source_url + source_index）
@@ -272,6 +315,22 @@ class TaskRunner:
                     q = (e.get("quote") or "")[:200]
                     idx = e.get("source_index", 0)
                     report_text += f"- [{idx}] {q}\n"
+            # 若有 LLM，根据上文生成简短总结段落
+            if llm and report_text.strip():
+                try:
+                    excerpt = (report_text.strip())[:4000]
+                    summary_result = runtime.invoke(
+                        ctx, "text.summarize",
+                        {"text": excerpt, "max_length": 500},
+                        llm=llm,
+                    )
+                    summary = ""
+                    if isinstance(summary_result, dict) and summary_result.get("summary"):
+                        summary = (summary_result["summary"] or "").strip()
+                    if summary:
+                        report_text += "\n\n## 总结\n\n" + summary
+                except Exception as e:
+                    logger.warning("research_report summary step failed: %s", e)
             ctx.result["query"] = query
             ctx.result["source_count"] = len(ranked)
             # 若全部为 Stub 抓取（未真实抓取页面），在 report 末尾加说明
@@ -281,6 +340,8 @@ class TaskRunner:
             )
             if all_stub and ranked:
                 report_text += "\n\n---\n*说明：当前为 Stub 抓取模式，未真实抓取页面正文。若需真实抓取，请设置环境变量 WEB_FETCH_BACKEND=httpx 并重启 agent-worker。*"
+            if ctx.artifacts.get("fetch_partial_failures"):
+                report_text += "\n\n---\n*部分来源因限流或网络原因未能抓取，以上为已成功抓取/搜索到的内容。*"
             ctx.artifacts["report"] = {"text": report_text, "format": "markdown"}
             sources_out = []
             for s in ranked:

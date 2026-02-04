@@ -32,7 +32,7 @@ docker compose up -d --build
 
 **Linux / WSL / macOS**
 
-前置：Python 3.11+、Node.js 18+、pnpm（`corepack enable` 后 `pnpm install`）。
+前置：Python 3.11+、Node.js 18+、pnpm（`corepack enable` 后 `pnpm install`）。WSL/Linux 下 `make` 使用 `.venv-dev`，与 Windows 主环境 `.venv` 分离，避免同一目录下两边冲突。
 
 ```bash
 make setup

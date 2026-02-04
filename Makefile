@@ -1,12 +1,13 @@
 # LonelyCat Makefile (Linux/WSL/macOS)
 # - venv-first (avoids PEP 668 system pip restrictions)
+# - WSL/Linux 使用 .venv-dev，与 Windows 主环境 .venv 分离，避免冲突
 # - monorepo-friendly: do NOT pip install -e at repo root
 # - install python libs from ./packages/*
 # - run core-api as an app via --app-dir and PYTHONPATH
 
 SHELL := /bin/bash
 
-VENV := .venv
+VENV := .venv-dev
 PY   := $(VENV)/bin/python
 PIP  := $(VENV)/bin/pip
 
@@ -60,7 +61,11 @@ setup: setup-py setup-web
 
 .PHONY: setup-py
 setup-py:
-	@test -d $(VENV) || python3 -m venv $(VENV)
+	@if [ -d $(VENV) ] && [ ! -x $(VENV)/bin/python ]; then \
+		echo "Removing Windows-style or broken $(VENV) (no bin/python), recreating..."; \
+		rm -rf $(VENV); \
+	fi; \
+	test -d $(VENV) || python3 -m venv $(VENV)
 	$(PY) -m pip install --upgrade pip
 	$(PIP) install setuptools wheel
 	# Install python libraries in editable mode (monorepo packages)
@@ -227,6 +232,6 @@ logs:
 
 .PHONY: clean
 clean:
-	@echo "Cleaning venv, pids, caches..."
+	@echo "Cleaning venv (.venv-dev), pids, caches..."
 	@rm -rf $(VENV) $(PID_DIR) .pytest_cache
 	@find . -type d -name "__pycache__" -prune -exec rm -rf {} \; 2>/dev/null || true

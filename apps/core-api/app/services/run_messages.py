@@ -33,6 +33,19 @@ def _format_run_output_summary(output_json: Optional[Dict[str, Any]], run_type: 
             summary = str(output_json["summary"])
             return f"📝 对话总结已完成（最近 {message_count} 条）：\n\n{summary}"
         
+        # 特殊处理：research_report 任务，使用 artifacts.report.text 作为总结
+        if (run_type or "").strip().replace(" ", "_") == "research_report":
+            artifacts = output_json.get("artifacts") or {}
+            report = artifacts.get("report")
+            if isinstance(report, dict) and report.get("text"):
+                text = str(report["text"]).strip()
+                if text:
+                    return f"📋 调研报告：\n\n{text}"
+            result = output_json.get("result") or {}
+            query = result.get("query", "")
+            source_count = result.get("source_count", 0)
+            return f"调研完成：{query or '（无 query）'}，共 {source_count} 个来源。"
+        
         # 如果有 summary 字段，使用它
         if "summary" in output_json:
             return str(output_json["summary"])
@@ -154,8 +167,11 @@ def emit_run_message(db: Session, run: RunModel) -> None:
     
     # 生成消息内容
     if run.status == RunStatus.SUCCEEDED:
-        # 对于 summarize_conversation，使用特殊格式（已在 _format_run_output_summary 中处理）
+        # 对于 summarize_conversation / research_report，使用特殊格式（含完整总结/报告正文）
+        run_type_norm = (run.type or "").strip().replace(" ", "_")
         if run.type == "summarize_conversation":
+            content = _format_run_output_summary(run.output_json, run_type=run.type)
+        elif run_type_norm == "research_report":
             content = _format_run_output_summary(run.output_json, run_type=run.type)
         else:
             content = f"任务已完成：{run.title or run.type}\n\n{_format_run_output_summary(run.output_json, run_type=run.type)}"
