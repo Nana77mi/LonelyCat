@@ -51,7 +51,8 @@ if ($apiPid -and (Get-Process -Id $apiPid -ErrorAction SilentlyContinue)) {
     Write-Host "  core-api may have failed; check .pids\core-api.log"
 }
 
-# Agent worker
+# Agent worker（需能访问 core-api 以在任务完成后发送回复消息）
+$env:CORE_API_URL = "http://127.0.0.1:$ApiPort"
 Write-Host "Starting agent-worker..."
 Start-Bg -Name "agent-worker" -PidFile $WorkerPidFile -LogPath "$PidDir\agent-worker.log" -EnvPath "packages;apps/agent-worker" -ProcessArgs @(
     "-m", "worker.main"
