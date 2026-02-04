@@ -18,6 +18,8 @@
 - **title**：string（可选），页面标题。
 - **extracted_text**：string（可选），与 text 一致；供后续引用与 citations。
 - **extraction_method**：string（可选），`readability` | `trafilatura` | `fallback`。
+- **cache_hit**：boolean（可选），命中 webfetch 缓存时为 `true`。
+- **artifact_paths**：object（可选），当请求方提供 `artifact_dir` 时返回落盘路径：`{ "raw", "extracted", "meta" }`（raw.html、extracted.txt、meta.json）。
 
 ## 错误码
 

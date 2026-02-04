@@ -55,7 +55,7 @@ def _is_valid_fetch_url(url: Any) -> bool:
 
 
 def normalize_fetch_result(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """将 backend 返回补齐为 canonical：url, status_code, content_type, text(=extracted_text), truncated；可选 title, extracted_text, extraction_method, final_url。"""
+    """将 backend 返回补齐为 canonical：url, status_code, content_type, text(=extracted_text), truncated；可选 title, extracted_text, extraction_method, final_url, cache_hit, artifact_paths。"""
     extracted = str(raw.get("text") or raw.get("extracted_text") or "")
     out = {
         "url": str(raw.get("url", "")).strip(),
@@ -74,6 +74,10 @@ def normalize_fetch_result(raw: Dict[str, Any]) -> Dict[str, Any]:
         out["extraction_method"] = str(raw["extraction_method"])
     if raw.get("paragraphs_count") is not None:
         out["paragraphs_count"] = int(raw["paragraphs_count"])
+    if raw.get("cache_hit") is not None:
+        out["cache_hit"] = bool(raw["cache_hit"])
+    if raw.get("artifact_paths") is not None:
+        out["artifact_paths"] = dict(raw["artifact_paths"])
     return out
 
 
@@ -166,7 +170,7 @@ class WebProvider:
         if tool_name == "web.search":
             return self._invoke_search(args)
         if tool_name == "web.fetch":
-            return self._invoke_fetch(args)
+            return self._invoke_fetch(args, ctx)
         raise ToolNotFoundError(tool_name, "WebProvider only supports web.search and web.fetch")
 
     def _invoke_search(self, args: Dict[str, Any]) -> Any:
@@ -201,7 +205,7 @@ class WebProvider:
         truncated = [truncate_fields(it) for it in normalized]
         return {"items": truncated}
 
-    def _invoke_fetch(self, args: Dict[str, Any]) -> Any:
+    def _invoke_fetch(self, args: Dict[str, Any], ctx: Optional[TaskContext] = None) -> Any:
         url = args.get("url")
         if url is None:
             raise WebInvalidInputError("url is required")
@@ -222,7 +226,10 @@ class WebProvider:
                 raise WebInvalidInputError("timeout_ms must be an integer")
         if timeout_ms < 1000 or timeout_ms > 120000:
             timeout_ms = self._fetch_timeout_ms
+        artifact_dir = getattr(ctx, "artifact_dir", None) if ctx else None
         try:
+            raw = self._fetch_backend.fetch(url, timeout_ms, artifact_dir=artifact_dir)
+        except TypeError:
             raw = self._fetch_backend.fetch(url, timeout_ms)
         except Exception as e:
             if getattr(e, "code", None):

@@ -1,6 +1,9 @@
 """HttpxFetchBackend tests: mock webfetch client, no network."""
 
+import json
 import os
+import tempfile
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -146,3 +149,31 @@ def test_http_fetch_backend_non_text_content_type_returns_empty_text_not_error()
     assert out["text"] == ""
     assert out["truncated"] is False
     assert "image/png" in (out.get("content_type") or "")
+
+
+def test_http_fetch_backend_with_artifact_dir_writes_raw_extracted_meta_and_returns_paths():
+    """传入 artifact_dir 时写入 raw.html、extracted.txt、meta.json 并返回 artifact_paths（PR#3）。"""
+    html = _load_fixture("html_basic.html")
+    raw = _raw(200, "text/html; charset=utf-8", html.encode("utf-8"), "https://example.com/a")
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch("worker.tools.web_backends.http_fetch.WebfetchClient") as mock_cls:
+            mock_client = MagicMock()
+            mock_client.fetch.return_value = raw
+            mock_cls.return_value = mock_client
+            backend = HttpxFetchBackend()
+            out = backend.fetch("https://example.com/a", timeout_ms=5000, artifact_dir=tmp)
+        assert "artifact_paths" in out
+        paths = out["artifact_paths"]
+        assert "raw" in paths and "extracted" in paths and "meta" in paths
+        raw_path = Path(paths["raw"])
+        extracted_path = Path(paths["extracted"])
+        meta_path = Path(paths["meta"])
+        assert raw_path.exists()
+        assert extracted_path.exists()
+        assert meta_path.exists()
+        assert raw_path.read_bytes() == html.encode("utf-8")
+        extracted_text = extracted_path.read_text(encoding="utf-8")
+        assert "First paragraph" in extracted_text or "Basic" in extracted_text or len(extracted_text) > 0
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        assert meta.get("url") == "https://example.com/a"
+        assert meta.get("status_code") == 200

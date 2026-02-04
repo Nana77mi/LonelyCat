@@ -187,6 +187,17 @@ class TaskRunner:
         # 实际使用的搜索后端：用于 report 标题展示（来自 WebProvider 的 normalize，非硬编码）
         backend_label = raw_sources[0].get("provider", "stub") if raw_sources else "stub"
 
+        # 可选：为本 run 设置 artifact_dir，供 web.fetch 落盘 raw.html / extracted.txt / meta.json（PR#3）
+        if getattr(ctx.run, "id", None) is not None:
+            base = os.environ.get("WEB_FETCH_ARTIFACT_BASE", ".artifacts")
+            ctx.artifact_dir = os.path.join(base, str(ctx.run.id))
+            try:
+                os.makedirs(ctx.artifact_dir, exist_ok=True)
+            except OSError:
+                ctx.artifact_dir = None
+
+        fetch_artifacts_list: List[Dict[str, Any]] = []
+        fetch_summaries: List[Dict[str, Any]] = []
         for s in raw_sources:
             url = s.get("url", "")
             if not url or not isinstance(url, str) or not (
@@ -197,6 +208,21 @@ class TaskRunner:
             url = url.strip()
             fetch_result = runtime.invoke(ctx, "web.fetch", {"url": url})
             s["content"] = fetch_result.get("text", "") if isinstance(fetch_result, dict) else ""
+            if isinstance(fetch_result, dict):
+                if fetch_result.get("artifact_paths"):
+                    fetch_artifacts_list.append({"url": url, "paths": fetch_result["artifact_paths"]})
+                fetch_summaries.append({
+                    "url": url,
+                    "ok": True,
+                    "final_url": fetch_result.get("final_url", url),
+                    "status_code": fetch_result.get("status_code", 0),
+                    "truncated": bool(fetch_result.get("truncated", False)),
+                    "cache_hit": bool(fetch_result.get("cache_hit", False)),
+                })
+        if fetch_artifacts_list:
+            ctx.artifacts["fetch_artifacts"] = fetch_artifacts_list
+        if fetch_summaries:
+            ctx.artifacts["fetch_summaries"] = fetch_summaries
 
         with ctx.step("extract"):
             # 每段取 snippet 或 content 前 200 字作为候选 excerpt；产出 evidence（quote + source_url + source_index）

@@ -1,11 +1,14 @@
-"""HttpxFetchBackend: 委托 webfetch client，SSRF/重试/max_bytes/代理；仅 http(s)。"""
+"""HttpxFetchBackend: 委托 webfetch client，SSRF/重试/max_bytes/代理；仅 http(s)；可选 artifact_dir 落盘。"""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import re
 from html.parser import HTMLParser
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 from worker.tools.web_backends.errors import (
     WebBlockedError,
@@ -106,6 +109,41 @@ def _get_proxy(fetch_config: dict | None = None) -> str | None:
     return os.getenv("WEB_FETCH_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or None
 
 
+def _artifact_safe_key(url: str) -> str:
+    """URL 的磁盘安全子目录名（SHA256 前 16 位）。"""
+    h = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return h[:16]
+
+
+def _write_artifact_dir(artifact_dir: str, url: str, fetch_dict: Dict[str, Any], raw_bytes: bytes) -> Dict[str, str]:
+    """在 artifact_dir 下按 url 建子目录，写入 raw.html、extracted.txt、meta.json，返回路径 dict。"""
+    base = Path(artifact_dir)
+    key = _artifact_safe_key(url)
+    subdir = base / key
+    subdir.mkdir(parents=True, exist_ok=True)
+    raw_path = subdir / "raw.html"
+    extracted_path = subdir / "extracted.txt"
+    meta_path = subdir / "meta.json"
+    raw_path.write_bytes(raw_bytes)
+    text = fetch_dict.get("text") or fetch_dict.get("extracted_text") or ""
+    extracted_path.write_text(text, encoding="utf-8")
+    meta = {
+        "url": fetch_dict.get("url", url),
+        "final_url": fetch_dict.get("final_url", url),
+        "status_code": fetch_dict.get("status_code", 0),
+        "content_type": fetch_dict.get("content_type", ""),
+        "truncated": bool(fetch_dict.get("truncated", False)),
+    }
+    if fetch_dict.get("title") is not None:
+        meta["title"] = fetch_dict["title"]
+    if fetch_dict.get("extraction_method") is not None:
+        meta["extraction_method"] = fetch_dict["extraction_method"]
+    if fetch_dict.get("paragraphs_count") is not None:
+        meta["paragraphs_count"] = fetch_dict["paragraphs_count"]
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    return {"raw": str(raw_path), "extracted": str(extracted_path), "meta": str(meta_path)}
+
+
 def _raw_to_fetch_dict(raw: WebFetchRaw, text_max: int) -> Dict[str, Any]:
     """将 WebFetchRaw 转为 backend 合同 dict：url, status_code, content_type, text(=extracted_text), truncated, title, extraction_method。"""
     content_type = (raw.headers.get("content-type") or "").strip()
@@ -185,7 +223,13 @@ class HttpxFetchBackend:
             user_agent=user_agent,
         )
 
-    def fetch(self, url: str, timeout_ms: int) -> Dict[str, Any]:
+    def fetch(
+        self,
+        url: str,
+        timeout_ms: int,
+        *,
+        artifact_dir: Optional[str] = None,
+    ) -> Dict[str, Any]:
         if not _is_http_or_https(url):
             raise WebInvalidInputError("url must be http:// or https://")
         url = url.strip()
@@ -204,4 +248,7 @@ class HttpxFetchBackend:
         if _body_indicates_blocked(raw_text):
             raise WebBlockedError("Page indicates block or captcha")
         text_max = _get_text_max()
-        return _raw_to_fetch_dict(raw, text_max)
+        out = _raw_to_fetch_dict(raw, text_max)
+        if artifact_dir:
+            out["artifact_paths"] = _write_artifact_dir(artifact_dir, url, out, raw.body_bytes)
+        return out

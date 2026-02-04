@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Protocol
+from typing import Any, Dict, List, Optional, Protocol
 
 
 class WebSearchBackend(Protocol):
@@ -19,13 +19,19 @@ class WebSearchBackend(Protocol):
 
 
 class WebFetchBackend(Protocol):
-    """Backend 协议：backend_id + fetch(url, timeout_ms) -> raw dict；WebProvider 做 normalize 到 canonical。"""
+    """Backend 协议：backend_id + fetch(url, timeout_ms, *, artifact_dir?) -> raw dict；WebProvider 做 normalize 到 canonical。"""
 
     @property
     def backend_id(self) -> str:
         """例如 stub, httpx。"""
         ...
 
-    def fetch(self, url: str, timeout_ms: int) -> Dict[str, Any]:
-        """返回原始结果（含 url, status_code, content_type, text, truncated 等），由 WebProvider 补齐/截断。"""
+    def fetch(
+        self,
+        url: str,
+        timeout_ms: int,
+        *,
+        artifact_dir: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """返回原始结果（含 url, status_code, content_type, text, truncated 等）；可选 artifact_dir 时落盘并返回 artifact_paths。"""
         ...
