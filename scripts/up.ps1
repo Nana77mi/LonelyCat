@@ -23,7 +23,7 @@ $ApiPidFile = Join-Path $PidDir "core-api.pid"
 $WorkerPidFile = Join-Path $PidDir "agent-worker.pid"
 
 function Start-Bg {
-    param([string]$Name, [string]$PidFile, [string]$LogPath, [string]$EnvPath, [string[]]$Args)
+    param([string]$Name, [string]$PidFile, [string]$LogPath, [string]$EnvPath, [string[]]$ProcessArgs)
     if (Test-Path $PidFile) {
         $oldPid = Get-Content $PidFile -ErrorAction SilentlyContinue
         if ($oldPid -match '^\d+$' -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
@@ -32,7 +32,7 @@ function Start-Bg {
         }
     }
     $env:PYTHONPATH = $EnvPath
-    $proc = Start-Process -FilePath $Py -ArgumentList $Args -WorkingDirectory $RepoRoot -NoNewWindow `
+    $proc = Start-Process -FilePath $Py -ArgumentList $ProcessArgs -WorkingDirectory $RepoRoot -NoNewWindow `
         -RedirectStandardOutput $LogPath -RedirectStandardError ($LogPath -replace '\.log$', '-err.log') -PassThru
     $proc.Id | Set-Content $PidFile
     Write-Host "Started $Name (pid=$($proc.Id)), log: $LogPath"
@@ -40,7 +40,7 @@ function Start-Bg {
 
 # Core API
 Write-Host "Starting core-api (port $ApiPort)..."
-Start-Bg -Name "core-api" -PidFile $ApiPidFile -LogPath "$PidDir\core-api.log" -EnvPath "packages" -Args @(
+Start-Bg -Name "core-api" -PidFile $ApiPidFile -LogPath "$PidDir\core-api.log" -EnvPath "packages" -ProcessArgs @(
     "-m", "uvicorn", "app.main:app", "--reload", "--host", "127.0.0.1", "--port", $ApiPort, "--app-dir", "apps/core-api"
 )
 Start-Sleep -Seconds 2
@@ -53,7 +53,7 @@ if ($apiPid -and (Get-Process -Id $apiPid -ErrorAction SilentlyContinue)) {
 
 # Agent worker
 Write-Host "Starting agent-worker..."
-Start-Bg -Name "agent-worker" -PidFile $WorkerPidFile -LogPath "$PidDir\agent-worker.log" -EnvPath "packages;apps/agent-worker" -Args @(
+Start-Bg -Name "agent-worker" -PidFile $WorkerPidFile -LogPath "$PidDir\agent-worker.log" -EnvPath "packages;apps/agent-worker" -ProcessArgs @(
     "-m", "worker.main"
 )
 Start-Sleep -Seconds 1
