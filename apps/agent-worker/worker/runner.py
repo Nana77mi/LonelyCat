@@ -61,17 +61,19 @@ class TaskRunner:
             ValueError: 未知的任务类型
             Exception: 任务执行过程中的异常
         """
-        if run.type == "sleep":
+        # 规范化 type：去除首尾空格，空格替换为下划线（兼容 LLM 返回 "research report" 等）
+        run_type = (run.type or "").strip().replace(" ", "_")
+        if run_type == "sleep":
             return self._handle_sleep(run, heartbeat_callback)
-        elif run.type == "summarize_conversation":
+        elif run_type == "summarize_conversation":
             return self._handle_summarize_conversation(run, db, llm, heartbeat_callback)
-        elif run.type == "research_report":
+        elif run_type == "research_report":
             return self._handle_research_report(run, heartbeat_callback)
-        elif run.type == "edit_docs_propose":
+        elif run_type == "edit_docs_propose":
             return self._handle_edit_docs_propose(run, heartbeat_callback)
-        elif run.type == "edit_docs_apply":
+        elif run_type == "edit_docs_apply":
             return self._handle_edit_docs_apply(run, db, heartbeat_callback)
-        elif run.type == "edit_docs_cancel":
+        elif run_type == "edit_docs_cancel":
             return self._handle_edit_docs_cancel(run, db, heartbeat_callback)
         else:
             raise ValueError(f"Unknown task type: {run.type}")
@@ -120,6 +122,9 @@ class TaskRunner:
             raise ValueError("input_json must be a dict")
         query = input_json.get("query")
         if not query or not isinstance(query, str):
+            query = (run.title if run.title and isinstance(run.title, str) else None) or "调研"
+        query = (query or "").strip() or "调研"
+        if not query:
             raise ValueError("input_json['query'] must be a non-empty string")
         max_sources = input_json.get("max_sources", 5)
         if not isinstance(max_sources, int) or max_sources < 1:
@@ -142,22 +147,44 @@ class TaskRunner:
         runtime: ToolRuntime,
     ) -> None:
         """research_report 业务逻辑：ToolRuntime 调用 search/fetch_pages，再 extract → dedupe_rank → write_report。"""
-        raw_sources: List[Dict[str, Any]] = runtime.invoke(ctx, "web.search", {"query": query})
+        search_result = runtime.invoke(ctx, "web.search", {"query": query})
+        # web.search canonical 形状为 {"items": [...]}；list 仅历史兼容，后续淘汰
+        raw_sources = (
+            search_result.get("items", search_result)
+            if isinstance(search_result, dict)
+            else search_result
+        )
+        if not isinstance(raw_sources, list):
+            raw_sources = []
         raw_sources = raw_sources[:max_sources]
         for s in raw_sources:
             s.setdefault("provider", "stub")
 
-        fetch_result = runtime.invoke(
-            ctx,
-            "web.fetch",
-            {"urls": [s.get("url", "") for s in raw_sources]},
-        )
-        contents = fetch_result.get("contents") or {}
         for s in raw_sources:
-            s["content"] = contents.get(s.get("url", ""), "")
+            url = s.get("url", "")
+            if not url or not isinstance(url, str) or not (
+                url.strip().startswith("http://") or url.strip().startswith("https://")
+            ):
+                s["content"] = ""
+                continue
+            url = url.strip()
+            fetch_result = runtime.invoke(ctx, "web.fetch", {"url": url})
+            s["content"] = fetch_result.get("text", "") if isinstance(fetch_result, dict) else ""
 
         with ctx.step("extract"):
-            excerpts = [s.get("snippet", "") or s.get("content", "")[:200] for s in raw_sources]
+            # 每段取 snippet 或 content 前 200 字作为候选 excerpt；产出 evidence（quote + source_url + source_index）
+            excerpts = [s.get("snippet", "") or (s.get("content", "") or "")[:200] for s in raw_sources]
+            evidence = []
+            for i, s in enumerate(raw_sources[:10]):
+                ex = excerpts[i] if i < len(excerpts) else (s.get("snippet", "") or (s.get("content", "") or "")[:200])
+                if not ex:
+                    continue
+                evidence.append({
+                    "quote": (ex[:100] if isinstance(ex, str) else str(ex)[:100]),
+                    "source_url": (s.get("url") or "")[:2048],
+                    "source_index": i,
+                })
+            ctx.artifacts["evidence"] = evidence[:10]
 
         with ctx.step("dedupe_rank"):
             # 简单去重/排序（stub 下可不变）
@@ -170,6 +197,13 @@ class TaskRunner:
                 u = (s.get("url") or "")[:_MAX_URL]
                 sn = (s.get("snippet") or "")[:_MAX_SNIPPET]
                 report_text += f"- [{s.get('title', '')[:200]}]({u}): {sn}\n"
+            evidence_list = ctx.artifacts.get("evidence") or []
+            if evidence_list:
+                report_text += "\n## Evidence\n\n"
+                for e in evidence_list[:5]:
+                    q = (e.get("quote") or "")[:200]
+                    idx = e.get("source_index", 0)
+                    report_text += f"- [{idx}] {q}\n"
             ctx.result["query"] = query
             ctx.result["source_count"] = len(ranked)
             ctx.artifacts["report"] = {"text": report_text, "format": "markdown"}
@@ -185,10 +219,6 @@ class TaskRunner:
                     "provider": s.get("provider", "stub"),
                 })
             ctx.artifacts["sources"] = sources_out
-            ctx.artifacts["evidence"] = [
-                {"quote": ex[:100], "source_index": i}
-                for i, ex in enumerate(excerpts[:5]) if ex
-            ]
 
     def _handle_edit_docs_propose(
         self,

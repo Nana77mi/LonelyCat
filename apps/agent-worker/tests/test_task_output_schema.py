@@ -72,12 +72,11 @@ def test_research_report_output_has_schema():
 def test_research_report_tool_fail_output_has_schema():
     """工具失败路径也返回完整 schema，便于可诊断。"""
     from worker.tools import ToolRuntime
-    from worker.tools.catalog import ToolCatalog, get_default_catalog
+    from worker.tools.catalog import ToolCatalog
+    from worker.tools.provider import FailingProvider
 
-    catalog = ToolCatalog()
-    meta = get_default_catalog().get("web.search")
-    assert meta is not None
-    catalog.register(meta)
+    catalog = ToolCatalog(preferred_provider_order=["builtin"])
+    catalog.register_provider("builtin", FailingProvider())
     runtime = ToolRuntime(catalog=catalog)
     runner = TaskRunner()
     run = Mock()

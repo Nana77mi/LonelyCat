@@ -10,7 +10,7 @@ from worker.tools.catalog import get_default_catalog
 
 
 def test_research_report_output_has_trace_id_steps_and_task_type():
-    """research_report 执行后 output 含 trace_id、steps、task_type、version。"""
+    """research_report 执行后 output 含 trace_id、steps、task_type、version；steps 含 1 个 search + N 个 fetch + extract + dedupe_rank + write_report。"""
     runner = TaskRunner()
     run = Mock()
     run.input_json = {"query": "test query", "trace_id": "a" * 32}
@@ -20,7 +20,12 @@ def test_research_report_output_has_trace_id_steps_and_task_type():
     assert result.get("task_type") == "research_report"
     assert "steps" in result
     names = [s["name"] for s in result["steps"]]
-    assert names == ["tool.web.search", "tool.web.fetch", "extract", "dedupe_rank", "write_report"]
+    assert names[0] == "tool.web.search"
+    fetch_steps = [n for n in names if n == "tool.web.fetch"]
+    assert len(fetch_steps) >= 1
+    assert "extract" in names
+    assert "dedupe_rank" in names
+    assert "write_report" in names
     for s in result["steps"]:
         assert s["duration_ms"] >= 0
         assert "ok" in s
@@ -76,24 +81,33 @@ def test_research_report_tool_steps_have_args_preview_result_preview():
 
 
 def test_research_report_optional_evidence():
-    """artifacts 可有 evidence 列表。"""
+    """artifacts 可有 evidence 列表，每条含 quote、source_url、source_index。"""
     runner = TaskRunner()
     run = Mock()
     run.input_json = {"query": "q"}
     result = runner._handle_research_report(run, lambda: True)
     artifacts = result["artifacts"]
-    if "evidence" in artifacts:
-        for e in artifacts["evidence"]:
-            assert "quote" in e or "source_index" in e
+    assert "evidence" in artifacts
+    evidence = artifacts["evidence"]
+    assert isinstance(evidence, list)
+    for e in evidence:
+        assert "quote" in e or "source_index" in e
+        assert "source_url" in e
+        assert "source_index" in e
 
 
-def test_research_report_invalid_query_raises():
-    """query 缺失或非字符串时抛出 ValueError。"""
+def test_research_report_missing_query_uses_fallback():
+    """query 缺失或非字符串时用 run.title 或 '调研' 兜底，不抛错。"""
     runner = TaskRunner()
     run = Mock()
     run.input_json = {}
-    with pytest.raises(ValueError, match="query"):
-        runner._handle_research_report(run, lambda: True)
+    run.title = None
+    result = runner._handle_research_report(run, lambda: True)
+    assert result.get("task_type") == "research_report"
+    assert "artifacts" in result
+    assert "report" in result["artifacts"]
+    report_text = result["artifacts"]["report"].get("text", "")
+    assert "调研" in report_text
 
 
 def test_research_report_trace_lines_contain_trace_id():
@@ -108,23 +122,59 @@ def test_research_report_trace_lines_contain_trace_id():
 
 
 def test_research_report_steps_order_stable():
-    """steps 顺序固定，避免未来并行化后 UI 乱序。"""
+    """steps 顺序：tool.web.search + N 个 tool.web.fetch + extract + dedupe_rank + write_report。"""
     runner = TaskRunner()
     run = Mock()
     run.input_json = {"query": "q"}
     result = runner._handle_research_report(run, lambda: True)
     names = [s["name"] for s in result["steps"]]
-    expected = ["tool.web.search", "tool.web.fetch", "extract", "dedupe_rank", "write_report"]
-    assert names == expected
+    assert names[0] == "tool.web.search"
+    assert names[-3:] == ["extract", "dedupe_rank", "write_report"]
+    fetch_count = sum(1 for n in names if n == "tool.web.fetch")
+    assert fetch_count >= 1
+
+
+def test_research_report_fetch_fills_content_per_url():
+    """默认 catalog（stub search + stub fetch）：search 返回 2 个 URL，每个 URL 调 web.fetch，report 成功；fetch 步数等于 source 数。"""
+    runner = TaskRunner()
+    run = Mock()
+    run.input_json = {"query": "x", "max_sources": 2}
+    result = runner._handle_research_report(run, lambda: True)
+    assert result.get("ok") is True
+    steps = result.get("steps", [])
+    fetch_steps = [s for s in steps if s["name"] == "tool.web.fetch"]
+    assert len(fetch_steps) == 2
+    assert all(s.get("ok") is True for s in fetch_steps)
+    assert "artifacts" in result
+    assert "sources" in result["artifacts"]
+    assert len(result["artifacts"]["sources"]) == 2
+
+
+def test_research_report_outputs_evidence_with_source_mapping():
+    """extract 产出 artifacts.evidence，每条含 quote、source_url、source_index；至少 1 条且 source 映射正确。"""
+    runner = TaskRunner()
+    run = Mock()
+    run.input_json = {"query": "q", "max_sources": 2}
+    result = runner._handle_research_report(run, lambda: True)
+    assert result.get("ok") is True
+    evidence = result.get("artifacts", {}).get("evidence", [])
+    assert len(evidence) >= 1
+    sources = result.get("artifacts", {}).get("sources", [])
+    for e in evidence:
+        assert "quote" in e
+        assert "source_url" in e
+        assert "source_index" in e
+        idx = e["source_index"]
+        assert 0 <= idx < len(sources)
+        assert e["source_url"] == sources[idx].get("url", "")
 
 
 def test_research_report_tool_fetch_missing_returns_ok_false_tool_not_found():
-    """工具调用失败路径可回放：取消注册 web.fetch 后触发 research_report，output.ok=false、error.code=ToolNotFound、steps 中 tool.web.fetch.ok=false、trace_lines 含 trace_id。"""
-    catalog = ToolCatalog()
-    meta = get_default_catalog().get("web.search")
-    assert meta is not None
-    catalog.register(meta)
-    # web.fetch 不注册，触发 ToolNotFound
+    """工具调用失败路径可回放：仅注册 web.search、不提供 web.fetch，触发 ToolNotFound。"""
+    from worker.tools.provider import SearchOnlyProvider
+
+    catalog = ToolCatalog(preferred_provider_order=["search_only"])
+    catalog.register_provider("search_only", SearchOnlyProvider())
     runtime = ToolRuntime(catalog=catalog)
     runner = TaskRunner()
     trace_id = "c" * 32
