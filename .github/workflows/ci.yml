@@ -23,6 +23,6 @@ jobs:
         run: pnpm install
       - name: Run tests
         run: |
-          PYTHONPATH=packages:apps/core-api python -m pytest apps/core-api/tests -q
+          PYTHONPATH=packages:apps/core-api:apps/agent-worker python -m pytest apps/core-api/tests -q
           PYTHONPATH=packages:apps/agent-worker python -m pytest apps/agent-worker/tests -q
           pnpm -r test
