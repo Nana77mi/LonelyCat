@@ -260,6 +260,55 @@ def _web_search_timeout_ms() -> int:
         return 15000
 
 
+def _web_search_backend_from_settings(web_search: Dict[str, Any]) -> Any:
+    """根据 settings 中 web.search 构造 backend：stub/ddg_html/searxng；缺 base_url 时 searxng 回退 stub。"""
+    raw_backend = web_search.get("backend")
+    backend_name = (str(raw_backend or "stub")).strip().lower()
+    if backend_name == "stub":
+        from worker.tools.web_backends.stub import StubWebSearchBackend
+        return StubWebSearchBackend()
+    if backend_name == "ddg_html":
+        from worker.tools.web_backends.ddg_html import DDGHtmlBackend
+        return DDGHtmlBackend()
+    if backend_name == "searxng":
+        searxng = web_search.get("searxng") or {}
+        base_url = (str(searxng.get("base_url") or "")).strip()
+        if not base_url:
+            logger.warning(
+                "settings web.search.backend=searxng but searxng.base_url unset or empty, fallback to stub"
+            )
+            from worker.tools.web_backends.stub import StubWebSearchBackend
+            return StubWebSearchBackend()
+        api_key = (str(searxng.get("api_key") or "")).strip() or None
+        from worker.tools.web_backends.searxng import SearxngBackend
+        return SearxngBackend(base_url=base_url, api_key=api_key)
+    logger.warning(
+        "settings web.search.backend unknown value %r (raw=%r), fallback to stub",
+        backend_name,
+        raw_backend,
+    )
+    from worker.tools.web_backends.stub import StubWebSearchBackend
+    return StubWebSearchBackend()
+
+
+def _web_search_timeout_from_settings(web_search: Dict[str, Any]) -> int:
+    """从 settings web.search 取 timeout_ms；searxng 时优先 searxng.timeout_ms。"""
+    default_ms = 15000
+    try:
+        base = int(web_search.get("timeout_ms") or default_ms)
+        base = max(1000, base)
+    except (TypeError, ValueError):
+        base = default_ms
+    searxng = web_search.get("searxng") or {}
+    raw = searxng.get("timeout_ms")
+    if raw is not None and str(raw).strip():
+        try:
+            return max(1000, int(raw))
+        except (TypeError, ValueError):
+            pass
+    return base
+
+
 def _searxng_timeout_ms() -> int:
     """Searxng 超时：SEARXNG_TIMEOUT_MS 优先，否则复用 WEB_SEARCH_TIMEOUT_MS。"""
     raw = os.getenv("SEARXNG_TIMEOUT_MS")
@@ -297,6 +346,60 @@ def _web_fetch_timeout_ms() -> int:
 
 
 # 延迟导入避免循环
+def build_catalog_from_settings(settings: Dict[str, Any]) -> ToolCatalog:
+    """根据 run 的 settings_snapshot 构造 catalog（web.search 来自 settings，fetch/MCP 仍来自 env）。调用方在 run 结束后需 catalog.close_providers()。"""
+    from worker.tools.provider import BuiltinProvider, StubProvider
+    from worker.tools.web_provider import WebProvider
+
+    order: List[str] = ["web", "builtin", "stub"]
+    catalog = ToolCatalog(preferred_provider_order=order)
+    web = settings.get("web") or {}
+    search = web.get("search") or {}
+    search_backend = _web_search_backend_from_settings(search)
+    web_timeout_ms = _web_search_timeout_from_settings(search)
+    fetch_backend = _web_fetch_backend_from_env()
+    fetch_timeout_ms = _web_fetch_timeout_ms()
+    catalog.register_provider(
+        "web",
+        WebProvider(
+            search_backend=search_backend,
+            fetch_backend=fetch_backend,
+            timeout_ms=web_timeout_ms,
+            fetch_timeout_ms=fetch_timeout_ms,
+        ),
+    )
+    catalog.register_provider("builtin", BuiltinProvider())
+    catalog.register_provider("stub", StubProvider())
+
+    servers = _mcp_servers_from_env()
+    if servers is not None:
+        from worker.tools.mcp_provider import MCPProvider
+        mcp_ids: List[str] = []
+        for s in servers:
+            name = s["name"]
+            provider_id = f"mcp_{name}"
+            cmd = s["cmd"]
+            cwd = s.get("cwd")
+            env = s.get("env")
+            catalog.register_provider(provider_id, MCPProvider(server_name=name, provider_id=provider_id, cmd=cmd, cwd=cwd, env=env))
+            mcp_ids.append(provider_id)
+        if mcp_ids:
+            order = ["web", "builtin"] + mcp_ids + ["stub"]
+            catalog.set_preferred_provider_order(order)
+    else:
+        cmd = _mcp_cmd_from_env()
+        if cmd:
+            from worker.tools.mcp_provider import MCPProvider
+            name = os.getenv("MCP_SERVER_NAME", "srv").strip() or "srv"
+            provider_id = f"mcp_{name}"
+            cwd = os.getenv("MCP_SERVER_CWD")
+            catalog.register_provider(provider_id, MCPProvider(server_name=name, provider_id=provider_id, cmd=cmd, cwd=cwd or None, env=None))
+            order = ["web", "builtin", provider_id, "stub"]
+            catalog.set_preferred_provider_order(order)
+
+    return catalog
+
+
 def _default_catalog_factory() -> ToolCatalog:
     from worker.tools.provider import BuiltinProvider, StubProvider
     from worker.tools.web_provider import WebProvider

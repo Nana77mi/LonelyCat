@@ -1,0 +1,5 @@
+{
+  "query": "x",
+  "not_results": "invalid",
+  "results": "should be array"
+}

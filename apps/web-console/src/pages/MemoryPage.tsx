@@ -204,6 +204,20 @@ export const MemoryPage = () => {
 
   return (
     <section>
+      <div
+        role="status"
+        style={{
+          padding: "14px 18px",
+          marginBottom: "20px",
+          background: "#fef3c7",
+          border: "1px solid #f59e0b",
+          borderRadius: "8px",
+          color: "#92400e",
+          fontSize: "14px",
+        }}
+      >
+        此页面将废弃，请使用右上角 <strong>Memory 管理</strong>（脑形图标）打开 Drawer 进行事实与提案管理。
+      </div>
       <h2>Memory</h2>
       <p>Review proposals and manage long-term facts stored for the assistant.</p>
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import time
 from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy.orm import Session
 
@@ -12,6 +15,7 @@ from worker.db import RunModel
 from worker.db_models import MessageModel, MessageRole
 from worker.task_context import TaskContext, run_task_with_steps
 from worker.tools import ToolRuntime
+from worker.tools.catalog import build_catalog_from_settings
 
 
 class TaskRunner:
@@ -68,7 +72,28 @@ class TaskRunner:
         elif run_type == "summarize_conversation":
             return self._handle_summarize_conversation(run, db, llm, heartbeat_callback)
         elif run_type == "research_report":
-            return self._handle_research_report(run, heartbeat_callback)
+            runtime = None
+            catalog = None
+            input_json = run.input_json or {}
+            snapshot = input_json.get("settings_snapshot") if isinstance(input_json, dict) else None
+            if snapshot and isinstance(snapshot, dict):
+                catalog = build_catalog_from_settings(snapshot)
+                runtime = ToolRuntime(catalog=catalog)
+                _backend = (snapshot.get("web") or {}).get("search") or {}
+                logger.info(
+                    "research_report using settings_snapshot backend=%s",
+                    _backend.get("backend", "?"),
+                )
+            else:
+                logger.warning(
+                    "research_report run has no settings_snapshot (run_id=%s), using default catalog (env/stub)",
+                    getattr(run, "id", "?"),
+                )
+            try:
+                return self._handle_research_report(run, heartbeat_callback, runtime=runtime)
+            finally:
+                if catalog is not None:
+                    catalog.close_providers()
         elif run_type == "edit_docs_propose":
             return self._handle_edit_docs_propose(run, heartbeat_callback)
         elif run_type == "edit_docs_apply":
@@ -159,6 +184,8 @@ class TaskRunner:
         raw_sources = raw_sources[:max_sources]
         for s in raw_sources:
             s.setdefault("provider", "stub")
+        # 实际使用的搜索后端：用于 report 标题展示（来自 WebProvider 的 normalize，非硬编码）
+        backend_label = raw_sources[0].get("provider", "stub") if raw_sources else "stub"
 
         for s in raw_sources:
             url = s.get("url", "")
@@ -192,7 +219,7 @@ class TaskRunner:
 
         with ctx.step("write_report"):
             _MAX_URL, _MAX_SNIPPET = 2048, 4096
-            report_text = f"# Research Report (stub)\n\nQuery: {query}\n\n## Sources\n\n"
+            report_text = f"# Research Report ({backend_label})\n\nQuery: {query}\n\n## Sources\n\n"
             for i, s in enumerate(ranked, 1):
                 u = (s.get("url") or "")[:_MAX_URL]
                 sn = (s.get("snippet") or "")[:_MAX_SNIPPET]
