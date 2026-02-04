@@ -170,20 +170,26 @@ const App = () => {
         setRuns(currentRuns);
         previousRunsRef.current = currentRuns;
         
-        // 如果有 run 完成，立即刷新消息列表（仅当仍是当前对话时更新）
+        // 如果有 run 完成，立即刷新消息列表；再延迟刷新一次以拉取 worker 异步写入的完成消息（避免竞态）
         if (shouldRefreshMessages && currentConvIdRef.current === convId) {
-          try {
-            const response = await listMessages(convId);
-            if (currentConvIdRef.current !== convId) return;
-            const sortedMessages = [...response.items].sort((a, b) => 
-              new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
-            );
-            setMessages(sortedMessages);
-          } catch (error) {
-            console.error("Failed to refresh messages after run completion:", error);
-          }
+          const refreshMessages = async () => {
+            try {
+              const response = await listMessages(convId);
+              if (currentConvIdRef.current !== convId) return;
+              const sortedMessages = [...response.items].sort((a, b) =>
+                new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+              );
+              setMessages(sortedMessages);
+            } catch (error) {
+              console.error("Failed to refresh messages after run completion:", error);
+            }
+          };
+          await refreshMessages();
+          setTimeout(() => {
+            if (currentConvIdRef.current === convId) void refreshMessages();
+          }, 1800);
         }
-        
+
         const hasActive = currentRuns.some(r => r.status === "queued" || r.status === "running");
         // 有活跃任务时 2 秒轮询，无活跃任务时 5 秒轮询，不停止（这样发新消息后新 run 也能被轮询到并刷新完成消息）
         scheduleNext(hasActive ? 2000 : 5000);

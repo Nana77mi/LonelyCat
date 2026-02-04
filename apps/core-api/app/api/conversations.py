@@ -513,7 +513,7 @@ async def _create_message(
                         run_request = RunCreateRequest(
                             type=decision.run.type,
                             title=decision.run.title,
-                            conversation_id=decision.run.conversation_id,
+                            conversation_id=conv_id,
                             input=run_input,
                         )
                         run_result = await _create_run(run_request, db)
@@ -557,11 +557,11 @@ async def _create_message(
                                 store = MemoryStore()
                                 active_facts_for_run, _ = await fetch_active_facts_from_store(store, conversation_id=run_input["conversation_id"])
                                 run_input["facts_snapshot_id"] = compute_facts_snapshot_id(active_facts_for_run)
-                        
+                        reply_conv_id = decision.run.conversation_id or conversation_id
                         run_request = RunCreateRequest(
                             type=decision.run.type,
                             title=decision.run.title,
-                            conversation_id=decision.run.conversation_id,
+                            conversation_id=reply_conv_id,
                             input=run_input,
                         )
                         run_result = await _create_run(run_request, db)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any, Optional
 
@@ -25,8 +26,8 @@ CORE_API_URL = os.getenv("CORE_API_URL", "http://localhost:5173")
 def _call_emit_run_message_api(run_id: str) -> None:
     """调用 core-api 的内部 API 发送 run 完成消息
     
-    如果调用失败，记录 warning（含 run_id），便于未来补发。
-    失败不影响 run 的完成状态。
+    失败时重试一次（间隔 2 秒），应对 core-api 短暂不可用（如 --reload 重启）。
+    若仍失败，记录 warning（含 run_id），便于未来补发。失败不影响 run 的完成状态。
     
     Args:
         run_id: Run ID
@@ -35,29 +36,39 @@ def _call_emit_run_message_api(run_id: str) -> None:
         print(f"[WARNING] Run {run_id}: httpx not available, skipping emit run message. Future retry needed.")
         return
     
-    try:
-        url = f"{CORE_API_URL}/internal/runs/{run_id}/emit-message"
-        with httpx.Client(timeout=5.0) as client:
-            response = client.post(url)
-            if response.status_code == 204:
-                # 成功
-                return
-            elif response.status_code == 404:
-                # Run 不存在，记录警告但不抛出异常
-                print(f"[WARNING] Run {run_id}: Not found when emitting message. May need retry.")
-            elif response.status_code == 400:
-                # Run 不是终态，记录警告但不抛出异常
-                print(f"[WARNING] Run {run_id}: Not in final state when emitting message. May need retry.")
-            else:
-                # 其他错误，记录但不抛出异常
-                print(f"[WARNING] Run {run_id}: Failed to emit run message (status={response.status_code}). May need retry. Response: {response.text}")
-    except httpx.RequestError as e:
-        # 网络错误，记录但不抛出异常（避免影响 run 的完成状态）
-        # 未来可以有一个"补发扫描任务"来重试这些失败的请求
-        print(f"[WARNING] Run {run_id}: Network error when calling emit run message API: {e}. May need retry.")
-    except Exception as e:
-        # 其他异常，记录但不抛出异常
-        print(f"[WARNING] Run {run_id}: Unexpected error when calling emit run message API: {e}. May need retry.")
+    url = f"{CORE_API_URL}/internal/runs/{run_id}/emit-message"
+    last_error: Optional[Exception] = None
+    last_status: Optional[int] = None
+    last_text: Optional[str] = None
+
+    for attempt in range(2):
+        if attempt > 0:
+            time.sleep(2)
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                response = client.post(url)
+                if response.status_code == 204:
+                    return
+                last_status = response.status_code
+                last_text = response.text
+                if response.status_code in (404, 400):
+                    break  # 不重试
+        except httpx.RequestError as e:
+            last_error = e
+            continue
+        except Exception as e:
+            last_error = e
+            continue
+
+    if last_status is not None:
+        if last_status == 404:
+            print(f"[WARNING] Run {run_id}: Not found when emitting message. May need retry.")
+        elif last_status == 400:
+            print(f"[WARNING] Run {run_id}: Not in final state when emitting message. May need retry.")
+        else:
+            print(f"[WARNING] Run {run_id}: Failed to emit run message (status={last_status}). May need retry. Response: {last_text or ''}")
+    elif last_error is not None:
+        print(f"[WARNING] Run {run_id}: Error when calling emit run message API: {last_error}. May need retry.")
 
 
 def fetch_runnable_candidate(db: Session, now: datetime) -> Optional[str]:
