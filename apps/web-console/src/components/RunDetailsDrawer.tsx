@@ -51,10 +51,36 @@ function buildDebugBundle(run: Run): string {
     `status: ${run.status}`,
     `facts_snapshot_id: ${factsSnapshotId}`,
     `facts_snapshot_source: ${factsSnapshotSource}`,
-    "steps:",
-    ...steps.map((s) => `  ${s.name ?? "—"} ok=${s.ok ?? "?"} duration_ms=${s.duration_ms ?? "?"} error_code=${s.error_code ?? "—"}`),
-    `error: ${errorStr}`,
   ];
+  const settingsSnapshot = input.settings_snapshot as Record<string, unknown> | undefined;
+  const webSettings = settingsSnapshot?.web as Record<string, unknown> | undefined;
+  const fetchSettings = webSettings?.fetch as Record<string, unknown> | undefined;
+  if (run.type === "research_report" && (webSettings || fetchSettings)) {
+    lines.push("web_config:");
+    lines.push(`  proxy: ${fetchSettings?.proxy ?? "(unset)"}`);
+    lines.push(`  timeout_ms: ${fetchSettings?.timeout_ms ?? "(default)"}`);
+    lines.push(`  max_bytes: ${fetchSettings?.max_bytes ?? "(default)"}`);
+    lines.push(`  user_agent: ${fetchSettings?.user_agent ? "(set)" : "(default)"}`);
+  }
+  lines.push("steps:");
+  lines.push(...steps.map((s) => `  ${s.name ?? "—"} ok=${s.ok ?? "?"} duration_ms=${s.duration_ms ?? "?"} error_code=${s.error_code ?? "—"}`));
+  const hasNetworkError = steps.some(
+    (s) =>
+      s.error_code === "NetworkError" ||
+      s.error_code === "network_unreachable" ||
+      s.error_code === "connect_failed"
+  );
+  if (hasNetworkError) {
+    const proxySet = !!fetchSettings?.proxy;
+    if (!proxySet) {
+      lines.push("");
+      lines.push("诊断提示: 检测到网络不可达，可能需要配置 web.proxy 或系统代理（HTTP_PROXY/HTTPS_PROXY）");
+    } else {
+      lines.push("");
+      lines.push("诊断提示: 代理已配置但仍失败，可能为代理不可用/鉴权失败/连接超时");
+    }
+  }
+  lines.push(`error: ${errorStr}`);
   return lines.join("\n");
 }
 
