@@ -53,6 +53,14 @@ if ($apiPid -and (Get-Process -Id $apiPid -ErrorAction SilentlyContinue)) {
 
 # Agent worker（需能访问 core-api 以在任务完成后发送回复消息）
 $env:CORE_API_URL = "http://127.0.0.1:$ApiPort"
+# 默认使用 httpx 真实抓取页面；若需 Stub 可设 WEB_FETCH_BACKEND=stub
+if (-not $env:WEB_FETCH_BACKEND) { $env:WEB_FETCH_BACKEND = "httpx" }
+# Windows 下清除可能来自 WSL/Git Bash 的证书路径，避免 httpx 报 [Errno 2] No such file or directory
+if ($env:OS -eq 'Windows_NT') {
+    Remove-Item env:SSL_CERT_FILE -ErrorAction SilentlyContinue
+    Remove-Item env:REQUESTS_CA_BUNDLE -ErrorAction SilentlyContinue
+    Remove-Item env:CURL_CA_BUNDLE -ErrorAction SilentlyContinue
+}
 Write-Host "Starting agent-worker..."
 Start-Bg -Name "agent-worker" -PidFile $WorkerPidFile -LogPath "$PidDir\agent-worker.log" -EnvPath "packages;apps/agent-worker" -ProcessArgs @(
     "-m", "worker.main"

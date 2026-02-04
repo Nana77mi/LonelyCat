@@ -18,6 +18,19 @@ from worker.tools import ToolRuntime
 from worker.tools.catalog import build_catalog_from_settings
 
 
+def _clear_invalid_ssl_cert_env_on_windows() -> None:
+    """On Windows, unset SSL_CERT_FILE/REQUESTS_CA_BUNDLE if they point to non-existent or Unix-style paths (e.g. from WSL), so httpx uses the default cert store and avoids [Errno 2] No such file or directory."""
+    if os.name != "nt":
+        return
+    for name in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+        val = os.environ.get(name)
+        if not val:
+            continue
+        # 若为 Unix 路径（以 / 开头）或路径不存在，则清除，避免 httpx 在 Windows 上报 Errno 2
+        if val.strip().startswith("/") or (not os.path.isfile(val) and not os.path.isdir(val)):
+            os.environ.pop(name, None)
+
+
 class TaskRunner:
     """任务执行器
     
@@ -74,6 +87,7 @@ class TaskRunner:
         elif run_type == "research_report":
             runtime = None
             catalog = None
+            _clear_invalid_ssl_cert_env_on_windows()
             input_json = run.input_json or {}
             snapshot = input_json.get("settings_snapshot") if isinstance(input_json, dict) else None
             if snapshot and isinstance(snapshot, dict):
@@ -248,7 +262,8 @@ class TaskRunner:
             report_text = f"# Research Report ({backend_label})\n\nQuery: {query}\n\n## Sources\n\n"
             for i, s in enumerate(ranked, 1):
                 u = (s.get("url") or "")[:_MAX_URL]
-                sn = (s.get("snippet") or "")[:_MAX_SNIPPET]
+                # 优先用 web.fetch 的 content，无则用 web.search 的 snippet，使 report 体现“已抓取正文”
+                sn = (s.get("content") or s.get("snippet") or "")[:_MAX_SNIPPET]
                 report_text += f"- [{s.get('title', '')[:200]}]({u}): {sn}\n"
             evidence_list = ctx.artifacts.get("evidence") or []
             if evidence_list:
@@ -259,6 +274,13 @@ class TaskRunner:
                     report_text += f"- [{idx}] {q}\n"
             ctx.result["query"] = query
             ctx.result["source_count"] = len(ranked)
+            # 若全部为 Stub 抓取（未真实抓取页面），在 report 末尾加说明
+            all_stub = all(
+                (s.get("content") or "").strip().startswith("Stub content for") or not (s.get("content") or "").strip()
+                for s in ranked
+            )
+            if all_stub and ranked:
+                report_text += "\n\n---\n*说明：当前为 Stub 抓取模式，未真实抓取页面正文。若需真实抓取，请设置环境变量 WEB_FETCH_BACKEND=httpx 并重启 agent-worker。*"
             ctx.artifacts["report"] = {"text": report_text, "format": "markdown"}
             sources_out = []
             for s in ranked:

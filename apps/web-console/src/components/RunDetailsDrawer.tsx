@@ -303,6 +303,11 @@ export const RunDetailsDrawer = ({ run, onClose, onRetryRun, onApplyEditDocs, on
             <div className="run-drawer-section">
               <h4 className="run-drawer-section-title">Error</h4>
               <div className="run-drawer-error">{run.error}</div>
+              {run.error.includes("Errno 2") || run.error.includes("No such file or directory") ? (
+                <div className="run-drawer-error-hint" role="alert">
+                  可能是环境/证书路径问题：请用 <code>.\scripts\down.ps1</code> 后重新 <code>.\scripts\up.ps1</code> 启动，或在前端将 web 搜索/抓取设为 stub 后再试。
+                </div>
+              ) : null}
             </div>
           )}
         </div>

@@ -217,6 +217,9 @@ export const RunsPanel = ({
                   <div className="run-error">
                     <div className="run-error-content">
                       {expandedErrors.has(run.id) ? run.error : truncateError(run.error)}
+                      {(run.error.includes("Errno 2") || run.error.includes("No such file or directory")) && (
+                        <div className="run-error-hint">环境/证书路径问题：请重启 up.ps1 或改用 stub 模式。</div>
+                      )}
                       {run.error.length > 100 && (
                       <button
                             className="run-error-toggle"
