@@ -58,16 +58,16 @@ Start-Bg -Name "agent-worker" -PidFile $WorkerPidFile -LogPath "$PidDir\agent-wo
 )
 Start-Sleep -Seconds 1
 
-Write-Host ""
-Write-Host "=========================================="
-Write-Host "  LonelyCat 服务已启动（API + Worker）"
-Write-Host "=========================================="
+Write-Host ''
+Write-Host '=========================================='
+Write-Host '  LonelyCat 服务已启动（API + Worker）'
+Write-Host '=========================================='
 Write-Host "  API:       http://localhost:$ApiPort/docs"
 Write-Host "  用户界面:  即将启动 (端口 $WebPort)"
-Write-Host "  停止后端:  .\scripts\down.ps1"
-Write-Host "  按 Ctrl+C 停止 Web 界面"
-Write-Host "=========================================="
-Write-Host ""
+Write-Host '  停止后端:  .\scripts\down.ps1'
+Write-Host '  按 Ctrl+C 停止 Web 界面'
+Write-Host '=========================================='
+Write-Host ''
 
 # Web console (foreground)
 $env:CORE_API_PORT = $ApiPort
