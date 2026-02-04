@@ -6,7 +6,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
 $Venv = Join-Path $RepoRoot ".venv"
-$Py = Join-Path $Venv "Scripts\python.exe"
+$Py = Join-Path $Venv 'Scripts\python.exe'
 $PidDir = Join-Path $RepoRoot ".pids"
 $ApiPort = 5173
 $WebPort = 8000
@@ -41,7 +41,7 @@ function Start-Bg {
 # Core API
 Write-Host "Starting core-api (port $ApiPort)..."
 Start-Bg -Name "core-api" -PidFile $ApiPidFile -LogPath "$PidDir\core-api.log" -EnvPath "packages" -Args @(
-    "-m", "uvicorn", "app.main:app", "--reload", "--host", "127.0.0.1", "--port", $ApiPort, "--app-dir", "apps\core-api"
+    "-m", "uvicorn", "app.main:app", "--reload", "--host", "127.0.0.1", "--port", $ApiPort, "--app-dir", "apps/core-api"
 )
 Start-Sleep -Seconds 2
 $apiPid = Get-Content $ApiPidFile -ErrorAction SilentlyContinue
@@ -53,7 +53,7 @@ if ($apiPid -and (Get-Process -Id $apiPid -ErrorAction SilentlyContinue)) {
 
 # Agent worker
 Write-Host "Starting agent-worker..."
-Start-Bg -Name "agent-worker" -PidFile $WorkerPidFile -LogPath "$PidDir\agent-worker.log" -EnvPath "packages;apps\agent-worker" -Args @(
+Start-Bg -Name "agent-worker" -PidFile $WorkerPidFile -LogPath "$PidDir\agent-worker.log" -EnvPath "packages;apps/agent-worker" -Args @(
     "-m", "worker.main"
 )
 Start-Sleep -Seconds 1
@@ -71,7 +71,7 @@ Write-Host ""
 
 # Web console (foreground)
 $env:CORE_API_PORT = $ApiPort
-$webDir = Join-Path $RepoRoot "apps\web-console"
+$webDir = Join-Path $RepoRoot 'apps\web-console'
 Push-Location $webDir
 try {
     pnpm dev --host 0.0.0.0 --port $WebPort

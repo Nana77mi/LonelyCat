@@ -45,13 +45,20 @@ if (Test-Path $awPyproject) {
     & $Pip install --no-build-isolation -e "apps/agent-worker[test]"
 }
 
-# Web console
+# Web console (requires Node.js and pnpm)
 $webDir = Join-Path $RepoRoot "apps\web-console"
 if (Test-Path (Join-Path $webDir "package.json")) {
+    # Ensure pnpm is available (corepack or global install)
+    if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
+        Write-Host "pnpm not found. Enabling corepack or installing via npm..."
+        corepack enable 2>$null
+        if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
+            npm install -g pnpm
+        }
+    }
     Write-Host "Installing web-console dependencies (pnpm)..."
     Push-Location $webDir
     try {
-        corepack enable 2>$null
         pnpm install --no-frozen-lockfile
     } finally {
         Pop-Location
