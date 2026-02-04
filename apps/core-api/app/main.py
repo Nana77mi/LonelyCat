@@ -42,6 +42,7 @@ from app.api.conversations import router as conversations_router
 from app.api.internal import router as internal_router
 from app.api.memory import router as memory_router
 from app.api.runs import router as runs_router
+from app.api.settings import router as settings_router
 from app.db import init_db as init_core_db
 from app.settings import Settings
 
@@ -60,6 +61,7 @@ app.add_middleware(
 app.include_router(memory_router, prefix="/memory", tags=["memory"])
 app.include_router(conversations_router, prefix="/conversations", tags=["conversations"])
 app.include_router(runs_router, prefix="/runs", tags=["runs"])
+app.include_router(settings_router, prefix="/settings", tags=["settings"])
 app.include_router(internal_router)  # 内部 API，无需 prefix（已在 router 中定义）
 
 

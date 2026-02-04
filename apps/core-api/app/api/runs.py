@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc, update
 from sqlalchemy.orm import Session
 
+from app.api.settings import get_current_settings
 from app.db import ConversationModel, RunModel, RunStatus, SessionLocal
 
 router = APIRouter()
@@ -134,7 +135,9 @@ async def _create_run(request: RunCreateRequest, db: Session) -> Dict[str, Any]:
     input_json = dict(request.input)
     if not is_valid_trace_id(input_json.get("trace_id")):
         input_json["trace_id"] = uuid.uuid4().hex
-    
+    # 注入当前生效设置，供 worker 按 settings_snapshot 构造 catalog（可回放）
+    input_json["settings_snapshot"] = get_current_settings(db)
+
     run = RunModel(
         id=run_id,
         type=request.type,

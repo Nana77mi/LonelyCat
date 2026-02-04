@@ -6,7 +6,7 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $RepoRoot
 
 $Venv = Join-Path $RepoRoot ".venv"
-$Py = Join-Path $Venv "Scripts\python.exe"
+$Py = Join-Path $Venv 'Scripts\python.exe'
 $PidDir = Join-Path $RepoRoot ".pids"
 $ApiPort = 5173
 $WebPort = 8000
@@ -23,7 +23,7 @@ $ApiPidFile = Join-Path $PidDir "core-api.pid"
 $WorkerPidFile = Join-Path $PidDir "agent-worker.pid"
 
 function Start-Bg {
-    param([string]$Name, [string]$PidFile, [string]$LogPath, [string]$EnvPath, [string[]]$Args)
+    param([string]$Name, [string]$PidFile, [string]$LogPath, [string]$EnvPath, [string[]]$ProcessArgs)
     if (Test-Path $PidFile) {
         $oldPid = Get-Content $PidFile -ErrorAction SilentlyContinue
         if ($oldPid -match '^\d+$' -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
@@ -32,7 +32,7 @@ function Start-Bg {
         }
     }
     $env:PYTHONPATH = $EnvPath
-    $proc = Start-Process -FilePath $Py -ArgumentList $Args -WorkingDirectory $RepoRoot -NoNewWindow `
+    $proc = Start-Process -FilePath $Py -ArgumentList $ProcessArgs -WorkingDirectory $RepoRoot -NoNewWindow `
         -RedirectStandardOutput $LogPath -RedirectStandardError ($LogPath -replace '\.log$', '-err.log') -PassThru
     $proc.Id | Set-Content $PidFile
     Write-Host "Started $Name (pid=$($proc.Id)), log: $LogPath"
@@ -40,8 +40,8 @@ function Start-Bg {
 
 # Core API
 Write-Host "Starting core-api (port $ApiPort)..."
-Start-Bg -Name "core-api" -PidFile $ApiPidFile -LogPath "$PidDir\core-api.log" -EnvPath "packages" -Args @(
-    "-m", "uvicorn", "app.main:app", "--reload", "--host", "127.0.0.1", "--port", $ApiPort, "--app-dir", "apps\core-api"
+Start-Bg -Name "core-api" -PidFile $ApiPidFile -LogPath "$PidDir\core-api.log" -EnvPath "packages" -ProcessArgs @(
+    "-m", "uvicorn", "app.main:app", "--reload", "--host", "127.0.0.1", "--port", $ApiPort, "--app-dir", "apps/core-api"
 )
 Start-Sleep -Seconds 2
 $apiPid = Get-Content $ApiPidFile -ErrorAction SilentlyContinue
@@ -53,25 +53,28 @@ if ($apiPid -and (Get-Process -Id $apiPid -ErrorAction SilentlyContinue)) {
 
 # Agent worker
 Write-Host "Starting agent-worker..."
-Start-Bg -Name "agent-worker" -PidFile $WorkerPidFile -LogPath "$PidDir\agent-worker.log" -EnvPath "packages;apps\agent-worker" -Args @(
+Start-Bg -Name "agent-worker" -PidFile $WorkerPidFile -LogPath "$PidDir\agent-worker.log" -EnvPath "packages;apps/agent-worker" -ProcessArgs @(
     "-m", "worker.main"
 )
 Start-Sleep -Seconds 1
 
-Write-Host ""
-Write-Host "=========================================="
-Write-Host "  LonelyCat 服务已启动（API + Worker）"
-Write-Host "=========================================="
-Write-Host "  API:       http://localhost:$ApiPort/docs"
-Write-Host "  用户界面:  即将启动 (端口 $WebPort)"
-Write-Host "  停止后端:  .\scripts\down.ps1"
-Write-Host "  按 Ctrl+C 停止 Web 界面"
-Write-Host "=========================================="
-Write-Host ""
+$sep = [string]::new([char]61, 42)
+Write-Host
+Write-Host $sep
+Write-Host '  LonelyCat started (API + Worker)'
+Write-Host $sep
+Write-Host ('  API:       http://localhost:{0}/docs' -f $ApiPort)
+Write-Host ('  Web UI:    starting on port {0}' -f $WebPort)
+Write-Host '  Stop backend: .\scripts\down.ps1'
+Write-Host '  Press Ctrl+C to stop Web UI'
+Write-Host $sep
+Write-Host
 
 # Web console (foreground)
 $env:CORE_API_PORT = $ApiPort
-$webDir = Join-Path $RepoRoot "apps\web-console"
+$apps = -join (97,112,112,115 | ForEach-Object { [char]$_ })
+$webConsole = -join (119,101,98,45,99,111,110,115,111,108,101 | ForEach-Object { [char]$_ })
+$webDir = Join-Path (Join-Path $RepoRoot $apps) $webConsole
 Push-Location $webDir
 try {
     pnpm dev --host 0.0.0.0 --port $WebPort

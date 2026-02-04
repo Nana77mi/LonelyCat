@@ -29,6 +29,9 @@ configs/config.yaml
 # PIDs
 .pids/
 
+# Debug / scratch (root-level debug docs, PR drafts, check scripts)
+_debug/
+
 # Docker / local data (SQLite, etc.)
 data/
 

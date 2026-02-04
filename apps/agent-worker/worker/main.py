@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import random
@@ -174,6 +175,14 @@ def run_worker() -> None:
                 )
                 
                 # Handler 必须返回 dict 且包含 ok: bool；RunStatus 由 main 根据 ok 决定
+                # DB runs.error 列为 Text，必须传字符串；result["error"] 可能为 dict（如 step 失败时的结构化错误）
+                def _error_to_str(err: Any) -> str:
+                    if err is None:
+                        return "Task reported failure"
+                    if isinstance(err, dict):
+                        return err.get("message", json.dumps(err, default=str, ensure_ascii=False))
+                    return str(err)
+
                 if "ok" not in result:
                     logger.warning(
                         "Run %s handler returned output without 'ok' field; treating as failure",
@@ -182,7 +191,7 @@ def run_worker() -> None:
                     complete_failed(
                         db,
                         run.id,
-                        result.get("error", "Task output missing 'ok' field"),
+                        _error_to_str(result.get("error")),
                         output_json=result,
                     )
                 elif not result["ok"]:
@@ -190,7 +199,7 @@ def run_worker() -> None:
                     complete_failed(
                         db,
                         run.id,
-                        result.get("error", "Task reported failure"),
+                        _error_to_str(result.get("error")),
                         output_json=result,
                     )
                 else:

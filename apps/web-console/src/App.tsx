@@ -5,6 +5,7 @@ import { Sidebar } from "./components/Sidebar";
 import { ChatPage } from "./components/ChatPage";
 import { RunsPanel } from "./components/RunsPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
+import { SettingsDrawer } from "./components/SettingsDrawer";
 import { MemoryPage } from "./pages/MemoryPage";
 import { listConversations, createConversation, listMessages, sendMessage, deleteConversation, updateConversation, markConversationRead } from "./api/conversations";
 import { listConversationRuns, createRun, deleteRun, cancelRun, retryRun } from "./api/runs";
@@ -29,7 +30,8 @@ const App = () => {
   const [runs, setRuns] = useState<Run[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState<string | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [memoryDrawerOpen, setMemoryDrawerOpen] = useState(false);
+  const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
   const [loading, setLoading] = useState(false);
 
   // A2.1: 加载对话列表
@@ -715,9 +717,11 @@ const App = () => {
             />
           ) : undefined
         }
-        onSettingsClick={() => setSettingsOpen(true)}
+        onMemoryClick={() => setMemoryDrawerOpen(true)}
+        onSettingsClick={() => setSettingsDrawerOpen(true)}
       />
-      <SettingsPanel isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <SettingsPanel isOpen={memoryDrawerOpen} onClose={() => setMemoryDrawerOpen(false)} />
+      <SettingsDrawer isOpen={settingsDrawerOpen} onClose={() => setSettingsDrawerOpen(false)} />
     </>
   );
 };

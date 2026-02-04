@@ -5,10 +5,11 @@ type LayoutProps = {
   sidebar: ReactNode;
   mainContent: ReactNode;
   tasksPanel?: ReactNode; // 右侧固定 Tasks Panel（可选）
+  onMemoryClick: () => void;
   onSettingsClick: () => void;
 };
 
-export const Layout = ({ sidebar, mainContent, tasksPanel, onSettingsClick }: LayoutProps) => {
+export const Layout = ({ sidebar, mainContent, tasksPanel, onMemoryClick, onSettingsClick }: LayoutProps) => {
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   return (
@@ -73,7 +74,28 @@ export const Layout = ({ sidebar, mainContent, tasksPanel, onSettingsClick }: La
           </button>
           <div className="top-bar-spacer"></div>
           <button
-            className="settings-btn"
+            className="top-bar-icon-btn memory-btn"
+            onClick={onMemoryClick}
+            aria-label="Memory 管理"
+          >
+            <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+              <path
+                d="M10 4a4 4 0 014 4v2a4 4 0 01-8 0V8a4 4 0 014-4z"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M5 10h10M7 14h6"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </button>
+          <button
+            className="top-bar-icon-btn settings-btn"
             onClick={onSettingsClick}
             aria-label="设置"
           >

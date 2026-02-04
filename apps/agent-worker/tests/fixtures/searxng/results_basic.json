@@ -1,0 +1,23 @@
+{
+  "query": "test",
+  "results": [
+    {
+      "url": "https://example.com/first",
+      "title": "First Result Title",
+      "content": "First snippet from SearXNG.",
+      "engine": "google"
+    },
+    {
+      "url": "https://example.com/second",
+      "title": "Second Result Title",
+      "content": "Second snippet.",
+      "engine": "bing"
+    },
+    {
+      "url": "https://example.com/third",
+      "title": "Third Result",
+      "content": "Third snippet.",
+      "engine": "duckduckgo"
+    }
+  ]
+}

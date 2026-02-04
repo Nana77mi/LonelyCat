@@ -41,10 +41,23 @@ class RunStatus(str, Enum):
 
 # 数据库配置
 # 默认与 memory 包共享数据库（可通过 LONELYCAT_CORE_API_DB_URL 使用独立数据库）
-# 这样可以复用同一个 SQLite 文件，但模型定义独立，避免耦合
+# 使用绝对路径，确保 core-api 与 agent-worker 无论从何目录启动都使用同一 DB 文件
+def _default_database_url() -> str:
+    env_url = os.getenv("LONELYCAT_MEMORY_DB_URL")
+    if env_url and env_url.strip():
+        return env_url.strip()
+    # 相对路径时按 app/db.py 所在位置解析到项目根下的 lonelycat_memory.db
+    this_dir = os.path.dirname(os.path.abspath(__file__))
+    # app/db.py -> core-api/app -> core-api -> apps -> 项目根
+    for _ in range(4):
+        this_dir = os.path.dirname(this_dir)
+    db_path = os.path.join(this_dir, "lonelycat_memory.db")
+    return f"sqlite:///{db_path}"
+
+
 DATABASE_URL = os.getenv(
     "LONELYCAT_CORE_API_DB_URL",
-    os.getenv("LONELYCAT_MEMORY_DB_URL", "sqlite:///./lonelycat_memory.db")
+    _default_database_url(),
 )
 
 engine = create_engine(
@@ -130,6 +143,15 @@ class RunModel(Base):
     )
 
 
+class SettingsModel(Base):
+    """应用设置 key-value 存储（单行 key 如 v0，value 为 SettingsV0 JSON）"""
+    __tablename__ = "settings"
+
+    key = Column(String, primary_key=True, index=True)
+    value = Column(JSON, nullable=False)  # SettingsV0 等
+    updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+
+
 def init_db() -> None:
     """初始化数据库，创建所有表"""
     Base.metadata.create_all(bind=engine)
@@ -139,6 +161,7 @@ def init_db() -> None:
     _migrate_add_cancel_fields()
     # 迁移：添加 conversation 相关字段（如果不存在）
     _migrate_add_conversation_fields()
+    # 创建 settings 表（create_all 会创建，无需单独迁移除非表已存在但缺列）
 
 
 def _migrate_add_client_msg_id() -> None:

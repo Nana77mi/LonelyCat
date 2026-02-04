@@ -131,7 +131,7 @@
   flex: 1;
 }
 
-.settings-btn {
+.top-bar-icon-btn {
   background: none;
   border: none;
   color: #171717;
@@ -144,8 +144,16 @@
   transition: background-color 0.2s;
 }
 
-.settings-btn:hover {
+.top-bar-icon-btn:hover {
   background-color: #f5f5f5;
+}
+
+.top-bar-icon-btn.memory-btn {
+  margin-right: 0;
+}
+
+.top-bar-icon-btn.settings-btn {
+  margin-left: 0;
 }
 
 /* 响应式设计 */

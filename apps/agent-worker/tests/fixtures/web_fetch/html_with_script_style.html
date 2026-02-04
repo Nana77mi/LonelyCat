@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><title>Page With Script Style</title>
+<style>body { color: red; } .hide { display: none; }</style>
+<script>console.log("should not appear in text"); window.x = 1;</script>
+</head>
+<body>
+<p>Visible paragraph one.</p>
+<script>document.write("nope");</script>
+<p>Visible paragraph two.</p>
+<style>.x { }</style>
+<p>Visible paragraph three.</p>
+</body>
+</html>
