@@ -38,6 +38,13 @@ foreach ($p in $packages) {
     }
 }
 
+# Core API
+$apiPyproject = Join-Path $RepoRoot "apps\core-api\pyproject.toml"
+if (Test-Path $apiPyproject) {
+    Write-Host "Installing core-api ..."
+    & $Pip install -e "apps/core-api"
+}
+
 # Agent worker
 $awPyproject = Join-Path $RepoRoot "apps\agent-worker\pyproject.toml"
 if (Test-Path $awPyproject) {
