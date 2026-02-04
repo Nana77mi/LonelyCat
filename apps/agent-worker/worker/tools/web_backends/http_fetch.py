@@ -1,12 +1,11 @@
-"""HttpxFetchBackend: 真实 httpx GET 抓取，仅 http(s)，无 key。"""
+"""HttpxFetchBackend: 委托 webfetch client，SSRF/重试/max_bytes/代理；仅 http(s)。"""
 
 from __future__ import annotations
 
+import os
 import re
 from html.parser import HTMLParser
 from typing import Any, Dict
-
-import httpx
 
 from worker.tools.web_backends.errors import (
     WebBlockedError,
@@ -14,12 +13,15 @@ from worker.tools.web_backends.errors import (
     WebNetworkError,
     WebTimeoutError,
 )
+from worker.tools.webfetch.client import WebfetchClient
+from worker.tools.webfetch.models import WebFetchRaw
 
 USER_AGENT = "Mozilla/5.0 (compatible; LonelyCat/1.0; +https://github.com/lonelycat)"
 ACCEPT_LANGUAGE = "en-US,en;q=0.9"
 BLOCKED_KEYWORDS = ("captcha", "unusual traffic", "blocked")
 TEXT_CONTENT_TYPES = ("text/html", "text/plain", "application/xhtml+xml", "application/xml", "text/xml")
 DEFAULT_TEXT_MAX = 100_000
+DEFAULT_MAX_BYTES = 5 * 1024 * 1024
 
 
 def _is_http_or_https(url: str) -> bool:
@@ -79,60 +81,112 @@ def _extract_visible_text(html: str) -> str:
 
 
 def _get_text_max() -> int:
-    import os
     try:
         return max(1000, int(os.getenv("WEB_FETCH_TEXT_MAX", str(DEFAULT_TEXT_MAX))))
     except (TypeError, ValueError):
         return DEFAULT_TEXT_MAX
 
 
+def _get_max_bytes(fetch_config: dict | None = None) -> int:
+    if fetch_config and fetch_config.get("max_bytes") is not None:
+        try:
+            return max(1024, int(fetch_config["max_bytes"]))
+        except (TypeError, ValueError):
+            pass
+    try:
+        return max(1024, int(os.getenv("WEB_FETCH_MAX_BYTES", str(DEFAULT_MAX_BYTES))))
+    except (TypeError, ValueError):
+        return DEFAULT_MAX_BYTES
+
+
+def _get_proxy(fetch_config: dict | None = None) -> str | None:
+    if fetch_config and fetch_config.get("proxy"):
+        return str(fetch_config["proxy"]).strip() or None
+    return os.getenv("WEB_FETCH_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or None
+
+
+def _raw_to_fetch_dict(raw: WebFetchRaw, text_max: int) -> Dict[str, Any]:
+    """将 WebFetchRaw 转为 backend 合同 dict：url, status_code, content_type, text, truncated。"""
+    content_type = (raw.headers.get("content-type") or "").strip()
+    try:
+        raw_text = raw.body_bytes.decode("utf-8", errors="replace")
+    except Exception:
+        raw_text = ""
+    if not _is_text_content_type(content_type):
+        return {
+            "url": raw.url,
+            "final_url": raw.final_url,
+            "status_code": raw.status_code,
+            "content_type": content_type,
+            "text": "",
+            "truncated": raw.meta.get("truncated", False),
+            "error": raw.error,
+            "meta": dict(raw.meta),
+        }
+    if "html" in content_type.lower():
+        text = _extract_visible_text(raw_text)
+    else:
+        text = raw_text
+    truncated = raw.meta.get("truncated", False) or len(text) > text_max
+    if len(text) > text_max:
+        text = text[:text_max]
+    return {
+        "url": raw.url,
+        "final_url": raw.final_url,
+        "status_code": raw.status_code,
+        "content_type": content_type,
+        "text": text,
+        "truncated": truncated,
+        "error": raw.error,
+        "meta": dict(raw.meta),
+    }
+
+
 class HttpxFetchBackend:
-    """真实 httpx GET 抓取；仅 http(s)，超时/403/429/body blocked 抛对应错误码。"""
+    """委托 webfetch client；仅 http(s)，SSRF/重试/max_bytes/代理；403/429/body blocked 抛对应错误码。"""
 
     backend_id: str = "httpx"
+
+    def __init__(self, fetch_config: dict | None = None) -> None:
+        self._fetch_config = fetch_config or {}
+
+    def _client(self, timeout_ms: int) -> WebfetchClient:
+        timeout_sec = max(1.0, timeout_ms / 1000.0)
+        if self._fetch_config.get("timeout_ms") is not None:
+            try:
+                timeout_sec = max(1.0, int(self._fetch_config["timeout_ms"]) / 1000.0)
+            except (TypeError, ValueError):
+                pass
+        user_agent = (self._fetch_config.get("user_agent") or USER_AGENT)
+        if isinstance(user_agent, str):
+            user_agent = user_agent.strip() or USER_AGENT
+        else:
+            user_agent = USER_AGENT
+        return WebfetchClient(
+            timeout_connect_sec=min(5.0, timeout_sec / 2),
+            timeout_read_sec=timeout_sec,
+            max_bytes=_get_max_bytes(self._fetch_config),
+            proxy=_get_proxy(self._fetch_config),
+            user_agent=user_agent,
+        )
 
     def fetch(self, url: str, timeout_ms: int) -> Dict[str, Any]:
         if not _is_http_or_https(url):
             raise WebInvalidInputError("url must be http:// or https://")
         url = url.strip()
-        timeout_sec = max(1, timeout_ms / 1000.0)
-        text_max = _get_text_max()
-        headers = {"User-Agent": USER_AGENT, "Accept-Language": ACCEPT_LANGUAGE}
+        client = self._client(timeout_ms)
+        raw = client.fetch(url)
+        if raw.status_code in (403, 429):
+            raise WebBlockedError(f"HTTP {raw.status_code}")
+        if raw.error == "timeout_read":
+            raise WebTimeoutError("Request timeout")
+        if raw.error in ("network_unreachable", "connect_failed"):
+            raise WebNetworkError(str(raw.error)[:500])
         try:
-            with httpx.Client(timeout=timeout_sec) as client:
-                resp = client.get(url, headers=headers)
-        except httpx.TimeoutException as e:
-            raise WebTimeoutError(str(e)[:500]) from e
-        except httpx.RequestError as e:
-            raise WebNetworkError(str(e)[:500]) from e
-
-        if resp.status_code in (403, 429):
-            raise WebBlockedError(f"HTTP {resp.status_code}")
-        if _body_indicates_blocked(resp.text):
+            raw_text = raw.body_bytes.decode("utf-8", errors="replace")
+        except Exception:
+            raw_text = ""
+        if _body_indicates_blocked(raw_text):
             raise WebBlockedError("Page indicates block or captcha")
-
-        content_type = (resp.headers.get("content-type") or "").strip()
-        if not _is_text_content_type(content_type):
-            return {
-                "url": url,
-                "status_code": resp.status_code,
-                "content_type": content_type,
-                "text": "",
-                "truncated": False,
-            }
-
-        raw_text = resp.text
-        if "html" in content_type.lower():
-            text = _extract_visible_text(raw_text)
-        else:
-            text = raw_text if isinstance(raw_text, str) else ""
-        truncated = len(text) > text_max
-        if truncated:
-            text = text[:text_max]
-        return {
-            "url": url,
-            "status_code": resp.status_code,
-            "content_type": content_type,
-            "text": text,
-            "truncated": truncated,
-        }
+        text_max = _get_text_max()
+        return _raw_to_fetch_dict(raw, text_max)

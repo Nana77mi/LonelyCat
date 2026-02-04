@@ -26,14 +26,19 @@ def get_db():
 
 
 def _default_settings() -> Dict[str, Any]:
-    """默认设置（stub、15000）"""
+    """默认设置（stub、15000；fetch 含 timeout/max_bytes/user_agent）"""
     return {
         "version": "settings_v0",
         "web": {
             "search": {
                 "backend": "stub",
                 "timeout_ms": 15000,
-            }
+            },
+            "fetch": {
+                "timeout_ms": 15000,
+                "max_bytes": 5 * 1024 * 1024,
+                "user_agent": "Mozilla/5.0 (compatible; LonelyCat/1.0; +https://github.com/lonelycat)",
+            },
         },
     }
 
@@ -71,6 +76,25 @@ def _env_settings() -> Dict[str, Any]:
                 )["timeout_ms"] = max(1000, int(raw_st))
             except (TypeError, ValueError):
                 pass
+    # web.fetch: proxy, timeout_ms, max_bytes, user_agent
+    proxy = (os.getenv("WEB_FETCH_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "").strip()
+    if proxy:
+        out.setdefault("web", {}).setdefault("fetch", {})["proxy"] = proxy
+    raw_ft = os.getenv("WEB_FETCH_TIMEOUT_MS")
+    if raw_ft is not None and str(raw_ft).strip():
+        try:
+            out.setdefault("web", {}).setdefault("fetch", {})["timeout_ms"] = max(1000, int(raw_ft))
+        except (TypeError, ValueError):
+            pass
+    raw_mb = os.getenv("WEB_FETCH_MAX_BYTES")
+    if raw_mb is not None and str(raw_mb).strip():
+        try:
+            out.setdefault("web", {}).setdefault("fetch", {})["max_bytes"] = max(1024, int(raw_mb))
+        except (TypeError, ValueError):
+            pass
+    ua = (os.getenv("WEB_FETCH_USER_AGENT") or "").strip()
+    if ua:
+        out.setdefault("web", {}).setdefault("fetch", {})["user_agent"] = ua
     return out
 
 

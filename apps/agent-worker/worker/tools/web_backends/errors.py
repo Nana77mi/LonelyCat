@@ -79,3 +79,13 @@ class WebBadGatewayError(ValueError):
     def __init__(self, message: str = "") -> None:
         self.detail = message
         super().__init__(message or "Bad gateway")
+
+
+class WebSSRFBlockedError(ValueError):
+    """URL 解析到私网/环回/链路本地；error.code = ssrf_blocked。"""
+
+    code: str = "ssrf_blocked"
+
+    def __init__(self, message: str = "") -> None:
+        self.detail = message
+        super().__init__(message or "SSRF blocked")

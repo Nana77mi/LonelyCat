@@ -1,9 +1,8 @@
-"""HttpxFetchBackend tests: mock httpx, no network."""
+"""HttpxFetchBackend tests: mock webfetch client, no network."""
 
 import os
 from unittest.mock import MagicMock, patch
 
-import httpx
 import pytest
 
 from worker.tools.web_backends.errors import (
@@ -13,6 +12,7 @@ from worker.tools.web_backends.errors import (
     WebTimeoutError,
 )
 from worker.tools.web_backends.http_fetch import HttpxFetchBackend
+from worker.tools.webfetch.models import WebFetchRaw
 
 TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 FIXTURES_DIR = os.path.join(TESTS_DIR, "fixtures", "web_fetch")
@@ -24,19 +24,27 @@ def _load_fixture(name: str) -> str:
         return f.read()
 
 
-def test_http_fetch_backend_html_extracts_visible_text_and_truncates():
-    """Mock httpx 返回 html_with_script_style；断言 script/style 不出现在 text。"""
-    html = _load_fixture("html_with_script_style.html")
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.text = html
-    mock_resp.headers = {"content-type": "text/html; charset=utf-8"}
-    mock_client = MagicMock()
-    mock_client.get.return_value = mock_resp
-    mock_client.__enter__ = MagicMock(return_value=mock_client)
-    mock_client.__exit__ = MagicMock(return_value=False)
+def _raw(status_code: int, content_type: str, body_bytes: bytes, url: str = "https://example.com/", truncated: bool = False) -> WebFetchRaw:
+    return WebFetchRaw(
+        url=url,
+        final_url=url,
+        status_code=status_code,
+        headers={"content-type": content_type},
+        body_bytes=body_bytes,
+        error=None,
+        meta={"bytes_read": len(body_bytes), "truncated": truncated},
+    )
 
-    with patch("worker.tools.web_backends.http_fetch.httpx.Client", return_value=mock_client):
+
+def test_http_fetch_backend_html_extracts_visible_text_and_truncates():
+    """Mock webfetch 返回 html_with_script_style；断言 script/style 不出现在 text。"""
+    html = _load_fixture("html_with_script_style.html")
+    raw = _raw(200, "text/html; charset=utf-8", html.encode("utf-8"), "https://example.com/page")
+
+    with patch("worker.tools.web_backends.http_fetch.WebfetchClient") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.fetch.return_value = raw
+        mock_cls.return_value = mock_client
         backend = HttpxFetchBackend()
         out = backend.fetch("https://example.com/page", timeout_ms=5000)
     assert out["status_code"] == 200
@@ -52,17 +60,13 @@ def test_http_fetch_backend_html_extracts_visible_text_and_truncates():
 
 def test_http_fetch_backend_plain_text_returns_text():
     """Mock 返回 plain_text.txt；text 为原样。"""
-    raw = _load_fixture("plain_text.txt")
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.text = raw
-    mock_resp.headers = {"content-type": "text/plain"}
-    mock_client = MagicMock()
-    mock_client.get.return_value = mock_resp
-    mock_client.__enter__ = MagicMock(return_value=mock_client)
-    mock_client.__exit__ = MagicMock(return_value=False)
+    raw_text = _load_fixture("plain_text.txt")
+    raw = _raw(200, "text/plain", raw_text.encode("utf-8"), "https://example.com/txt")
 
-    with patch("worker.tools.web_backends.http_fetch.httpx.Client", return_value=mock_client):
+    with patch("worker.tools.web_backends.http_fetch.WebfetchClient") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.fetch.return_value = raw
+        mock_cls.return_value = mock_client
         backend = HttpxFetchBackend()
         out = backend.fetch("https://example.com/txt", timeout_ms=5000)
     assert "Plain text content line one" in out["text"]
@@ -79,12 +83,12 @@ def test_http_fetch_backend_invalid_scheme_raises_invalid_input():
 
 
 def test_http_fetch_backend_timeout_raises_timeout():
-    """Mock timeout → WebTimeoutError。"""
-    with patch("worker.tools.web_backends.http_fetch.httpx.Client") as mock_cls:
+    """Mock client 返回 error=timeout_read → WebTimeoutError。"""
+    raw = _raw(408, "", b"")
+    raw.error = "timeout_read"
+    with patch("worker.tools.web_backends.http_fetch.WebfetchClient") as mock_cls:
         mock_client = MagicMock()
-        mock_client.get.side_effect = httpx.TimeoutException("timeout")
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.fetch.return_value = raw
         mock_cls.return_value = mock_client
         backend = HttpxFetchBackend()
         with pytest.raises(WebTimeoutError):
@@ -92,12 +96,12 @@ def test_http_fetch_backend_timeout_raises_timeout():
 
 
 def test_http_fetch_backend_connect_error_raises_network_error():
-    """Mock ConnectError → WebNetworkError。"""
-    with patch("worker.tools.web_backends.http_fetch.httpx.Client") as mock_cls:
+    """Mock client 返回 error=connect_failed → WebNetworkError。"""
+    raw = _raw(0, "", b"")
+    raw.error = "connect_failed"
+    with patch("worker.tools.web_backends.http_fetch.WebfetchClient") as mock_cls:
         mock_client = MagicMock()
-        mock_client.get.side_effect = httpx.ConnectError("connection refused")
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.fetch.return_value = raw
         mock_cls.return_value = mock_client
         backend = HttpxFetchBackend()
         with pytest.raises(WebNetworkError):
@@ -106,14 +110,11 @@ def test_http_fetch_backend_connect_error_raises_network_error():
 
 def test_http_fetch_backend_403_or_429_raises_web_blocked():
     """Mock status 403/429 → WebBlockedError。"""
-    mock_resp = MagicMock()
-    mock_resp.status_code = 403
-    mock_resp.text = ""
-    mock_client = MagicMock()
-    mock_client.get.return_value = mock_resp
-    mock_client.__enter__ = MagicMock(return_value=mock_client)
-    mock_client.__exit__ = MagicMock(return_value=False)
-    with patch("worker.tools.web_backends.http_fetch.httpx.Client", return_value=mock_client):
+    raw = _raw(403, "text/html", b"")
+    with patch("worker.tools.web_backends.http_fetch.WebfetchClient") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.fetch.return_value = raw
+        mock_cls.return_value = mock_client
         backend = HttpxFetchBackend()
         with pytest.raises(WebBlockedError):
             backend.fetch("https://example.com", timeout_ms=5000)
@@ -122,15 +123,11 @@ def test_http_fetch_backend_403_or_429_raises_web_blocked():
 def test_http_fetch_backend_status_200_body_captcha_raises_web_blocked():
     """Body 含 captcha → WebBlockedError。"""
     html = _load_fixture("blocked_keyword_only.html")
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.text = html
-    mock_resp.headers = {"content-type": "text/html"}
-    mock_client = MagicMock()
-    mock_client.get.return_value = mock_resp
-    mock_client.__enter__ = MagicMock(return_value=mock_client)
-    mock_client.__exit__ = MagicMock(return_value=False)
-    with patch("worker.tools.web_backends.http_fetch.httpx.Client", return_value=mock_client):
+    raw = _raw(200, "text/html", html.encode("utf-8"))
+    with patch("worker.tools.web_backends.http_fetch.WebfetchClient") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.fetch.return_value = raw
+        mock_cls.return_value = mock_client
         backend = HttpxFetchBackend()
         with pytest.raises(WebBlockedError):
             backend.fetch("https://example.com", timeout_ms=5000)
@@ -138,15 +135,11 @@ def test_http_fetch_backend_status_200_body_captcha_raises_web_blocked():
 
 def test_http_fetch_backend_non_text_content_type_returns_empty_text_not_error():
     """content-type=image/png → text==""，truncated==False，不抛错。"""
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.text = ""
-    mock_resp.headers = {"content-type": "image/png"}
-    mock_client = MagicMock()
-    mock_client.get.return_value = mock_resp
-    mock_client.__enter__ = MagicMock(return_value=mock_client)
-    mock_client.__exit__ = MagicMock(return_value=False)
-    with patch("worker.tools.web_backends.http_fetch.httpx.Client", return_value=mock_client):
+    raw = _raw(200, "image/png", b"")
+    with patch("worker.tools.web_backends.http_fetch.WebfetchClient") as mock_cls:
+        mock_client = MagicMock()
+        mock_client.fetch.return_value = raw
+        mock_cls.return_value = mock_client
         backend = HttpxFetchBackend()
         out = backend.fetch("https://example.com/img.png", timeout_ms=5000)
     assert out["status_code"] == 200

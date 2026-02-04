@@ -320,15 +320,16 @@ def _searxng_timeout_ms() -> int:
     return _web_search_timeout_ms()
 
 
-def _web_fetch_backend_from_env() -> Any:
-    """根据 WEB_FETCH_BACKEND 构造 fetch backend：stub / httpx；未知值打 warning 回退 stub。"""
+def _web_fetch_backend_from_env(web_settings: Optional[Dict[str, Any]] = None) -> Any:
+    """根据 WEB_FETCH_BACKEND 构造 fetch backend：stub / httpx；web_settings 可含 fetch 配置。"""
     backend_name = (os.getenv("WEB_FETCH_BACKEND") or "stub").strip().lower()
     if backend_name in ("", "stub"):
         from worker.tools.web_backends.fetch_stub import StubWebFetchBackend
         return StubWebFetchBackend()
     if backend_name == "httpx":
         from worker.tools.web_backends.http_fetch import HttpxFetchBackend
-        return HttpxFetchBackend()
+        fetch_config = (web_settings or {}).get("fetch") if isinstance(web_settings, dict) else None
+        return HttpxFetchBackend(fetch_config=fetch_config)
     logger.warning("WEB_FETCH_BACKEND unknown value %r, fallback to stub", backend_name)
     from worker.tools.web_backends.fetch_stub import StubWebFetchBackend
     return StubWebFetchBackend()
@@ -357,8 +358,10 @@ def build_catalog_from_settings(settings: Dict[str, Any]) -> ToolCatalog:
     search = web.get("search") or {}
     search_backend = _web_search_backend_from_settings(search)
     web_timeout_ms = _web_search_timeout_from_settings(search)
-    fetch_backend = _web_fetch_backend_from_env()
-    fetch_timeout_ms = _web_fetch_timeout_ms()
+    fetch_backend = _web_fetch_backend_from_env(web_settings=web)
+    fetch_cfg = web.get("fetch") or {}
+    fetch_timeout_ms = int(fetch_cfg.get("timeout_ms") or 0) or _web_fetch_timeout_ms()
+    fetch_timeout_ms = max(1000, fetch_timeout_ms)
     catalog.register_provider(
         "web",
         WebProvider(
