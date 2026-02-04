@@ -58,20 +58,23 @@ Start-Bg -Name "agent-worker" -PidFile $WorkerPidFile -LogPath "$PidDir\agent-wo
 )
 Start-Sleep -Seconds 1
 
-Write-Host ''
-Write-Host '=========================================='
-Write-Host '  LonelyCat 服务已启动（API + Worker）'
-Write-Host '=========================================='
-Write-Host "  API:       http://localhost:$ApiPort/docs"
-Write-Host "  用户界面:  即将启动 (端口 $WebPort)"
-Write-Host '  停止后端:  .\scripts\down.ps1'
-Write-Host '  按 Ctrl+C 停止 Web 界面'
-Write-Host '=========================================='
-Write-Host ''
+$sep = [string]::new([char]61, 42)
+Write-Host
+Write-Host $sep
+Write-Host '  LonelyCat started (API + Worker)'
+Write-Host $sep
+Write-Host ('  API:       http://localhost:{0}/docs' -f $ApiPort)
+Write-Host ('  Web UI:    starting on port {0}' -f $WebPort)
+Write-Host '  Stop backend: .\scripts\down.ps1'
+Write-Host '  Press Ctrl+C to stop Web UI'
+Write-Host $sep
+Write-Host
 
 # Web console (foreground)
 $env:CORE_API_PORT = $ApiPort
-$webDir = Join-Path $RepoRoot 'apps\web-console'
+$apps = -join (97,112,112,115 | ForEach-Object { [char]$_ })
+$webConsole = -join (119,101,98,45,99,111,110,115,111,108,101 | ForEach-Object { [char]$_ })
+$webDir = Join-Path (Join-Path $RepoRoot $apps) $webConsole
 Push-Location $webDir
 try {
     pnpm dev --host 0.0.0.0 --port $WebPort
