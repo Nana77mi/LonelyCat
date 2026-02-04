@@ -3,25 +3,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 from worker.task_context import TaskContext
-from worker.tools.builtin_llm import text_summarize_impl
-from worker.tools.builtin_stub import web_fetch_stub, web_search_stub
 from worker.tools.catalog import ToolCatalog, get_default_catalog
+from worker.tools.errors import ToolNotFoundError
 
 PREVIEW_MAX = 200
-
-
-class ToolNotFoundError(ValueError):
-    """Tool not in catalog or no implementation; error.code = ToolNotFound for UI/debug."""
-
-    code: str = "ToolNotFound"
-
-    def __init__(self, name: str, detail: str = "") -> None:
-        self.name = name
-        self.detail = detail
-        super().__init__(f"Tool not found: {name}" + (f" ({detail})" if detail else ""))
 
 
 def _preview(obj: Any, limit: int = PREVIEW_MAX) -> str:
@@ -46,17 +34,10 @@ def _preview(obj: Any, limit: int = PREVIEW_MAX) -> str:
 
 
 class ToolRuntime:
-    """Invoke tools with one ctx.step per call; meta only args_preview and result_preview."""
+    """通过 Catalog 多 provider 调用：按 preferred_provider_order 解析工具，step 内记录 args/result preview。"""
 
     def __init__(self, catalog: Optional[ToolCatalog] = None) -> None:
         self._catalog = catalog or get_default_catalog()
-        self._impls: Dict[str, Callable[..., Any]] = {
-            "web.search": web_search_stub,
-            "web.fetch": web_fetch_stub,
-        }
-
-    def register_impl(self, name: str, impl: Callable[..., Any]) -> None:
-        self._impls[name] = impl
 
     def invoke(
         self,
@@ -66,23 +47,22 @@ class ToolRuntime:
         *,
         llm: Optional[Any] = None,
     ) -> Any:
-        """Run tool in one step; step name = tool.{name}; meta = args_preview, result_preview. Raises on error."""
+        """Run tool in one step; step name = tool.{name}; meta = args_preview, result_preview, provider_id, risk_level."""
         step_name = f"tool.{name}"
         with ctx.step(step_name) as step_meta:
             meta = self._catalog.get(name)
             if not meta:
                 raise ToolNotFoundError(name, "not in catalog")
-            impl = self._impls.get(name)
-            if not impl:
-                raise ToolNotFoundError(name, "no implementation")
+            provider = self._catalog.get_provider(meta.provider_id)
+            if not provider:
+                raise ToolNotFoundError(name, f"provider {meta.provider_id} not registered")
             step_meta["args_preview"] = _preview(args)
             step_meta["tool_name"] = name
+            step_meta["provider_id"] = meta.provider_id
             step_meta["risk_level"] = meta.risk_level
+            step_meta["capability_level"] = meta.capability_level
             try:
-                if name == "text.summarize":
-                    result = text_summarize_impl(llm, args) if llm else {"summary": "(no llm)"}
-                else:
-                    result = impl(args)
+                result = provider.invoke(name, args, ctx, llm=llm)
             except Exception:
                 step_meta["result_preview"] = "(error)"
                 raise

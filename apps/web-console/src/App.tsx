@@ -115,24 +115,36 @@ const App = () => {
     loadRuns();
   }, [conversationId, location.pathname]);
 
-  // 轮询 runs（持续轮询，自动检测活跃任务）
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  // 当前展示的对话 id（用于轮询/延迟刷新时只更新“当前对话”的消息，避免切对话后旧请求覆盖）
+  const currentConvIdRef = useRef<string | null>(null);
+  // 轮询 runs（持续轮询，有活跃任务时 2 秒一次，无活跃任务时 5 秒一次，不停止）
+  const pollingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const previousRunsRef = useRef<Run[]>([]); // 保存上一次的 runs 状态，用于检测状态变化
+  const postSendRefreshTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
   // 启动或重启轮询的函数
   const startPolling = useCallback((convId: string) => {
     // 如果已经有轮询在运行，先清理
-    if (pollingIntervalRef.current) {
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
+    if (pollingTimeoutRef.current) {
+      clearTimeout(pollingTimeoutRef.current);
+      pollingTimeoutRef.current = null;
     }
+
+    const scheduleNext = (delayMs: number) => {
+      pollingTimeoutRef.current = setTimeout(() => {
+        pollingTimeoutRef.current = null;
+        pollRuns();
+      }, delayMs);
+    };
 
     // 轮询函数
     const pollRuns = async () => {
       try {
         const currentRuns = await listConversationRuns(convId);
+        // 若用户已切换到其他对话，不要用旧对话的数据覆盖当前对话
+        if (currentConvIdRef.current !== convId) return;
         
-        // 检查是否有 run 状态从非终态变为终态（可能产生了新消息）
+        // 检查是否有 run 状态从非终态变为终态，或出现“新 run 已是终态”（快速完成/失败），需要刷新消息
         const previousRuns = previousRunsRef.current;
         const previousRunStatuses = new Map(previousRuns.map(r => [r.id, r.status]));
         const finalStatuses = new Set(["succeeded", "failed", "canceled"]);
@@ -140,21 +152,27 @@ const App = () => {
         let shouldRefreshMessages = false;
         for (const run of currentRuns) {
           const previousStatus = previousRunStatuses.get(run.id);
-          // 如果 run 状态从非终态变为终态，需要刷新消息
+          // 状态从非终态变为终态 → 刷新消息
           if (previousStatus && !finalStatuses.has(previousStatus) && finalStatuses.has(run.status)) {
+            shouldRefreshMessages = true;
+            break;
+          }
+          // 新出现的 run 且已是终态（快速完成或快速失败）→ 也刷新消息，保证对话框里能看到完成/失败提示
+          if (previousStatus === undefined && finalStatuses.has(run.status)) {
             shouldRefreshMessages = true;
             break;
           }
         }
         
-        // 更新 runs 状态和 ref
+        // 更新 runs 状态和 ref（仅当前对话）
         setRuns(currentRuns);
         previousRunsRef.current = currentRuns;
         
-        // 如果有 run 完成，立即刷新消息列表（获取 run 完成后的主动消息）
-        if (shouldRefreshMessages) {
+        // 如果有 run 完成，立即刷新消息列表（仅当仍是当前对话时更新）
+        if (shouldRefreshMessages && currentConvIdRef.current === convId) {
           try {
             const response = await listMessages(convId);
+            if (currentConvIdRef.current !== convId) return;
             const sortedMessages = [...response.items].sort((a, b) => 
               new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
             );
@@ -165,49 +183,46 @@ const App = () => {
         }
         
         const hasActive = currentRuns.some(r => r.status === "queued" || r.status === "running");
-        
-        // 如果没有活跃任务，停止轮询
-        if (!hasActive) {
-          if (pollingIntervalRef.current) {
-            clearInterval(pollingIntervalRef.current);
-            pollingIntervalRef.current = null;
-          }
-          return;
-        }
+        // 有活跃任务时 2 秒轮询，无活跃任务时 5 秒轮询，不停止（这样发新消息后新 run 也能被轮询到并刷新完成消息）
+        scheduleNext(hasActive ? 2000 : 5000);
       } catch (error) {
         console.error("Failed to poll runs:", error);
-        // 轮询失败时不停止，继续尝试
+        // 轮询失败时 5 秒后重试
+        scheduleNext(5000);
       }
     };
 
     // 立即执行一次
     pollRuns();
-
-    // 设置轮询（每 2 秒）
-    pollingIntervalRef.current = setInterval(pollRuns, 2000);
   }, []);
 
   useEffect(() => {
     const pathMatch = location.pathname.match(/\/chat\/([^/]+)/);
     const currentConvId = conversationId || (pathMatch ? pathMatch[1] : null);
+    currentConvIdRef.current = currentConvId;
     
     if (!currentConvId) {
-      // 清理之前的轮询
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
+      if (pollingTimeoutRef.current) {
+        clearTimeout(pollingTimeoutRef.current);
+        pollingTimeoutRef.current = null;
+      }
+      if (postSendRefreshTimeoutRef.current) {
+        clearTimeout(postSendRefreshTimeoutRef.current);
+        postSendRefreshTimeoutRef.current = null;
       }
       return;
     }
 
-    // 启动轮询
     startPolling(currentConvId);
 
-    // 清理函数
     return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
+      if (pollingTimeoutRef.current) {
+        clearTimeout(pollingTimeoutRef.current);
+        pollingTimeoutRef.current = null;
+      }
+      if (postSendRefreshTimeoutRef.current) {
+        clearTimeout(postSendRefreshTimeoutRef.current);
+        postSendRefreshTimeoutRef.current = null;
       }
     };
   }, [conversationId, location.pathname, startPolling]);
@@ -367,20 +382,37 @@ const App = () => {
           return allMessages;
         });
 
-        // 立即刷新任务列表（Agent Decision 可能创建了新的 run）
-        // 确保轮询正在运行，并立即执行一次
+        // 立即刷新任务列表（Agent Decision 可能创建了新的 run），并确保轮询在跑
         if (targetConversationId) {
-          if (!pollingIntervalRef.current) {
+          if (!pollingTimeoutRef.current) {
             startPolling(targetConversationId);
           } else {
-            // 如果轮询已在运行，立即执行一次
             try {
               const currentRuns = await listConversationRuns(targetConversationId);
               setRuns(currentRuns);
+              previousRunsRef.current = currentRuns;
             } catch (error) {
               console.error("Failed to refresh runs after sending message:", error);
             }
           }
+          // 发消息后约 2 秒再拉一次消息，仅当仍在该对话时更新，避免切对话后覆盖
+          if (postSendRefreshTimeoutRef.current) {
+            clearTimeout(postSendRefreshTimeoutRef.current);
+          }
+          postSendRefreshTimeoutRef.current = setTimeout(async () => {
+            postSendRefreshTimeoutRef.current = null;
+            if (currentConvIdRef.current !== targetConversationId) return;
+            try {
+              const response = await listMessages(targetConversationId);
+              if (currentConvIdRef.current !== targetConversationId) return;
+              const sorted = [...response.items].sort((a, b) =>
+                new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+              );
+              setMessages(sorted);
+            } catch {
+              // 忽略单次刷新失败
+            }
+          }, 2000);
         }
 
         // A3.4: 更新会话标题（第一条消息后）- 在 setMessages 外部处理异步操作
@@ -482,7 +514,7 @@ const App = () => {
       setRuns((prev) => [newRun, ...prev]);
       
       // 如果有新任务创建，确保轮询正在运行
-      if (!pollingIntervalRef.current) {
+      if (!pollingTimeoutRef.current) {
         startPolling(currentConvId);
       }
     } catch (error) {
@@ -513,7 +545,7 @@ const App = () => {
       // 如果有新任务创建，确保轮询正在运行
       const pathMatch = location.pathname.match(/\/chat\/([^/]+)/);
       const currentConvId = conversationId || (pathMatch ? pathMatch[1] : null);
-      if (currentConvId && !pollingIntervalRef.current) {
+      if (currentConvId && !pollingTimeoutRef.current) {
         startPolling(currentConvId);
       }
     } catch (error) {
@@ -566,7 +598,7 @@ const App = () => {
       setRuns((prev) => [newRun, ...prev]);
       const pathMatch = location.pathname.match(/\/chat\/([^/]+)/);
       const currentConvId = conversationId || (pathMatch ? pathMatch[1] : null);
-      if (currentConvId && !pollingIntervalRef.current) {
+      if (currentConvId && !pollingTimeoutRef.current) {
         startPolling(currentConvId);
       }
     } catch (error) {

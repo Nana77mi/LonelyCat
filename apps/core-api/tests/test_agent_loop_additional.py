@@ -20,8 +20,8 @@ from sqlalchemy import create_engine
 from app.api import conversations
 from app.db import Base, ConversationModel, MessageModel, MessageRole, RunModel, RunStatus
 
-# Add agent-worker path for imports
-agent_worker_path = Path(__file__).parent.parent.parent / "agent-worker"
+# Add agent-worker path for imports (resolve to absolute so cwd doesn't matter)
+agent_worker_path = Path(__file__).resolve().parent.parent.parent / "agent-worker"
 if str(agent_worker_path) not in sys.path:
     sys.path.insert(0, str(agent_worker_path))
 
@@ -436,8 +436,8 @@ def test_agent_loop_summarize_conversation_run(temp_db, monkeypatch) -> None:
 - 下一步建议：可以开始实现具体的功能"""
     
     # Directly call runner.execute() (testing capability, not deployment)
-    # Add worker path for imports
-    worker_path = Path(__file__).parent.parent.parent / "agent-worker"
+    # Add worker path for imports (resolve to absolute so cwd doesn't matter)
+    worker_path = Path(__file__).resolve().parent.parent.parent / "agent-worker"
     if str(worker_path) not in sys.path:
         sys.path.insert(0, str(worker_path))
     

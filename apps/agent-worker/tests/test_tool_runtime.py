@@ -11,12 +11,15 @@ from worker.tools.runtime import ToolNotFoundError, _preview
 
 
 def test_catalog_get_and_list():
+    """默认 catalog 含 WebProvider，web.search 由 web 提供；list_tools 含 web.search/web.fetch/text.summarize。"""
     catalog = get_default_catalog()
     meta = catalog.get("web.search")
     assert meta is not None
     assert meta.name == "web.search"
     assert meta.risk_level == "read_only"
     assert meta.side_effects is False
+    assert meta.provider_id == "web"
+    assert meta.capability_level == "L0"
     all_ = catalog.list_builtin()
     names = [m.name for m in all_]
     assert "web.search" in names
@@ -24,14 +27,33 @@ def test_catalog_get_and_list():
     assert "text.summarize" in names
 
 
+def test_preferred_provider_order_changes_tool_source():
+    """切换 preferred_provider_order 后，同名工具解析自不同 provider（Phase 2.1）。"""
+    from worker.tools.provider import BuiltinProvider, StubProvider
+
+    catalog = ToolCatalog(preferred_provider_order=["builtin", "stub"])
+    catalog.register_provider("builtin", BuiltinProvider())
+    catalog.register_provider("stub", StubProvider())
+    meta_builtin_first = catalog.get("web.search")
+    assert meta_builtin_first is not None
+    assert meta_builtin_first.provider_id == "builtin"
+
+    catalog.set_preferred_provider_order(["stub", "builtin"])
+    meta_stub_first = catalog.get("web.search")
+    assert meta_stub_first is not None
+    assert meta_stub_first.provider_id == "stub"
+
+
 def test_runtime_invoke_creates_step_with_previews():
+    """默认 catalog 含 WebProvider 时 web.search 返回 {"items": [...]}；step 含 args_preview/result_preview。"""
     run = Mock()
     run.input_json = {}
     ctx = TaskContext(run, "research_report")
     runtime = ToolRuntime()
     result = runtime.invoke(ctx, "web.search", {"query": "test"})
-    assert isinstance(result, list)
-    assert len(result) >= 1
+    items = result.get("items", result) if isinstance(result, dict) else result
+    assert isinstance(items, list)
+    assert len(items) >= 1
     steps = ctx._steps
     assert len(steps) == 1
     assert steps[0]["name"] == "tool.web.search"
@@ -39,16 +61,19 @@ def test_runtime_invoke_creates_step_with_previews():
     assert "args_preview" in steps[0]["meta"]
     assert "result_preview" in steps[0]["meta"]
     assert "test" in steps[0]["meta"]["args_preview"] or "query" in steps[0]["meta"]["args_preview"]
+    assert steps[0]["meta"].get("provider_id") == "web"
 
 
 def test_runtime_invoke_web_fetch():
+    """默认 catalog 下 web.fetch 单 url 返回 canonical 形状（url/status_code/text/truncated）。"""
     run = Mock()
     run.input_json = {}
     ctx = TaskContext(run, "research_report")
     runtime = ToolRuntime()
-    result = runtime.invoke(ctx, "web.fetch", {"urls": ["https://a.com"]})
-    assert "contents" in result
-    assert "https://a.com" in result["contents"]
+    result = runtime.invoke(ctx, "web.fetch", {"url": "https://a.com"})
+    assert isinstance(result, dict)
+    assert "url" in result and "status_code" in result and "text" in result and "truncated" in result
+    assert result["url"] == "https://a.com"
     steps = ctx._steps
     assert len(steps) == 1
     assert steps[0]["name"] == "tool.web.fetch"

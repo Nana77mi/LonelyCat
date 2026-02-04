@@ -499,6 +499,10 @@ async def _create_message(
                         if not is_valid_trace_id(run_input.get("trace_id")):
                             run_input["trace_id"] = uuid.uuid4().hex
                         conv_id = decision.run.conversation_id or conversation_id
+                        run_type_normalized = (decision.run.type or "").strip().replace(" ", "_")
+                        if run_type_normalized == "research_report":
+                            if not (run_input.get("query") or (isinstance(run_input.get("query"), str) and not run_input["query"].strip())):
+                                run_input["query"] = (decision.run.title or request.content or "调研").strip() or "调研"
                         if decision.run.type == "summarize_conversation":
                             if "conversation_id" not in run_input or not run_input.get("conversation_id"):
                                 run_input["conversation_id"] = conv_id
@@ -542,6 +546,10 @@ async def _create_message(
                         run_input = decision.run.input.copy() if decision.run.input else {}
                         if not is_valid_trace_id(run_input.get("trace_id")):
                             run_input["trace_id"] = uuid.uuid4().hex
+                        run_type_normalized = (decision.run.type or "").strip().replace(" ", "_")
+                        if run_type_normalized == "research_report":
+                            if not (run_input.get("query") or (isinstance(run_input.get("query"), str) and not run_input["query"].strip())):
+                                run_input["query"] = (decision.run.title or request.content or "调研").strip() or "调研"
                         if decision.run.type == "summarize_conversation":
                             if "conversation_id" not in run_input or not run_input.get("conversation_id"):
                                 run_input["conversation_id"] = decision.run.conversation_id or conversation_id
