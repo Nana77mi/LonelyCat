@@ -14,6 +14,7 @@ from worker.tools.web_backends.errors import (
     WebTimeoutError,
 )
 from worker.tools.webfetch.client import WebfetchClient
+from worker.tools.webfetch.extractor import extract_html
 from worker.tools.webfetch.models import WebFetchRaw
 
 USER_AGENT = "Mozilla/5.0 (compatible; LonelyCat/1.0; +https://github.com/lonelycat)"
@@ -106,7 +107,7 @@ def _get_proxy(fetch_config: dict | None = None) -> str | None:
 
 
 def _raw_to_fetch_dict(raw: WebFetchRaw, text_max: int) -> Dict[str, Any]:
-    """将 WebFetchRaw 转为 backend 合同 dict：url, status_code, content_type, text, truncated。"""
+    """将 WebFetchRaw 转为 backend 合同 dict：url, status_code, content_type, text(=extracted_text), truncated, title, extraction_method。"""
     content_type = (raw.headers.get("content-type") or "").strip()
     try:
         raw_text = raw.body_bytes.decode("utf-8", errors="replace")
@@ -124,13 +125,20 @@ def _raw_to_fetch_dict(raw: WebFetchRaw, text_max: int) -> Dict[str, Any]:
             "meta": dict(raw.meta),
         }
     if "html" in content_type.lower():
-        text = _extract_visible_text(raw_text)
+        extracted = extract_html(raw)
+        text = extracted.get("text") or extracted.get("extracted_text") or ""
+        title = extracted.get("title") or ""
+        method = extracted.get("extraction_method") or "fallback"
+        paragraphs_count = extracted.get("paragraphs_count")
     else:
         text = raw_text
+        title = ""
+        method = "fallback"
+        paragraphs_count = None
     truncated = raw.meta.get("truncated", False) or len(text) > text_max
     if len(text) > text_max:
         text = text[:text_max]
-    return {
+    out = {
         "url": raw.url,
         "final_url": raw.final_url,
         "status_code": raw.status_code,
@@ -140,6 +148,13 @@ def _raw_to_fetch_dict(raw: WebFetchRaw, text_max: int) -> Dict[str, Any]:
         "error": raw.error,
         "meta": dict(raw.meta),
     }
+    if title is not None:
+        out["title"] = title
+    out["extracted_text"] = text
+    out["extraction_method"] = method
+    if paragraphs_count is not None:
+        out["paragraphs_count"] = paragraphs_count
+    return out
 
 
 class HttpxFetchBackend:

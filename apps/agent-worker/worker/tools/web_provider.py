@@ -55,14 +55,26 @@ def _is_valid_fetch_url(url: Any) -> bool:
 
 
 def normalize_fetch_result(raw: Dict[str, Any]) -> Dict[str, Any]:
-    """将 backend 返回补齐为 canonical：url, status_code, content_type, text, truncated。"""
-    return {
+    """将 backend 返回补齐为 canonical：url, status_code, content_type, text(=extracted_text), truncated；可选 title, extracted_text, extraction_method, final_url。"""
+    extracted = str(raw.get("text") or raw.get("extracted_text") or "")
+    out = {
         "url": str(raw.get("url", "")).strip(),
         "status_code": int(raw.get("status_code", 0)) if raw.get("status_code") is not None else 0,
         "content_type": str(raw.get("content_type", "")).strip(),
-        "text": str(raw.get("text", "")) if raw.get("text") is not None else "",
+        "text": extracted,
         "truncated": bool(raw.get("truncated", False)),
     }
+    if raw.get("final_url") is not None:
+        out["final_url"] = str(raw["final_url"]).strip()
+    if raw.get("title") is not None:
+        out["title"] = str(raw["title"]).strip()
+    if raw.get("extracted_text") is not None:
+        out["extracted_text"] = str(raw["extracted_text"])
+    if raw.get("extraction_method") is not None:
+        out["extraction_method"] = str(raw["extraction_method"])
+    if raw.get("paragraphs_count") is not None:
+        out["paragraphs_count"] = int(raw["paragraphs_count"])
+    return out
 
 
 def normalize_search_items(raw_items: List[Dict[str, Any]], backend_id: str) -> List[Dict[str, Any]]:

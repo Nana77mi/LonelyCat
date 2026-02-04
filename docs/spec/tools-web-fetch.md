@@ -7,13 +7,17 @@
 
 ## 输出（canonical）
 
-**唯一支持的返回形状**：`{ "url", "status_code", "content_type", "text", "truncated" }`
+**合同形状**：`{ "url", "status_code", "content_type", "text", "truncated" }`；可选 `final_url`, `title`, `extracted_text`, `extraction_method`。
 
 - **url**：string，请求的 URL。
+- **final_url**：string（可选），重定向后最终 URL。
 - **status_code**：integer，HTTP 状态码。
 - **content_type**：string，响应 Content-Type（可为空串）。
-- **text**：string，正文（HTML 经提取可见文本，或 plain text 原样）；非文本响应时为空串。
+- **text**：string，正文；**永远存在，值 = extracted_text（alias）**；HTML 经 readability / trafilatura / fallback 抽取。
 - **truncated**：boolean，是否因最大长度截断。
+- **title**：string（可选），页面标题。
+- **extracted_text**：string（可选），与 text 一致；供后续引用与 citations。
+- **extraction_method**：string（可选），`readability` | `trafilatura` | `fallback`。
 
 ## 错误码
 
