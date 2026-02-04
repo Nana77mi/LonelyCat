@@ -62,6 +62,14 @@ function buildDebugBundle(run: Run): string {
     lines.push(`  max_bytes: ${fetchSettings?.max_bytes ?? "(default)"}`);
     lines.push(`  user_agent: ${fetchSettings?.user_agent ? "(set)" : "(default)"}`);
   }
+  const artifacts = (output.artifacts as Record<string, unknown> | undefined) ?? {};
+  const fetchSummaries = artifacts.fetch_summaries as Array<{ url?: string; ok?: boolean; final_url?: string; status_code?: number; truncated?: boolean; cache_hit?: boolean }> | undefined;
+  if (run.type === "research_report" && fetchSummaries?.length) {
+    lines.push("fetch_summary:");
+    fetchSummaries.forEach((f, i) => {
+      lines.push(`  [${i + 1}] ${f.url ?? "—"} ok=${f.ok ?? "?"} status_code=${f.status_code ?? "—"} final_url=${f.final_url ?? "—"} truncated=${f.truncated ?? "?"} cache_hit=${f.cache_hit ?? false}`);
+    });
+  }
   lines.push("steps:");
   lines.push(...steps.map((s) => `  ${s.name ?? "—"} ok=${s.ok ?? "?"} duration_ms=${s.duration_ms ?? "?"} error_code=${s.error_code ?? "—"}`));
   const hasNetworkError = steps.some(

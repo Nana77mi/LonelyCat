@@ -46,6 +46,7 @@ class TaskContext:
         self._error: Optional[Dict[str, Any]] = None
         self._facts_snapshot_id: Optional[str] = None
         self._facts_snapshot_source: Optional[str] = None
+        self.artifact_dir: Optional[str] = None  # 可选；research_report 时设为 run 专属目录，供 web.fetch 落盘
 
     @property
     def result(self) -> Dict[str, Any]:

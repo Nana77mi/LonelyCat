@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from worker.tools.web_backends.errors import WebInvalidInputError
 
@@ -19,14 +19,21 @@ class StubWebFetchBackend:
 
     backend_id: str = "stub"
 
-    def fetch(self, url: str, timeout_ms: int) -> Dict[str, Any]:
+    def fetch(
+        self,
+        url: str,
+        timeout_ms: int,
+        *,
+        artifact_dir: Optional[str] = None,
+    ) -> Dict[str, Any]:
         if not _is_http_or_https(url):
             raise WebInvalidInputError("url must be http:// or https://")
         u = (url or "").strip()
-        return {
+        out = {
             "url": u,
             "status_code": 200,
             "content_type": "text/html",
             "text": f"Stub content for {u}",
             "truncated": False,
         }
+        return out

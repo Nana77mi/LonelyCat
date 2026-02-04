@@ -135,7 +135,7 @@ def test_research_report_steps_order_stable():
 
 
 def test_research_report_fetch_fills_content_per_url():
-    """默认 catalog（stub search + stub fetch）：search 返回 2 个 URL，每个 URL 调 web.fetch，report 成功；fetch 步数等于 source 数。"""
+    """默认 catalog（stub search + stub fetch）：search 返回 2 个 URL，每个 URL 调 web.fetch，report 成功；fetch 步数等于 source 数；artifacts 含 fetch_summaries（PR#3）。"""
     runner = TaskRunner()
     run = Mock()
     run.input_json = {"query": "x", "max_sources": 2}
@@ -148,6 +148,12 @@ def test_research_report_fetch_fills_content_per_url():
     assert "artifacts" in result
     assert "sources" in result["artifacts"]
     assert len(result["artifacts"]["sources"]) == 2
+    summaries = result.get("artifacts", {}).get("fetch_summaries", [])
+    assert len(summaries) == 2
+    for s in summaries:
+        assert "url" in s and s.get("ok") is True
+        assert s.get("status_code") == 200
+        assert "final_url" in s
 
 
 def test_research_report_outputs_evidence_with_source_mapping():
