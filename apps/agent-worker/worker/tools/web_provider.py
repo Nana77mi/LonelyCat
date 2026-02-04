@@ -196,6 +196,12 @@ class WebProvider:
 
         try:
             raw_items = self._backend.search(query, max_results, self._timeout_ms)
+        except (OSError, FileNotFoundError) as e:
+            msg = str(e)[:500]
+            if "Errno 2" in msg or "No such file or directory" in msg:
+                hint = " (On Windows, unset SSL_CERT_FILE/REQUESTS_CA_BUNDLE if set to a Unix path, or use web.search.backend=stub.)"
+                raise WebProviderError(msg + hint) from e
+            raise WebProviderError(msg) from e
         except Exception as e:
             if getattr(e, "code", None):
                 raise

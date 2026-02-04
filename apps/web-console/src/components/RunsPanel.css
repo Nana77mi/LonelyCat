@@ -189,6 +189,12 @@
   line-height: 1.5;
 }
 
+.run-error-hint {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #6b7280;
+}
+
 .run-error-toggle {
   margin-left: 8px;
   padding: 2px 6px;

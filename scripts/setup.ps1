@@ -1,6 +1,7 @@
 # LonelyCat setup for Windows PowerShell.
-# Creates venv, installs Python packages (packages/* + agent-worker) and web-console deps.
+# Creates venv at .venv (Scripts\python.exe), installs Python packages (packages/* + core-api + agent-worker) and web-console deps.
 # Run from repo root: .\scripts\setup.ps1
+# If you see "No Python at '/usr/bin\python.exe'", the venv was likely created under WSL/Git Bash; setup.ps1 will detect pyvenv.cfg with Unix 'home' and recreate .venv on Windows.
 
 $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
@@ -12,11 +13,31 @@ Set-Location $RepoRoot
 $Venv = Join-Path $RepoRoot ".venv"
 $Py = Join-Path $Venv "Scripts\python.exe"
 $Pip = Join-Path $Venv "Scripts\pip.exe"
+$PyvenvCfg = Join-Path $Venv "pyvenv.cfg"
 
-# Python venv
+# If venv was created under WSL/Git Bash, pyvenv.cfg "home" can point to /usr/bin -> "No Python at '/usr/bin\python.exe'" on Windows.
+if (Test-Path $PyvenvCfg) {
+    $cfgContent = Get-Content $PyvenvCfg -Raw
+    if ($cfgContent -match "home\s*=\s*[^\r\n]*usr") {
+        Write-Host "WARNING: .venv was likely created under WSL/Git Bash (pyvenv.cfg 'home' has Unix path). Recreate venv on Windows: Remove-Item -Recurse -Force .venv; .\scripts\setup.ps1"
+        Write-Host "Removing .venv and recreating with current PowerShell Python..."
+        Remove-Item -Recurse -Force $Venv -ErrorAction SilentlyContinue
+    }
+}
+
+# Python venv (Windows: use .venv\Scripts\python.exe; avoid any /usr/bin from env)
 if (-not (Test-Path $Py)) {
     Write-Host "Creating virtual environment at $Venv ..."
-    python -m venv $Venv
+    $pythonCmd = $null
+    if (Get-Command py -ErrorAction SilentlyContinue) { $pythonCmd = "py" }
+    elseif (Get-Command python -ErrorAction SilentlyContinue) { $pythonCmd = "python" }
+    if (-not $pythonCmd) {
+        Write-Error "No Python found. Install Python 3.10+ and ensure 'py' or 'python' is in PATH."
+    }
+    & $pythonCmd -m venv $Venv
+    if (-not (Test-Path $Py)) {
+        Write-Error "Venv creation failed: $Py not found. Check Python installation."
+    }
 }
 Write-Host "Upgrading pip and installing setuptools, wheel..."
 & $Py -m pip install --upgrade pip

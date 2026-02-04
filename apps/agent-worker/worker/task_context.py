@@ -75,10 +75,18 @@ class TaskContext:
             error_code = getattr(e, "code", None) or type(e).__name__ or "Error"
             if self._ok:
                 self._ok = False
+                raw_msg = str(e)[:500]
+                # 被限流/封禁时给出明确用户提示，便于与“查太多被禁”区分
+                if str(error_code) == "WebBlocked":
+                    message = "请求过于频繁或被限制（如 403/429），请稍后再试。"
+                    retryable = True
+                else:
+                    message = raw_msg
+                    retryable = False
                 self._error = {
                     "code": str(error_code),
-                    "message": str(e)[:500],
-                    "retryable": False,
+                    "message": message,
+                    "retryable": retryable,
                     "step": name,
                 }
             raise
