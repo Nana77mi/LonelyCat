@@ -22,13 +22,33 @@ if (-not (Test-Path $PidDir)) {
 $ApiPidFile = Join-Path $PidDir "core-api.pid"
 $WorkerPidFile = Join-Path $PidDir "agent-worker.pid"
 
+function Test-ApiListening {
+    param([int]$Port)
+    try {
+        $r = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/health" -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        return $r.StatusCode -eq 200
+    } catch {
+        return $false
+    }
+}
+
 function Start-Bg {
-    param([string]$Name, [string]$PidFile, [string]$LogPath, [string]$EnvPath, [string[]]$ProcessArgs)
+    param([string]$Name, [string]$PidFile, [string]$LogPath, [string]$EnvPath, [string[]]$ProcessArgs, [int]$CheckPort = 0)
     if (Test-Path $PidFile) {
         $oldPid = Get-Content $PidFile -ErrorAction SilentlyContinue
         if ($oldPid -match '^\d+$' -and (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
-            Write-Host "$Name already running (pid=$oldPid)"
-            return
+            if ($CheckPort -gt 0) {
+                if (Test-ApiListening -Port $CheckPort) {
+                    Write-Host "$Name already running (pid=$oldPid)"
+                    return
+                }
+                Write-Host "Stale pid $oldPid (port $CheckPort not responding), restarting $Name..."
+                Stop-Process -Id $oldPid -Force -ErrorAction SilentlyContinue
+                Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
+            } else {
+                Write-Host "$Name already running (pid=$oldPid)"
+                return
+            }
         }
     }
     $env:PYTHONPATH = $EnvPath
@@ -42,7 +62,7 @@ function Start-Bg {
 Write-Host "Starting core-api (port $ApiPort)..."
 Start-Bg -Name "core-api" -PidFile $ApiPidFile -LogPath "$PidDir\core-api.log" -EnvPath "packages" -ProcessArgs @(
     "-m", "uvicorn", "app.main:app", "--reload", "--host", "127.0.0.1", "--port", $ApiPort, "--app-dir", "apps/core-api"
-)
+) -CheckPort $ApiPort
 Start-Sleep -Seconds 2
 $apiPid = Get-Content $ApiPidFile -ErrorAction SilentlyContinue
 if ($apiPid -and (Get-Process -Id $apiPid -ErrorAction SilentlyContinue)) {

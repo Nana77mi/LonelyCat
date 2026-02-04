@@ -38,6 +38,7 @@ def _default_settings() -> Dict[str, Any]:
                 "timeout_ms": 15000,
                 "max_bytes": 5 * 1024 * 1024,
                 "user_agent": "Mozilla/5.0 (compatible; LonelyCat/1.0; +https://github.com/lonelycat)",
+                "fetch_delay_seconds": 0,
             },
         },
     }
@@ -95,6 +96,13 @@ def _env_settings() -> Dict[str, Any]:
     ua = (os.getenv("WEB_FETCH_USER_AGENT") or "").strip()
     if ua:
         out.setdefault("web", {}).setdefault("fetch", {})["user_agent"] = ua
+    raw_delay = os.getenv("WEB_FETCH_DELAY_SECONDS")
+    if raw_delay is not None and str(raw_delay).strip():
+        try:
+            delay = max(0, int(raw_delay))
+            out.setdefault("web", {}).setdefault("fetch", {})["fetch_delay_seconds"] = delay
+        except (TypeError, ValueError):
+            pass
     return out
 
 

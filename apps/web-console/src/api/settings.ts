@@ -31,6 +31,9 @@ export type SettingsV0 = {
         timeout_ms?: number;
       };
     };
+    fetch?: {
+      fetch_delay_seconds?: number;
+    };
   };
 };
 

@@ -52,6 +52,9 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
                 }
               : undefined,
           },
+          fetch: {
+            fetch_delay_seconds: data.web?.fetch?.fetch_delay_seconds ?? 0,
+          },
         },
       });
     } catch (e) {
@@ -276,6 +279,35 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
                 )}
                 <div className="settings-drawer-hint">
                   新设置只影响后续任务；已创建的 Run 会记录 settings_snapshot 用于回放。
+                </div>
+              </section>
+
+              <section className="settings-drawer-section">
+                <h3>Web 抓取</h3>
+                <div className="settings-drawer-field">
+                  <label htmlFor="fetch_delay_seconds">抓取间隔（秒）</label>
+                  <input
+                    id="fetch_delay_seconds"
+                    type="number"
+                    className="settings-drawer-input"
+                    min={0}
+                    value={form.web?.fetch?.fetch_delay_seconds ?? 0}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      const val = Number.isNaN(v) ? 0 : Math.max(0, v);
+                      setForm((prev) => ({
+                        ...prev,
+                        web: {
+                          ...prev.web,
+                          fetch: {
+                            ...prev.web?.fetch,
+                            fetch_delay_seconds: val,
+                          },
+                        },
+                      }));
+                    }}
+                  />
+                  <div className="settings-drawer-helper">0 = 不启用；&gt;0 时每次抓取前等待该秒数，可降低被限流概率</div>
                 </div>
               </section>
 

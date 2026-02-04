@@ -239,11 +239,12 @@ Available task types (whitelist):
 {allowed_types}
 
 Decision rules:
-- Use "reply" for normal conversation, questions, or when no task is needed
-- Use "run" when the user wants a background task and doesn't need immediate response
-- Use "reply_and_run" when you should acknowledge the request AND start a task
-- Always set conversation_id to the current conversation_id (unless it's a system/automatic task)
-- Only use task types from the whitelist above
+- Use "reply" for normal chat, subjective opinions, or when no task is needed (e.g. greetings, "推荐一款游戏").
+- Use "run" when the user wants a background task and doesn't need immediate response.
+- Use "reply_and_run" when you should acknowledge the request AND start a task.
+- **Research / lookup**: When the user asks to 查/查一下/查下/搜索/查查 (e.g. "帮我查下现在估值最高的公司", "查一下最畅销的手机", "搜索当前某某"), use "run" with type "research_report". Put the user's question or topic in run.input.query (and optionally run.title). Do NOT use "reply" for such lookup requests—they need real-time or factual data via research_report.
+- Always set conversation_id to the current conversation_id (unless it's a system/automatic task).
+- Only use task types from the whitelist above.
 
 Return ONLY a valid JSON object with this exact structure:
 {{
@@ -266,6 +267,12 @@ Rules:
 - If decision="run": must provide run, reply can be empty/null
 - If decision="reply_and_run": must provide BOTH reply and run
 - conversation_id: use "{conversation_id}" if user is in a conversation, null for system/automatic tasks
+- For research_report: run.input must include "query" with the user's lookup question (e.g. "现在估值最高的公司是哪个")
+
+Examples (user -> decision):
+- "帮我查下现在估值最高的公司" -> decision=run, type=research_report, run.input.query="现在估值最高的公司是哪个"
+- "查一下最畅销的手机品牌" -> decision=run, type=research_report, run.input.query="最畅销的手机品牌"
+- "你好" -> decision=reply
 """.format(
             allowed_types=", ".join(AGENT_ALLOWED_RUN_TYPES),
             conversation_id=conversation_id,

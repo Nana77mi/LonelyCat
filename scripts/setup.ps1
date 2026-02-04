@@ -76,6 +76,21 @@ if (Test-Path $awPyproject) {
 # Web console (requires Node.js and pnpm)
 $webDir = Join-Path $RepoRoot "apps\web-console"
 if (Test-Path (Join-Path $webDir "package.json")) {
+    # Remove existing node_modules to avoid EACCES from WSL/other process; pnpm will reinstall clean.
+    $nodeModulesDirs = @(
+        (Join-Path $RepoRoot "node_modules"),
+        (Join-Path $RepoRoot "apps\web-console\node_modules"),
+        (Join-Path $RepoRoot "connectors\qq-onebot-bridge\node_modules")
+    )
+    foreach ($dir in $nodeModulesDirs) {
+        if (Test-Path $dir) {
+            Write-Host "Removing $dir for clean pnpm install..."
+            Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
+            if (Test-Path $dir) {
+                Write-Warning "Could not remove $dir (e.g. in use). Close IDE/terminals and run as Administrator, or delete manually, then re-run setup."
+            }
+        }
+    }
     # Ensure pnpm is available (corepack or global install)
     if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
         Write-Host "pnpm not found. Enabling corepack or installing via npm..."
@@ -85,7 +100,7 @@ if (Test-Path (Join-Path $webDir "package.json")) {
         }
     }
     Write-Host "Installing web-console dependencies (pnpm)..."
-    Push-Location $webDir
+    Push-Location $RepoRoot
     try {
         pnpm install --no-frozen-lockfile
     } finally {
