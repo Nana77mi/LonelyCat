@@ -238,8 +238,23 @@ def _web_search_backend_from_env() -> Any:
         from worker.tools.web_backends.baidu_html import BaiduHtmlSearchBackend
         timeout_ms = _web_fetch_timeout_ms()
         proxy = (os.getenv("WEB_FETCH_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "").strip() or None
-        ua = (os.getenv("WEB_FETCH_USER_AGENT") or "").strip() or None
-        return BaiduHtmlSearchBackend(timeout_ms=timeout_ms, proxy=proxy, user_agent=ua)
+        try:
+            cooldown_minutes = max(0, int(os.getenv("BAIDU_COOLDOWN_MINUTES", "10")))
+        except (TypeError, ValueError):
+            cooldown_minutes = 10
+        warm_up_enabled = os.getenv("BAIDU_WARM_UP", "1").strip() in ("1", "true", "yes")
+        try:
+            warm_up_ttl_seconds = max(0, int(os.getenv("BAIDU_WARM_UP_TTL_SECONDS", "600")))
+        except (TypeError, ValueError):
+            warm_up_ttl_seconds = 600
+        return BaiduHtmlSearchBackend(
+            timeout_ms=timeout_ms,
+            proxy=proxy,
+            user_agent=None,
+            cooldown_minutes=cooldown_minutes,
+            warm_up_enabled=warm_up_enabled,
+            warm_up_ttl_seconds=warm_up_ttl_seconds,
+        )
     if backend_name == "searxng":
         base_url = (os.getenv("SEARXNG_BASE_URL") or "").strip()
         if not base_url:
@@ -285,8 +300,18 @@ def _web_search_backend_from_settings(
         timeout_ms = int(fetch_cfg.get("timeout_ms") or 0) or _web_search_timeout_from_settings(web_search)
         timeout_ms = max(1000, timeout_ms)
         proxy = (str(fetch_cfg.get("proxy") or "")).strip() or None
-        ua = (str(fetch_cfg.get("user_agent") or "")).strip() or None
-        return BaiduHtmlSearchBackend(timeout_ms=timeout_ms, proxy=proxy, user_agent=ua)
+        baidu_cfg = (web_search.get("baidu") or {}) if isinstance(web_search.get("baidu"), dict) else {}
+        cooldown_minutes = max(0, int(baidu_cfg.get("cooldown_minutes") or 10))
+        warm_up_enabled = bool(baidu_cfg.get("warm_up_enabled", True))
+        warm_up_ttl_seconds = max(0, int(baidu_cfg.get("warm_up_ttl_seconds") or 600))
+        return BaiduHtmlSearchBackend(
+            timeout_ms=timeout_ms,
+            proxy=proxy,
+            user_agent=None,
+            cooldown_minutes=cooldown_minutes,
+            warm_up_enabled=warm_up_enabled,
+            warm_up_ttl_seconds=warm_up_ttl_seconds,
+        )
     if backend_name == "searxng":
         searxng = web_search.get("searxng") or {}
         base_url = (str(searxng.get("base_url") or "")).strip()

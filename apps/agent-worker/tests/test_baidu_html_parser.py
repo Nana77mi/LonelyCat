@@ -8,7 +8,11 @@ TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 FIXTURES_DIR = os.path.join(TESTS_DIR, "fixtures", "baidu_html")
 
 try:
-    from worker.tools.web_backends.baidu_parser import parse_baidu_html
+    from worker.tools.web_backends.baidu_parser import (
+        detect_no_results,
+        detect_possible_results_structure,
+        parse_baidu_html,
+    )
 except Exception:
     # 无完整 env（protocol/httpx）时仅加载 baidu_parser 模块（无网络依赖）
     _parser_path = os.path.join(TESTS_DIR, "..", "worker", "tools", "web_backends", "baidu_parser.py")
@@ -16,6 +20,8 @@ except Exception:
     _mod = importlib.util.module_from_spec(_spec)
     _spec.loader.exec_module(_mod)
     parse_baidu_html = _mod.parse_baidu_html
+    detect_no_results = getattr(_mod, "detect_no_results", lambda _: False)
+    detect_possible_results_structure = getattr(_mod, "detect_possible_results_structure", lambda _: False)
 
 
 def _load_fixture(name: str) -> str:
@@ -47,20 +53,24 @@ def test_parse_baidu_html_captcha_returns_captcha_required():
     assert err == "captcha_required"
 
 
-def test_parse_baidu_html_no_results_returns_empty_list():
-    """no_results.html（没有找到相关结果）→ 空列表，err 为 None 或 parse_failed。"""
+def test_parse_baidu_html_no_results_returns_empty_list_and_none():
+    """no_results.html（没有找到相关结果）→ ([], None)，由 backend 用 detect_no_results 判为真实无结果并 return []。"""
     html = _load_fixture("no_results.html")
     items, err = parse_baidu_html(html)
     assert items == []
-    assert err in (None, "parse_failed")
+    assert err is None
+    assert detect_no_results(html) is True
+    assert detect_possible_results_structure(html) is False
 
 
-def test_parse_baidu_html_malformed_returns_parse_failed():
-    """empty_and_malformed.html（非结果页结构）→ ([], "parse_failed")，不抛异常。"""
+def test_parse_baidu_html_malformed_returns_empty_and_none():
+    """empty_and_malformed.html（非结果页结构、无 SERP 标记）→ ([], None)，backend 判为 unknown structure → WebParseError。"""
     html = _load_fixture("empty_and_malformed.html")
     items, err = parse_baidu_html(html)
     assert items == []
-    assert err == "parse_failed"
+    assert err is None
+    assert detect_no_results(html) is False
+    assert detect_possible_results_structure(html) is False
 
 
 def test_parse_baidu_html_order_preserved():
@@ -103,3 +113,15 @@ def test_parse_baidu_html_link_url_preserved():
     link_item = next((it for it in items if "baidu.com/link" in it.get("url", "")), None)
     assert link_item is not None
     assert "baidu.com/link" in link_item["url"]
+
+
+def test_detect_no_results_false_for_basic_and_malformed():
+    """results_basic / empty_and_malformed 不应被判为「无结果」页。"""
+    assert detect_no_results(_load_fixture("results_basic.html")) is False
+    assert detect_no_results(_load_fixture("empty_and_malformed.html")) is False
+
+
+def test_detect_possible_results_structure_true_for_results_basic():
+    """results_basic 含 c-container + h3/a → detect_possible_results_structure 为 True。"""
+    html = _load_fixture("results_basic.html")
+    assert detect_possible_results_structure(html) is True

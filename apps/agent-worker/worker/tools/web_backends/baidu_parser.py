@@ -2,11 +2,17 @@
 
 from __future__ import annotations
 
+import re
 from html.parser import HTMLParser
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 # 验证码/安全验证关键词，用于识别拦截页
 CAPTCHA_KEYWORDS = ("验证码", "安全验证")
+# 百度“无结果”页正文提示
+NO_RESULTS_KEYWORDS = ("没有找到相关结果", "没有找到与", "未找到相关")
+# SERP 结构：典型结果块 class 或 h3+a
+SERP_STRUCTURE_MARKERS = ("c-container", "result c-container")
+SERP_TAG_MARKERS = ("<h3", "<a ")
 
 
 def _body_indicates_captcha(text: str) -> bool:
@@ -14,6 +20,46 @@ def _body_indicates_captcha(text: str) -> bool:
     if not text or not isinstance(text, str):
         return False
     return any(kw in text for kw in CAPTCHA_KEYWORDS)
+
+
+def detect_no_results(html: str) -> bool:
+    """页面为百度“无结果”提示时返回 True（应返回 []，不抛错）。"""
+    if not html or not isinstance(html, str):
+        return False
+    return any(kw in html for kw in NO_RESULTS_KEYWORDS)
+
+
+def detect_possible_results_structure(html: str) -> bool:
+    """页面疑似含 SERP 结构（c-container/result + h3/a）但 parser 未解析出项时返回 True（DOM 不匹配 → WebParseError）。"""
+    if not html or not isinstance(html, str):
+        return False
+    has_class_marker = any(m in html for m in SERP_STRUCTURE_MARKERS)
+    has_tags = any(m in html for m in SERP_TAG_MARKERS)
+    return bool(has_class_marker and has_tags)
+
+
+def get_serp_probe(html: str) -> Dict[str, Any]:
+    """返回 SERP 探测摘要，供 WebParseError.serp_meta["probe"] 与 debug 使用。
+    含：title, no_results_hit, captcha_hit, h3_a_count, has_c_container。
+    """
+    out: Dict[str, Any] = {
+        "title": "",
+        "no_results_hit": False,
+        "captcha_hit": False,
+        "h3_a_count": 0,
+        "has_c_container": False,
+    }
+    if not html or not isinstance(html, str):
+        return out
+    m = re.search(r"<title[^>]*>([^<]*)</title>", html, re.I | re.S)
+    out["title"] = (m.group(1).strip() if m else "")[:500]
+    out["no_results_hit"] = detect_no_results(html)
+    out["captcha_hit"] = _body_indicates_captcha(html)
+    h3 = html.count("<h3")
+    a_tag = html.count("<a ")
+    out["h3_a_count"] = min(h3, a_tag)
+    out["has_c_container"] = "c-container" in html
+    return out
 
 
 class _BaiduResultParser(HTMLParser):
@@ -81,8 +127,8 @@ def parse_baidu_html(html: str) -> Tuple[List[Dict[str, str]], Optional[str]]:
     """解析百度 HTML 结果页，返回 (items, error_code_or_none)。
     items 每项含 title/url/snippet；snippet 可空。
     拦截页（验证码/安全验证）返回 ([], "captcha_required")；
-    解析失败或空输入返回 ([], "parse_failed")；
-    无结果页可返回 ([], None)。
+    空输入或 feed 异常返回 ([], "parse_failed")；
+    DOM 解析后 0 条返回 ([], None)，由 backend 根据 detect_no_results / detect_possible_results_structure 再分类。
     """
     if not html or not isinstance(html, str):
         return [], "parse_failed"
@@ -98,5 +144,5 @@ def parse_baidu_html(html: str) -> Tuple[List[Dict[str, str]], Optional[str]]:
         return [], "parse_failed"
     results = parser.get_results()
     if not results:
-        return [], "parse_failed"
+        return [], None  # 0 条由 backend 区分：无结果 vs DOM 不匹配
     return results, None

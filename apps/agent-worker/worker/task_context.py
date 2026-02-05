@@ -87,9 +87,27 @@ class TaskContext:
             if self._ok:
                 self._ok = False
                 raw_msg = str(e)[:500]
-                # 被限流/封禁时给出明确用户提示，便于与“查太多被禁”区分
+                # 被限流/封禁时给出明确用户提示；区分验证码与 403/429
                 if str(error_code) == "WebBlocked":
-                    message = "请求过于频繁或被限制（如 403/429），请稍后再试。"
+                    if detail_code == "captcha_required":
+                        message = "百度要求验证码/安全验证，建议配置代理、更换网络或稍后重试；也可在设置中切换为 DuckDuckGo。"
+                    elif detail_code == "captcha_cooldown":
+                        serp_meta = getattr(e, "serp_meta", None)
+                        remaining = (
+                            serp_meta.get("cooldown_remaining_sec")
+                            if isinstance(serp_meta, dict) and serp_meta
+                            else None
+                        )
+                        if remaining is not None:
+                            remaining = max(0, int(remaining))
+                            mins = max(1, (remaining + 59) // 60)
+                            message = f"预计 {mins} 分钟后可重试或切换 DuckDuckGo。"
+                        else:
+                            message = raw_msg or "百度验证码冷却中，请稍后再试或切换 DuckDuckGo。"
+                    elif detail_code in ("http_403", "http_429"):
+                        message = "请求过于频繁或被限制（403/429），请稍后再试或配置代理。"
+                    else:
+                        message = "请求被限制或需要验证，请稍后再试或尝试配置代理/切换搜索后端。"
                     retryable = True
                 else:
                     message = raw_msg

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 class WebInvalidInputError(ValueError):
@@ -36,23 +36,43 @@ class WebTimeoutError(ValueError):
 
 
 class WebBlockedError(ValueError):
-    """403/429/captcha/页面提示被挡；error.code = WebBlocked；可选 detail_code 供 step.meta 与 debug bundle 展示。"""
+    """403/429/captcha/页面提示被挡；error.code = WebBlocked；可选 detail_code 供 step.meta 与 debug bundle 展示。
+    可选 serp_html/serp_meta 供 runner 落盘（与 WebParseError 一致），便于排查。"""
 
     code: str = "WebBlocked"
 
-    def __init__(self, message: str = "", detail_code: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        message: str = "",
+        detail_code: Optional[str] = None,
+        *,
+        serp_html: Optional[str] = None,
+        serp_meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.detail = message
         self.detail_code: Optional[str] = detail_code  # e.g. captcha_required, http_403, http_429
+        self.serp_html: Optional[str] = serp_html
+        self.serp_meta: Optional[Dict[str, Any]] = serp_meta
         super().__init__(message or "Request blocked")
 
 
 class WebParseError(ValueError):
-    """HTML 结构不匹配/解析不到结果；error.code = WebParseError。"""
+    """HTML 结构不匹配/解析不到结果；error.code = WebParseError。
+    可选 serp_html / serp_meta 供 runner 落盘为 search/serp.html 与 search/serp.meta.json。
+    """
 
     code: str = "WebParseError"
 
-    def __init__(self, message: str = "") -> None:
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        serp_html: Optional[str] = None,
+        serp_meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.detail = message
+        self.serp_html: Optional[str] = serp_html
+        self.serp_meta: Optional[Dict[str, Any]] = serp_meta
         super().__init__(message or "Parse error")
 
 
