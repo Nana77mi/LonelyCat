@@ -29,6 +29,14 @@ def _is_http_or_https(url: str) -> bool:
     return u.startswith("http://") or u.startswith("https://")
 
 
+def _is_baidu_link_url(url: str) -> bool:
+    """百度搜索结果跳转链接：baidu.com/link?url=...，需先解析出真实 URL 再抓取正文。"""
+    if not url or not isinstance(url, str):
+        return False
+    u = url.strip().lower()
+    return "baidu.com/link" in u and "url=" in u
+
+
 class WebfetchClient:
     """单次/重试 GET，返回 WebFetchRaw；含 SSRF、URL 规范化、max_bytes、代理。"""
 
@@ -46,6 +54,23 @@ class WebfetchClient:
         self.proxy = proxy
         self.user_agent = user_agent or USER_AGENT
 
+    def _resolve_baidu_link(self, url: str) -> str:
+        """请求百度 link?url= 一次（不跟重定向），取 Location 作为真实 URL；失败则返回原 URL。"""
+        timeout = httpx.Timeout(self.timeout_connect_sec, read=min(10.0, self.timeout_read_sec))
+        headers = {"User-Agent": self.user_agent, "Accept-Language": ACCEPT_LANGUAGE}
+        try:
+            with httpx.Client(timeout=timeout, proxy=self.proxy, headers=headers) as client:
+                resp = client.get(url, follow_redirects=False)
+        except Exception:
+            return url
+        if resp.status_code not in (301, 302, 303, 307, 308):
+            return url
+        location = (resp.headers.get("location") or "").strip()
+        if not location or not _is_http_or_https(location):
+            return url
+        check_ssrf_blocked(location)
+        return location
+
     def fetch(self, url: str) -> WebFetchRaw:
         """规范化 URL、SSRF 检查、重试（仅 429/5xx/timeout），返回 WebFetchRaw。"""
         if not _is_http_or_https(url):
@@ -54,12 +79,19 @@ class WebfetchClient:
         url = normalize_fetch_url(url)
         check_ssrf_blocked(url)
 
+        # 百度 link?url= 跳转：先解析出真实 URL 再抓取，否则可能只拿到 302 中间页正文
+        fetch_url = url
+        if _is_baidu_link_url(url):
+            resolved = self._resolve_baidu_link(url)
+            if resolved and resolved != url:
+                fetch_url = resolved
+
         last_exc: Optional[Exception] = None
         last_resp: Optional[httpx.Response] = None
         last_body: Optional[bytes] = None
         for attempt in range(MAX_RETRIES):
             try:
-                resp, body = self._do_request(url)
+                resp, body = self._do_request(fetch_url)
                 last_resp = resp
                 last_body = body
                 if resp.status_code in RETRY_STATUSES and attempt < MAX_RETRIES - 1:

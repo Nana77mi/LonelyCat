@@ -9,7 +9,10 @@ from worker.tools.web_backends.errors import (
     WebInvalidInputError,
     WebSSRFBlockedError,
 )
-from worker.tools.webfetch.client import WebfetchClient
+from worker.tools.webfetch.client import (
+    WebfetchClient,
+    _is_baidu_link_url,
+)
 from worker.tools.webfetch.models import WebFetchRaw
 
 
@@ -130,3 +133,36 @@ def test_client_normalizes_url_before_fetch():
     assert requested_url is not None
     assert "utm_source" not in requested_url
     assert "#" not in requested_url
+
+
+def test_is_baidu_link_url():
+    """百度 link?url= 跳转链接被识别，普通 URL 不识别。"""
+    assert _is_baidu_link_url("https://www.baidu.com/link?url=abc") is True
+    assert _is_baidu_link_url("http://www.baidu.com/link?url=xyz&wd=1") is True
+    assert _is_baidu_link_url("https://example.com/page") is False
+    assert _is_baidu_link_url("https://baidu.com/") is False
+    assert _is_baidu_link_url("") is False
+
+
+def test_baidu_link_resolved_then_fetch_uses_resolved_url():
+    """百度 link?url= 先解析出真实 URL，再对真实 URL 抓取；返回的 raw.url 仍为原始 link。"""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.headers = {"content-type": "text/html"}
+    mock_resp.url = "https://real-site.com/article"
+    mock_resp.iter_bytes = lambda chunk_size: [b"<html><body>Real content</body></html>"]
+
+    client = WebfetchClient(timeout_connect_sec=5, timeout_read_sec=20, max_bytes=5 * 1024 * 1024)
+    baidu_link = "https://www.baidu.com/link?url=encoded"
+    resolved = "https://real-site.com/article"
+
+    def fake_do_request(url, *args, **kwargs):
+        assert url == resolved, "应请求解析后的真实 URL"
+        return (mock_resp, b"<html><body>Real content</body></html>")
+
+    with patch("worker.tools.webfetch.client.check_ssrf_blocked"):
+        with patch.object(client, "_resolve_baidu_link", return_value=resolved):
+            with patch.object(client, "_do_request", side_effect=fake_do_request):
+                raw = client.fetch(baidu_link)
+    assert raw.url == baidu_link
+    assert raw.final_url == "https://real-site.com/article"
