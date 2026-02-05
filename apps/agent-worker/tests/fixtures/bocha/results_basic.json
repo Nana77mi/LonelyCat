@@ -1,0 +1,19 @@
+{
+  "results": [
+    {
+      "title": "First Result Title",
+      "url": "https://example.com/first",
+      "snippet": "First snippet text"
+    },
+    {
+      "title": "Second Result Title",
+      "link": "https://example.com/second",
+      "summary": "Second summary text"
+    },
+    {
+      "title": "Third",
+      "url": "https://example.com/third",
+      "description": "Third description"
+    }
+  ]
+}

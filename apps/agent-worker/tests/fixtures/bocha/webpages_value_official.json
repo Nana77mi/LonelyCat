@@ -1,0 +1,25 @@
+{
+  "_type": "SearchResponse",
+  "queryContext": { "originalQuery": "test query" },
+  "webPages": {
+    "webSearchUrl": "https://bochaai.com/search?q=test",
+    "totalEstimatedMatches": 100,
+    "value": [
+      {
+        "id": "https://api.bochaai.com/v1/#WebPages.0",
+        "name": "页面标题",
+        "url": "https://example.com/page1",
+        "siteName": "Example",
+        "siteIcon": "https://th.bochaai.com/favicon?domain_url=example.com",
+        "snippet": "摘要片段",
+        "summary": "更长摘要（summary=true 时）",
+        "datePublished": "2024-07-22T00:00:00+08:00"
+      },
+      {
+        "name": "Second Page",
+        "url": "https://example.com/page2",
+        "snippet": "Snippet only"
+      }
+    ]
+  }
+}

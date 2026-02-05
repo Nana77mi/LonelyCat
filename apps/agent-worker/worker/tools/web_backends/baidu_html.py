@@ -103,7 +103,15 @@ class BaiduHtmlSearchBackend:
                 pass
             self._client = None
 
-    def search(self, query: str, max_results: int, timeout_ms: int) -> List[Dict[str, Any]]:
+    def search(
+        self,
+        query: str,
+        max_results: int,
+        timeout_ms: int,
+        *,
+        remaining_budget_ms: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
         """请求百度 HTML 并解析；仅 captcha_required 设 cooldown（按 key）；403/429 不设。"""
         timeout_sec = max(1.0, timeout_ms / 1000.0)
         key = _cooldown_key(self._proxy, self._user_agent)

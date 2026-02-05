@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from html.parser import HTMLParser
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import httpx
@@ -130,7 +130,15 @@ class DDGHtmlBackend:
 
     backend_id: str = "ddg_html"
 
-    def search(self, query: str, max_results: int, timeout_ms: int) -> List[Dict[str, Any]]:
+    def search(
+        self,
+        query: str,
+        max_results: int,
+        timeout_ms: int,
+        *,
+        remaining_budget_ms: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
         """请求 DDG HTML 并解析；超时/403/解析失败抛对应错误码。"""
         timeout_sec = max(1, timeout_ms / 1000.0)
         url = DDG_HTML_URL + "?q=" + quote(query.strip())

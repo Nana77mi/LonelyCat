@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 class StubWebSearchBackend:
@@ -10,7 +10,15 @@ class StubWebSearchBackend:
 
     backend_id: str = "stub"
 
-    def search(self, query: str, max_results: int, timeout_ms: int) -> List[Dict[str, Any]]:
+    def search(
+        self,
+        query: str,
+        max_results: int,
+        timeout_ms: int,
+        *,
+        remaining_budget_ms: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
         """返回 2～3 条确定性结果。"""
         q = (query or "")[:50]
         return [

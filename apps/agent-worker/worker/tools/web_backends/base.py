@@ -2,19 +2,27 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Union
 
 
 class WebSearchBackend(Protocol):
-    """Backend 协议：backend_id + search(query, max_results, timeout_ms) -> list of dict。"""
+    """Backend 协议：backend_id + search(...) -> list of dict 或 normalized_response { items, summary?, raw_provider_payload? }。"""
 
     @property
     def backend_id(self) -> str:
-        """例如 ddg_html, searxng, stub。"""
+        """例如 ddg_html, searxng, bocha, stub。"""
         ...
 
-    def search(self, query: str, max_results: int, timeout_ms: int) -> List[Dict[str, Any]]:
-        """返回原始结果列表，每项建议含 title, url, snippet；可选 provider。"""
+    def search(
+        self,
+        query: str,
+        max_results: int,
+        timeout_ms: int,
+        *,
+        remaining_budget_ms: Optional[int] = None,
+    ) -> Union[List[Dict[str, Any]], Dict[str, Any]]:
+        """返回原始结果列表，或 normalized_response dict（含 items；可选 summary、raw_provider_payload）。
+        remaining_budget_ms<=0 时 backend 可跳过（返回 [] 或 { items: [] }）。"""
         ...
 
 
