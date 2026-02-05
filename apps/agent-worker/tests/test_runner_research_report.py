@@ -201,7 +201,7 @@ def test_research_report_tool_fetch_missing_returns_ok_false_tool_not_found():
 def test_research_report_search_blocked_writes_search_summary_detail_code():
     """当 backend 抛 WebBlockedError(detail_code='captcha_required') 时，runner 仍写入 artifacts.search_summary，且 detail_code 优先供 debug bundle 展示。"""
     from worker.tools.web_backends.errors import WebBlockedError
-    from worker.tools.web_backends.stub import StubWebFetchBackend, StubWebSearchBackend
+    from worker.tools.web_backends.fetch_stub import StubWebFetchBackend
     from worker.tools.web_provider import WebProvider
 
     class BlockedSearchBackend:
