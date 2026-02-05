@@ -431,10 +431,11 @@ def test_worker_failure_creates_system_error_message(temp_db, monkeypatch) -> No
     _commit_db(db)
     conversation_id = conv["id"]
     
-    # 模拟 worker 失败（通过 monkeypatch）
+    # 模拟 worker 失败（通过 monkeypatch）；关闭 Agent Decision 确保走 chat_flow 路径
     def mock_chat_flow(*args, **kwargs):
         raise Exception("Worker crashed")
     
+    monkeypatch.setattr(conversations, "AGENT_LOOP_ENABLED", False)
     monkeypatch.setattr(conversations, "chat_flow", mock_chat_flow)
     monkeypatch.setattr(conversations, "AGENT_WORKER_AVAILABLE", True)
     
