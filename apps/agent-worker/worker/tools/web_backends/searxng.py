@@ -71,7 +71,15 @@ class SearxngBackend:
         self._language = language
         self._api_key = api_key
 
-    def search(self, query: str, max_results: int, timeout_ms: int) -> List[Dict[str, Any]]:
+    def search(
+        self,
+        query: str,
+        max_results: int,
+        timeout_ms: int,
+        *,
+        remaining_budget_ms: Optional[int] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
         """请求 SearXNG JSON API；超时/401/5xx/解析失败抛对应错误码。"""
         timeout_sec = max(1, timeout_ms / 1000.0)
         url = f"{self._base_url}/search"

@@ -226,7 +226,7 @@ def _mcp_cmd_from_env() -> Optional[List[str]]:
 
 
 def _web_search_backend_from_env() -> Any:
-    """根据 WEB_SEARCH_BACKEND 构造 backend：stub/ddg_html/baidu_html/searxng；未知值打 warning 并回退 stub。"""
+    """根据 WEB_SEARCH_BACKEND 构造 backend：stub/ddg_html/baidu_html/searxng/bocha；未知值打 warning 并回退 stub。"""
     backend_name = (os.getenv("WEB_SEARCH_BACKEND") or "stub").strip().lower()
     if backend_name == "stub":
         from worker.tools.web_backends.stub import StubWebSearchBackend
@@ -269,6 +269,36 @@ def _web_search_backend_from_env() -> Any:
         api_key = (os.getenv("SEARXNG_API_KEY") or "").strip() or None
         from worker.tools.web_backends.searxng import SearxngBackend
         return SearxngBackend(base_url=base_url, api_key=api_key)
+    if backend_name == "bocha":
+        api_key = (os.getenv("BOCHA_API_KEY") or "").strip() or None
+        if not api_key:
+            logger.warning(
+                "WEB_SEARCH_BACKEND=bocha but BOCHA_API_KEY unset or empty, fallback to stub"
+            )
+            from worker.tools.web_backends.stub import StubWebSearchBackend
+            return StubWebSearchBackend()
+        base_url = (os.getenv("BOCHA_BASE_URL") or "").strip() or None
+        raw_timeout = os.getenv("BOCHA_TIMEOUT_MS")
+        timeout_ms = 15000
+        if raw_timeout is not None and str(raw_timeout).strip():
+            try:
+                timeout_ms = max(1000, int(raw_timeout))
+            except (TypeError, ValueError):
+                pass
+        raw_top_k = os.getenv("BOCHA_TOP_K_DEFAULT")
+        top_k_default = 5
+        if raw_top_k is not None and str(raw_top_k).strip():
+            try:
+                top_k_default = max(1, min(10, int(raw_top_k)))
+            except (TypeError, ValueError):
+                pass
+        from worker.tools.web_backends.bocha import BochaBackend
+        return BochaBackend(
+            api_key=api_key,
+            base_url=base_url,
+            timeout_ms=timeout_ms,
+            top_k_default=top_k_default,
+        )
     logger.warning("WEB_SEARCH_BACKEND unknown value %r, fallback to stub", backend_name)
     from worker.tools.web_backends.stub import StubWebSearchBackend
     return StubWebSearchBackend()
@@ -284,8 +314,9 @@ def _web_search_timeout_ms() -> int:
 def _web_search_backend_from_settings(
     web_search: Dict[str, Any],
     web_fetch: Optional[Dict[str, Any]] = None,
+    web_settings: Optional[Dict[str, Any]] = None,
 ) -> Any:
-    """根据 settings 中 web.search 构造 backend：stub/ddg_html/baidu_html/searxng。baidu_html 复用 web_fetch 的 timeout/proxy/user_agent。"""
+    """根据 settings 中 web.search 构造 backend：stub/ddg_html/baidu_html/searxng/bocha。baidu_html 复用 web_fetch；bocha 从 web_settings.providers.bocha 读配置。"""
     raw_backend = web_search.get("backend")
     backend_name = (str(raw_backend or "stub")).strip().lower()
     if backend_name == "stub":
@@ -324,6 +355,43 @@ def _web_search_backend_from_settings(
         api_key = (str(searxng.get("api_key") or "")).strip() or None
         from worker.tools.web_backends.searxng import SearxngBackend
         return SearxngBackend(base_url=base_url, api_key=api_key)
+    if backend_name == "bocha":
+        web_providers = (web_settings or {}).get("providers") or {}
+        bocha_cfg = web_providers.get("bocha") if isinstance(web_providers.get("bocha"), dict) else {}
+        enabled = bool(bocha_cfg.get("enabled", True))
+        if not enabled:
+            logger.warning(
+                "settings web.search.backend=bocha but web.providers.bocha.enabled=false, fallback to stub"
+            )
+            from worker.tools.web_backends.stub import StubWebSearchBackend
+            return StubWebSearchBackend()
+        api_key = (str(bocha_cfg.get("api_key") or "")).strip() or None
+        if not api_key:
+            logger.warning(
+                "settings web.search.backend=bocha but web.providers.bocha.api_key unset or empty, fallback to stub"
+            )
+            from worker.tools.web_backends.stub import StubWebSearchBackend
+            return StubWebSearchBackend()
+        base_url = (str(bocha_cfg.get("base_url") or "")).strip() or None
+        timeout_ms = None
+        if bocha_cfg.get("timeout_ms") is not None:
+            try:
+                timeout_ms = max(1000, int(bocha_cfg["timeout_ms"]))
+            except (TypeError, ValueError):
+                pass
+        top_k_default = 5
+        if bocha_cfg.get("top_k_default") is not None:
+            try:
+                top_k_default = max(1, min(10, int(bocha_cfg["top_k_default"])))
+            except (TypeError, ValueError):
+                pass
+        from worker.tools.web_backends.bocha import BochaBackend
+        return BochaBackend(
+            api_key=api_key,
+            base_url=base_url,
+            timeout_ms=timeout_ms,
+            top_k_default=top_k_default,
+        )
     logger.warning(
         "settings web.search.backend unknown value %r (raw=%r), fallback to stub",
         backend_name,
@@ -354,6 +422,17 @@ def _web_search_timeout_from_settings(web_search: Dict[str, Any]) -> int:
 def _searxng_timeout_ms() -> int:
     """Searxng 超时：SEARXNG_TIMEOUT_MS 优先，否则复用 WEB_SEARCH_TIMEOUT_MS。"""
     raw = os.getenv("SEARXNG_TIMEOUT_MS")
+    if raw is not None and str(raw).strip():
+        try:
+            return max(1000, int(raw))
+        except (TypeError, ValueError):
+            pass
+    return _web_search_timeout_ms()
+
+
+def _bocha_timeout_ms() -> int:
+    """Bocha 超时：BOCHA_TIMEOUT_MS 优先，否则复用 WEB_SEARCH_TIMEOUT_MS。"""
+    raw = os.getenv("BOCHA_TIMEOUT_MS")
     if raw is not None and str(raw).strip():
         try:
             return max(1000, int(raw))
@@ -399,10 +478,19 @@ def build_catalog_from_settings(settings: Dict[str, Any]) -> ToolCatalog:
     web = settings.get("web") or {}
     search = web.get("search") or {}
     fetch_cfg = web.get("fetch") or {}
-    search_backend = _web_search_backend_from_settings(search, web_fetch=fetch_cfg)
+    from worker.tools.web_backends.router import WebSearchRouter
+    search_backend = WebSearchRouter([
+        _web_search_backend_from_settings(
+            search, web_fetch=fetch_cfg, web_settings=web
+        ),
+    ])
     backend_name = (str((search.get("backend") or "stub")).strip().lower())
     if backend_name == "baidu_html":
         web_timeout_ms = int(fetch_cfg.get("timeout_ms") or 0) or _web_search_timeout_from_settings(search)
+        web_timeout_ms = max(1000, web_timeout_ms)
+    elif backend_name == "bocha":
+        bocha_cfg = ((web.get("providers") or {}).get("bocha") or {}) if isinstance(web.get("providers"), dict) else {}
+        web_timeout_ms = int(bocha_cfg.get("timeout_ms") or 0) or _web_search_timeout_from_settings(search)
         web_timeout_ms = max(1000, web_timeout_ms)
     else:
         web_timeout_ms = _web_search_timeout_from_settings(search)
@@ -455,15 +543,18 @@ def _default_catalog_factory() -> ToolCatalog:
     from worker.tools.provider import BuiltinProvider, StubProvider
     from worker.tools.web_provider import WebProvider
 
+    from worker.tools.web_backends.router import WebSearchRouter
     order: List[str] = ["web", "builtin", "stub"]
     catalog = ToolCatalog(preferred_provider_order=order)
-    search_backend = _web_search_backend_from_env()
+    search_backend = WebSearchRouter([_web_search_backend_from_env()])
     fetch_backend = _web_fetch_backend_from_env()
     backend_id = getattr(search_backend, "backend_id", None)
     if backend_id == "searxng":
         web_timeout_ms = _searxng_timeout_ms()
     elif backend_id == "baidu_html":
         web_timeout_ms = _web_fetch_timeout_ms()
+    elif backend_id == "bocha":
+        web_timeout_ms = _bocha_timeout_ms()
     else:
         web_timeout_ms = _web_search_timeout_ms()
     fetch_timeout_ms = _web_fetch_timeout_ms()

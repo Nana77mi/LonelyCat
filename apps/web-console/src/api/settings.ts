@@ -23,7 +23,7 @@ export type SettingsV0 = {
   version: string;
   web: {
     search: {
-      backend: "stub" | "ddg_html" | "baidu_html" | "searxng";
+      backend: "stub" | "ddg_html" | "baidu_html" | "searxng" | "bocha";
       timeout_ms?: number;
       searxng?: {
         base_url?: string;
@@ -33,6 +33,15 @@ export type SettingsV0 = {
     };
     fetch?: {
       fetch_delay_seconds?: number;
+    };
+    providers?: {
+      bocha?: {
+        enabled?: boolean;
+        api_key?: string;
+        base_url?: string;
+        timeout_ms?: number;
+        top_k_default?: number;
+      };
     };
   };
 };

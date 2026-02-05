@@ -20,6 +20,13 @@
 - `query`：string，minLength=1
 - `max_results`：integer，1～10（可选，默认由 provider 配置）
 
+工具层与 Backend 协议当前约定：请求即 `query` + `max_results`（1～10）+ `timeout_ms`（由 WebProvider 构造时传入）。以下字段**预留**，后端/worker/provider 可逐步支持：`locale`/`lang`、`time_range`、`site_filter`、`need_summary`、`trace_id`、`budget_ms`。
+
+## 响应与 provider_meta（预留）
+
+- 当前唯一规范形状：`{"items": [...]}`，每项含 `title`、`url`、`snippet`、`provider`、`rank`。
+- **预留**：`provider_meta`（如 `provider_name`、`latency_ms`、`request_id`）、`errors[]`（`type`、`message`、`retryable`）；以及 item 级 `source`、`published_at`。实现时不得把 raw 上游响应直接暴露给用户。
+
 ## Backend matrix
 
 | 值 | 说明 |
@@ -28,6 +35,7 @@
 | **ddg_html** | 免费真实，DuckDuckGo HTML 解析；无 key、无 Docker；可能被挡 |
 | **baidu_html** | 国内可用，百度 HTML 解析；无 key。与 web.fetch 共用网络配置（proxy/ua/timeout）。稳定性受 DOM/反爬影响，验证码仅识别与提示不绕过；DOM 变更时可更新 parser/fixture 修复。 |
 | **searxng** | 免费但需自备 SearXNG 实例；配置 `SEARXNG_BASE_URL`（可选 `SEARXNG_API_KEY`）。超时：`SEARXNG_TIMEOUT_MS` 优先，未设置时复用 `WEB_SEARCH_TIMEOUT_MS` |
+| **bocha** | 需 API key；配置 `BOCHA_API_KEY`、可选 `BOCHA_BASE_URL`/`BOCHA_TIMEOUT_MS`/`BOCHA_TOP_K_DEFAULT`；或通过设置 `web.providers.bocha.*` 配置 |
 | **brave** | 需 API key，高稳定；配置 `BRAVE_API_KEY`（可选，后续 2.4.3） |
 
 - **默认**：未设置 `WEB_SEARCH_BACKEND` 时为 **stub**，保证 CI/离线不依赖外网。

@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import hashlib
+import re
+import time
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from worker.task_context import TaskContext
 from worker.tools.catalog import CAPABILITY_L0, ToolMeta
 from worker.tools.errors import ToolNotFoundError
 from worker.tools.web_backends.base import WebFetchBackend, WebSearchBackend
 from worker.tools.web_backends.errors import WebInvalidInputError, WebProviderError
+
+# Search cache: key -> (result, expiry_ts); ttl 10 min
+_SEARCH_CACHE: Dict[str, Tuple[Dict[str, Any], float]] = {}
+_SEARCH_CACHE_TTL_SEC = 600
 
 # 截断常量（与 runner/合同一致）
 TITLE_MAX = 512
@@ -21,6 +28,8 @@ WEB_SEARCH_INPUT_SCHEMA = {
     "properties": {
         "query": {"type": "string", "minLength": 1},
         "max_results": {"type": "integer", "minimum": 1, "maximum": 10},
+        "budget_ms": {"type": "integer", "minimum": 0, "description": "per-request budget; skip if <=0"},
+        "locale": {"type": "string", "description": "locale for cache key"},
     },
     "required": ["query"],
 }
@@ -37,6 +46,28 @@ WEB_FETCH_INPUT_SCHEMA = {
 DEFAULT_WEB_SEARCH_TIMEOUT_MS = 15_000
 DEFAULT_WEB_FETCH_TIMEOUT_MS = 15_000
 DEFAULT_MAX_RESULTS = 5
+
+
+def normalize_query(query: str) -> str:
+    """去除 system/context 残渣：首尾空白、多余换行、常见 prompt 前缀。"""
+    if not query or not isinstance(query, str):
+        return (query or "").strip()
+    s = query.strip()
+    # 去掉常见对话前缀（agent query 常带残渣）
+    for prefix in (
+        r"^User\s*:\s*",
+        r"^user\s*:\s*",
+        r"^Assistant\s*:\s*",
+        r"^Human\s*:\s*",
+        r"^Question\s*:\s*",
+        r"^Query\s*:\s*",
+        r"^搜索\s*[：:]\s*",
+        r"^Search\s*[：:]\s*",
+    ):
+        s = re.sub(prefix, "", s, flags=re.IGNORECASE).strip()
+    # 合并多余空白与换行
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:4096]  # 防止超长 query
 
 
 def _is_valid_search_url(url: Any) -> bool:
@@ -187,7 +218,7 @@ class WebProvider:
             raise WebInvalidInputError("query is required")
         if not isinstance(query, str):
             raise WebInvalidInputError("query must be a string")
-        query = query.strip()
+        query = normalize_query(query)
         if not query:
             raise WebInvalidInputError("query must be non-empty")
 
@@ -202,8 +233,32 @@ class WebProvider:
         if max_results < 1 or max_results > 10:
             raise WebInvalidInputError("max_results must be between 1 and 10")
 
+        remaining_budget_ms: Optional[int] = None
+        if args.get("budget_ms") is not None:
+            try:
+                remaining_budget_ms = int(args["budget_ms"])
+            except (TypeError, ValueError):
+                pass
+        if remaining_budget_ms is not None and remaining_budget_ms <= 0:
+            return {"items": []}
+
+        locale = (args.get("locale") or "").strip()
+        cache_key: Optional[str] = None
+        now = time.time()
+        cache_key = hashlib.sha256((query + "\0" + locale).encode("utf-8")).hexdigest()
+        if cache_key:
+            entry = _SEARCH_CACHE.get(cache_key)
+            if entry is not None and now < entry[1]:
+                return entry[0]
+
+        backend = self._backend
+        search_kw: Dict[str, Any] = {}
+        if remaining_budget_ms is not None:
+            search_kw["remaining_budget_ms"] = remaining_budget_ms
         try:
-            raw_items = self._backend.search(query, max_results, self._timeout_ms)
+            raw_result = backend.search(
+                query, max_results, self._timeout_ms, **search_kw
+            )
         except (OSError, FileNotFoundError) as e:
             msg = str(e)[:500]
             if "Errno 2" in msg or "No such file or directory" in msg:
@@ -215,9 +270,22 @@ class WebProvider:
                 raise
             raise WebProviderError(str(e)[:500]) from e
 
-        normalized = normalize_search_items(raw_items, self._backend.backend_id)
+        if isinstance(raw_result, dict) and "items" in raw_result:
+            raw_items = raw_result["items"]
+            summary = raw_result.get("summary")
+        else:
+            raw_items = raw_result if isinstance(raw_result, list) else []
+            summary = None
+
+        normalized = normalize_search_items(raw_items, backend.backend_id)
         truncated = [truncate_fields(it) for it in normalized]
-        return {"items": truncated}
+        out: Dict[str, Any] = {"items": truncated}
+        if summary is not None:
+            out["summary"] = summary
+
+        if cache_key:
+            _SEARCH_CACHE[cache_key] = (out, now + _SEARCH_CACHE_TTL_SEC)
+        return out
 
     def _invoke_fetch(self, args: Dict[str, Any], ctx: Optional[TaskContext] = None) -> Any:
         url = args.get("url")

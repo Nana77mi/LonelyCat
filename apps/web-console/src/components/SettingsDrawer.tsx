@@ -12,6 +12,7 @@ const BACKENDS = [
   { value: "ddg_html" as const, label: "DuckDuckGo HTML（免 Key）", desc: "可能被 403/429 限制；适合默认免费方案" },
   { value: "baidu_html" as const, label: "百度 HTML（国内）", desc: "国内可用、免 Key；与抓取共用 proxy/timeout/UA；遇验证码可尝试代理或降低频率" },
   { value: "searxng" as const, label: "SearXNG（自建/可选 Key）", desc: "需要 Base URL；更稳定可控，不要求 Docker" },
+  { value: "bocha" as const, label: "Bocha（API Key）", desc: "需配置 BOCHA_API_KEY 或设置中的 API Key；高稳定" },
 ];
 
 function getDefaultForm(): Partial<SettingsV0> {
@@ -33,6 +34,7 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showSearxngPassword, setShowSearxngPassword] = useState(false);
+  const [showBochaPassword, setShowBochaPassword] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -56,6 +58,19 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
           fetch: {
             fetch_delay_seconds: data.web?.fetch?.fetch_delay_seconds ?? 0,
           },
+          providers: data.web?.providers
+            ? {
+                bocha: data.web.providers.bocha
+                  ? {
+                      enabled: data.web.providers.bocha.enabled ?? false,
+                      api_key: data.web.providers.bocha.api_key ?? "",
+                      base_url: data.web.providers.bocha.base_url ?? "",
+                      timeout_ms: data.web.providers.bocha.timeout_ms,
+                      top_k_default: data.web.providers.bocha.top_k_default,
+                    }
+                  : undefined,
+              }
+            : undefined,
         },
       });
     } catch (e) {
@@ -75,7 +90,11 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
   const timeoutMs = form.web?.search?.timeout_ms ?? 15000;
   const searxng = form.web?.search?.searxng ?? {};
   const baseUrl = (searxng.base_url ?? "").trim();
-  const saveDisabled = backend === "searxng" && !baseUrl;
+  const bocha = form.web?.providers?.bocha ?? {};
+  const bochaBaseUrl = (bocha.base_url ?? "").trim();
+  const bochaApiKey = (bocha.api_key ?? "").trim();
+  const saveDisabled =
+    (backend === "searxng" && !baseUrl) || (backend === "bocha" && !bochaApiKey);
 
   const handleSave = async () => {
     if (saveDisabled) return;
@@ -151,6 +170,19 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
                                   timeout_ms: prev.web?.search?.timeout_ms ?? 15000,
                                   searxng: prev.web?.search?.searxng,
                                 },
+                                providers:
+                                  opt.value === "bocha"
+                                    ? {
+                                        ...prev.web?.providers,
+                                        bocha: prev.web?.providers?.bocha ?? {
+                                          enabled: true,
+                                          api_key: "",
+                                          base_url: "https://api.bochaai.com",
+                                          timeout_ms: 15000,
+                                          top_k_default: 5,
+                                        },
+                                      }
+                                    : prev.web?.providers,
                               },
                             }))
                           }
@@ -280,6 +312,153 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
                         }}
                       />
                       <div className="settings-drawer-helper">优先于上方 Web 搜索超时</div>
+                    </div>
+                  </div>
+                )}
+                {backend === "bocha" && (
+                  <div className="settings-drawer-card">
+                    <div className="settings-drawer-field">
+                      <label htmlFor="bocha_enabled">启用 Bocha</label>
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                        <input
+                          id="bocha_enabled"
+                          type="checkbox"
+                          checked={bocha.enabled ?? true}
+                          onChange={(e) =>
+                            setForm((prev) => ({
+                              ...prev,
+                              web: {
+                                ...prev.web,
+                                providers: {
+                                  ...prev.web?.providers,
+                                  bocha: {
+                                    ...prev.web?.providers?.bocha,
+                                    enabled: e.target.checked,
+                                  },
+                                },
+                              },
+                            }))
+                          }
+                        />
+                        启用后任务将使用 Bocha 作为搜索后端
+                      </label>
+                    </div>
+                    <div className="settings-drawer-field">
+                      <label htmlFor="bocha_api_key">Bocha API Key（必填）</label>
+                      <input
+                        id="bocha_api_key"
+                        type={showBochaPassword ? "text" : "password"}
+                        className="settings-drawer-input"
+                        placeholder="$BOCHA_API_KEY 或在此填写"
+                        value={bocha.api_key ?? ""}
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            web: {
+                              ...prev.web,
+                              providers: {
+                                ...prev.web?.providers,
+                                bocha: {
+                                  ...prev.web?.providers?.bocha,
+                                  api_key: e.target.value,
+                                },
+                              },
+                            },
+                          }))
+                        }
+                      />
+                      <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, fontSize: 13 }}>
+                        <input
+                          type="checkbox"
+                          checked={showBochaPassword}
+                          onChange={(e) => setShowBochaPassword(e.target.checked)}
+                        />
+                        显示
+                      </label>
+                      <div className="settings-drawer-helper">可填 $BOCHA_API_KEY 表示从环境变量读取</div>
+                    </div>
+                    <div className="settings-drawer-field">
+                      <label htmlFor="bocha_base_url">Bocha Base URL</label>
+                      <input
+                        id="bocha_base_url"
+                        type="url"
+                        className="settings-drawer-input"
+                        placeholder="https://api.bochaai.com"
+                        value={bocha.base_url ?? ""}
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            web: {
+                              ...prev.web,
+                              providers: {
+                                ...prev.web?.providers,
+                                bocha: {
+                                  ...prev.web?.providers?.bocha,
+                                  base_url: e.target.value,
+                                },
+                              },
+                            },
+                          }))
+                        }
+                      />
+                      <div className="settings-drawer-helper">默认官方 API 地址</div>
+                    </div>
+                    <div className="settings-drawer-field">
+                      <label htmlFor="bocha_timeout_ms">Bocha 超时 (ms)</label>
+                      <input
+                        id="bocha_timeout_ms"
+                        type="number"
+                        className="settings-drawer-input"
+                        min={1000}
+                        value={bocha.timeout_ms ?? ""}
+                        placeholder={String(timeoutMs)}
+                        onChange={(e) => {
+                          const v = e.target.value ? parseInt(e.target.value, 10) : undefined;
+                          setForm((prev) => ({
+                            ...prev,
+                            web: {
+                              ...prev.web,
+                              providers: {
+                                ...prev.web?.providers,
+                                bocha: {
+                                  ...prev.web?.providers?.bocha,
+                                  timeout_ms: v !== undefined && !Number.isNaN(v) ? Math.max(1000, v) : undefined,
+                                },
+                              },
+                            },
+                          }));
+                        }}
+                      />
+                      <div className="settings-drawer-helper">优先于上方 Web 搜索超时</div>
+                    </div>
+                    <div className="settings-drawer-field">
+                      <label htmlFor="bocha_top_k_default">默认返回条数 (top_k)</label>
+                      <input
+                        id="bocha_top_k_default"
+                        type="number"
+                        className="settings-drawer-input"
+                        min={1}
+                        max={10}
+                        value={bocha.top_k_default ?? 5}
+                        onChange={(e) => {
+                          const v = parseInt(e.target.value, 10);
+                          if (!Number.isNaN(v))
+                            setForm((prev) => ({
+                              ...prev,
+                              web: {
+                                ...prev.web,
+                                providers: {
+                                  ...prev.web?.providers,
+                                  bocha: {
+                                    ...prev.web?.providers?.bocha,
+                                    top_k_default: Math.max(1, Math.min(10, v)),
+                                  },
+                                },
+                              },
+                            }));
+                        }}
+                      />
+                      <div className="settings-drawer-helper">1～10，默认 5</div>
                     </div>
                   </div>
                 )}
