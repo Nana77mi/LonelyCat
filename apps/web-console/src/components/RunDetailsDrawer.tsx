@@ -63,6 +63,12 @@ function buildDebugBundle(run: Run): string {
     lines.push(`  user_agent: ${fetchSettings?.user_agent ? "(set)" : "(default)"}`);
   }
   const artifacts = (output.artifacts as Record<string, unknown> | undefined) ?? {};
+  const searchSummary = artifacts.search_summary as { backend?: string; result_count?: number; ok?: boolean; error_code?: string; detail_code?: string; duration_ms?: number } | undefined;
+  if (run.type === "research_report" && searchSummary) {
+    lines.push("search_summary:");
+    const codeDisplay = searchSummary.detail_code ?? searchSummary.error_code ?? "—";
+    lines.push(`  backend=${searchSummary.backend ?? "—"} result_count=${searchSummary.result_count ?? "—"} ok=${searchSummary.ok ?? "?"} error_code=${codeDisplay} duration_ms=${searchSummary.duration_ms ?? "—"}`);
+  }
   const fetchSummaries = artifacts.fetch_summaries as Array<{ url?: string; ok?: boolean; final_url?: string; status_code?: number; truncated?: boolean; cache_hit?: boolean }> | undefined;
   if (run.type === "research_report" && fetchSummaries?.length) {
     lines.push("fetch_summary:");

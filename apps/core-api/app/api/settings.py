@@ -48,7 +48,7 @@ def _env_settings() -> Dict[str, Any]:
     """从环境变量读取的设置（用于合并，未设的键不出现）"""
     out: Dict[str, Any] = {}
     backend = (os.getenv("WEB_SEARCH_BACKEND") or "").strip().lower()
-    if backend in ("stub", "ddg_html", "searxng"):
+    if backend in ("stub", "ddg_html", "baidu_html", "searxng"):
         out.setdefault("web", {}).setdefault("search", {})["backend"] = backend
     raw_timeout = os.getenv("WEB_SEARCH_TIMEOUT_MS")
     if raw_timeout is not None and str(raw_timeout).strip():

@@ -81,6 +81,9 @@ class TaskContext:
         except Exception as e:
             step_ok = False
             error_code = getattr(e, "code", None) or type(e).__name__ or "Error"
+            detail_code = getattr(e, "detail_code", None)
+            if detail_code is not None:
+                step_meta["detail_code"] = detail_code
             if self._ok:
                 self._ok = False
                 raw_msg = str(e)[:500]

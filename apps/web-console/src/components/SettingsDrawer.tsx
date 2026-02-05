@@ -10,6 +10,7 @@ type SettingsDrawerProps = {
 const BACKENDS = [
   { value: "stub" as const, label: "Stub（离线/默认）", desc: "无需额外依赖、CI 稳定；结果为示例数据" },
   { value: "ddg_html" as const, label: "DuckDuckGo HTML（免 Key）", desc: "可能被 403/429 限制；适合默认免费方案" },
+  { value: "baidu_html" as const, label: "百度 HTML（国内）", desc: "国内可用、免 Key；与抓取共用 proxy/timeout/UA；遇验证码可尝试代理或降低频率" },
   { value: "searxng" as const, label: "SearXNG（自建/可选 Key）", desc: "需要 Base URL；更稳定可控，不要求 Docker" },
 ];
 
@@ -162,6 +163,11 @@ export const SettingsDrawer = ({ isOpen, onClose }: SettingsDrawerProps) => {
                     ))}
                   </div>
                 </div>
+                {(backend === "ddg_html" || backend === "baidu_html") && (
+                  <p className="settings-drawer-hint">
+                    搜索与抓取共用网络配置（proxy/timeout/UA）；国内或遇验证码时可尝试配置代理或降低请求频率。
+                  </p>
+                )}
                 <div className="settings-drawer-field">
                   <label htmlFor="timeout_ms">超时 (ms)</label>
                   <input

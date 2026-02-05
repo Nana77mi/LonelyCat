@@ -1,5 +1,9 @@
 """Web search backend / WebProvider 错误码（合同稳定，供 step.error_code）。"""
 
+from __future__ import annotations
+
+from typing import Optional
+
 
 class WebInvalidInputError(ValueError):
     """输入校验失败（空 query、max_results 越界等）；error.code = InvalidInput。"""
@@ -32,12 +36,13 @@ class WebTimeoutError(ValueError):
 
 
 class WebBlockedError(ValueError):
-    """403/429/captcha/页面提示被挡；error.code = WebBlocked。"""
+    """403/429/captcha/页面提示被挡；error.code = WebBlocked；可选 detail_code 供 step.meta 与 debug bundle 展示。"""
 
     code: str = "WebBlocked"
 
-    def __init__(self, message: str = "") -> None:
+    def __init__(self, message: str = "", detail_code: Optional[str] = None) -> None:
         self.detail = message
+        self.detail_code: Optional[str] = detail_code  # e.g. captcha_required, http_403, http_429
         super().__init__(message or "Request blocked")
 
 

@@ -196,3 +196,33 @@ def test_research_report_tool_fetch_missing_returns_ok_false_tool_not_found():
     assert fetch_step.get("error_code")
     assert "trace_lines" in result
     assert any(trace_id in line for line in result["trace_lines"])
+
+
+def test_research_report_search_blocked_writes_search_summary_detail_code():
+    """当 backend 抛 WebBlockedError(detail_code='captcha_required') 时，runner 仍写入 artifacts.search_summary，且 detail_code 优先供 debug bundle 展示。"""
+    from worker.tools.web_backends.errors import WebBlockedError
+    from worker.tools.web_backends.stub import StubWebFetchBackend, StubWebSearchBackend
+    from worker.tools.web_provider import WebProvider
+
+    class BlockedSearchBackend:
+        backend_id = "blocked_test"
+
+        def search(self, query: str, max_results: int, timeout_ms: int):
+            raise WebBlockedError("captcha", detail_code="captcha_required")
+
+    catalog = ToolCatalog(preferred_provider_order=["web"])
+    catalog.register_provider(
+        "web",
+        WebProvider(search_backend=BlockedSearchBackend(), fetch_backend=StubWebFetchBackend()),
+    )
+    runtime = ToolRuntime(catalog=catalog)
+    runner = TaskRunner()
+    run = Mock()
+    run.input_json = {"query": "x", "trace_id": "a" * 32}
+    result = runner._handle_research_report(run, lambda: True, runtime=runtime)
+    assert result.get("ok") is False
+    assert result.get("artifacts", {}).get("search_summary") is not None
+    summary = result["artifacts"]["search_summary"]
+    assert summary.get("ok") is False
+    assert summary.get("detail_code") == "captcha_required"
+    assert summary.get("error_code") == "WebBlocked"

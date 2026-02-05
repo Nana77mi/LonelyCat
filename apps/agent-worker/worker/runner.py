@@ -189,7 +189,33 @@ class TaskRunner:
         llm: Optional[Any] = None,
     ) -> None:
         """research_report 业务逻辑：ToolRuntime 调用 search/fetch_pages，再 extract → dedupe_rank → write_report（含可选总结）。"""
-        search_result = runtime.invoke(ctx, "web.search", {"query": query})
+        def _find_search_step() -> Optional[Dict[str, Any]]:
+            query_for_match = (query.strip() if isinstance(query, str) else str(query)) or ""
+            for s in reversed(ctx._steps):
+                if s.get("name") != "tool.web.search":
+                    continue
+                meta = s.get("meta") or {}
+                args_preview = meta.get("args_preview") or ""
+                if query_for_match and query_for_match in args_preview:
+                    return s
+            return next((s for s in reversed(ctx._steps) if s.get("name") == "tool.web.search"), None)
+
+        def _write_search_summary(backend_label: str, result_count: int, search_step: Optional[Dict[str, Any]], ok: bool) -> None:
+            ctx.artifacts["search_summary"] = {
+                "backend": backend_label,
+                "result_count": result_count,
+                "ok": ok,
+                "error_code": search_step.get("error_code") if search_step else None,
+                "detail_code": (search_step.get("meta") or {}).get("detail_code") if search_step else None,
+                "duration_ms": search_step.get("duration_ms") if search_step else None,
+            }
+
+        try:
+            search_result = runtime.invoke(ctx, "web.search", {"query": query})
+        except Exception:
+            search_step = _find_search_step()
+            _write_search_summary("stub", 0, search_step, ok=False)
+            raise
         # web.search canonical 形状为 {"items": [...]}；list 仅历史兼容，后续淘汰
         raw_sources = (
             search_result.get("items", search_result)
@@ -201,8 +227,9 @@ class TaskRunner:
         raw_sources = raw_sources[:max_sources]
         for s in raw_sources:
             s.setdefault("provider", "stub")
-        # 实际使用的搜索后端：用于 report 标题展示（来自 WebProvider 的 normalize，非硬编码）
         backend_label = raw_sources[0].get("provider", "stub") if raw_sources else "stub"
+        search_step = _find_search_step()
+        _write_search_summary(backend_label, len(raw_sources), search_step, ok=True)
 
         # 可选：为本 run 设置 artifact_dir，供 web.fetch 落盘 raw.html / extracted.txt / meta.json（PR#3）
         if getattr(ctx.run, "id", None) is not None:
