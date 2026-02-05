@@ -23,7 +23,7 @@ export type SettingsV0 = {
   version: string;
   web: {
     search: {
-      backend: "stub" | "ddg_html" | "searxng";
+      backend: "stub" | "ddg_html" | "baidu_html" | "searxng";
       timeout_ms?: number;
       searxng?: {
         base_url?: string;

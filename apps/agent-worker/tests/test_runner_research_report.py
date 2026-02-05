@@ -1,6 +1,9 @@
 """Tests for research_report task: trace_id, steps, artifacts (stub)."""
 
-from unittest.mock import Mock
+import os
+import tempfile
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -196,3 +199,84 @@ def test_research_report_tool_fetch_missing_returns_ok_false_tool_not_found():
     assert fetch_step.get("error_code")
     assert "trace_lines" in result
     assert any(trace_id in line for line in result["trace_lines"])
+
+
+def test_research_report_search_blocked_writes_search_summary_detail_code():
+    """当 backend 抛 WebBlockedError(detail_code='captcha_required') 时，runner 仍写入 artifacts.search_summary，且 detail_code 优先供 debug bundle 展示。"""
+    from worker.tools.web_backends.errors import WebBlockedError
+    from worker.tools.web_backends.fetch_stub import StubWebFetchBackend
+    from worker.tools.web_provider import WebProvider
+
+    class BlockedSearchBackend:
+        backend_id = "blocked_test"
+
+        def search(self, query: str, max_results: int, timeout_ms: int):
+            raise WebBlockedError("captcha", detail_code="captcha_required")
+
+    catalog = ToolCatalog(preferred_provider_order=["web"])
+    catalog.register_provider(
+        "web",
+        WebProvider(search_backend=BlockedSearchBackend(), fetch_backend=StubWebFetchBackend()),
+    )
+    runtime = ToolRuntime(catalog=catalog)
+    runner = TaskRunner()
+    run = Mock()
+    run.input_json = {"query": "x", "trace_id": "a" * 32}
+    result = runner._handle_research_report(run, lambda: True, runtime=runtime)
+    assert result.get("ok") is False
+    assert result.get("artifacts", {}).get("search_summary") is not None
+    summary = result["artifacts"]["search_summary"]
+    assert summary.get("ok") is False
+    assert summary.get("detail_code") == "captcha_required"
+    assert summary.get("error_code") == "WebBlocked"
+
+
+def test_research_report_web_parse_error_writes_serp_artifacts():
+    """当 backend 抛 WebParseError(serp_html=..., serp_meta=...) 时，runner 落盘 search/serp.html、search/serp.meta.json 并写入 artifacts.search_serp_artifacts。"""
+    from worker.tools.web_backends.errors import WebParseError
+    from worker.tools.web_backends.fetch_stub import StubWebFetchBackend
+    from worker.tools.web_provider import WebProvider
+
+    class ParseErrorSearchBackend:
+        backend_id = "parse_error_test"
+
+        def search(self, query: str, max_results: int, timeout_ms: int):
+            raise WebParseError(
+                "dom_mismatch",
+                serp_html="<html><title>百度安全验证</title></html>",
+                serp_meta={
+                    "query": "x",
+                    "backend": "parse_error_test",
+                    "status_code": 200,
+                    "probe": {"title": "百度安全验证", "has_c_container": False},
+                    "reason": "dom_mismatch",
+                },
+            )
+
+    catalog = ToolCatalog(preferred_provider_order=["web"])
+    catalog.register_provider(
+        "web",
+        WebProvider(search_backend=ParseErrorSearchBackend(), fetch_backend=StubWebFetchBackend()),
+    )
+    runtime = ToolRuntime(catalog=catalog)
+    runner = TaskRunner()
+    run = Mock()
+    run.id = 99999
+    run.input_json = {"query": "x"}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch.dict(os.environ, {"WEB_FETCH_ARTIFACT_BASE": tmp}):
+            result = runner._handle_research_report(run, lambda: True, runtime=runtime)
+
+        assert result.get("ok") is False
+        artifacts = result.get("artifacts") or {}
+        assert "search_serp_artifacts" in artifacts
+        assert artifacts["search_serp_artifacts"].get("serp_html") == "search/serp.html"
+        assert artifacts["search_serp_artifacts"].get("serp_meta") == "search/serp.meta.json"
+        assert "search_summary" in artifacts
+        assert artifacts["search_summary"].get("search_serp_artifacts") == artifacts["search_serp_artifacts"]
+
+        serp_dir = Path(tmp) / "99999" / "search"
+        assert (serp_dir / "serp.html").exists()
+        assert (serp_dir / "serp.meta.json").exists()
+        assert (serp_dir / "serp.html").read_text(encoding="utf-8") == "<html><title>百度安全验证</title></html>"

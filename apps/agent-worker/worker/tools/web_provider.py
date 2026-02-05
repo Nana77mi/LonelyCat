@@ -82,9 +82,9 @@ def normalize_fetch_result(raw: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def normalize_search_items(raw_items: List[Dict[str, Any]], backend_id: str) -> List[Dict[str, Any]]:
-    """保证每项有 title/url/snippet/provider；url 为空/非字符串/非 http(s) 则丢弃；title/snippet 非 str 转 str。"""
+    """保证每项有 title/url/snippet/provider/rank；url 为空/非字符串/非 http(s) 则丢弃；rank 仅在此层写入（1-based）。"""
     out: List[Dict[str, Any]] = []
-    for item in raw_items or []:
+    for i, item in enumerate(raw_items or []):
         if not isinstance(item, dict):
             continue
         url_val = item.get("url")
@@ -101,19 +101,27 @@ def normalize_search_items(raw_items: List[Dict[str, Any]], backend_id: str) -> 
             "url": (url_val or "").strip() if isinstance(url_val, str) else "",
             "snippet": snippet_val if snippet_val is not None else "",
             "provider": item.get("provider") or backend_id,
+            "rank": i + 1,
         }
         out.append(row)
     return out
 
 
 def truncate_fields(item: Dict[str, Any]) -> Dict[str, Any]:
-    """对 title/url/snippet/provider 按常量截断。"""
-    return {
+    """对 title/url/snippet/provider 按常量截断；保留 rank（若有），保证为 int。ddg_html/searxng/stub/baidu_html 均走此逻辑。"""
+    out: Dict[str, Any] = {
         "title": (item.get("title") or "")[:TITLE_MAX],
         "url": (item.get("url") or "")[:URL_MAX],
         "snippet": (item.get("snippet") or "")[:SNIPPET_MAX],
         "provider": (item.get("provider") or "")[:PROVIDER_MAX],
     }
+    rank_val = item.get("rank")
+    if rank_val is not None:
+        try:
+            out["rank"] = int(rank_val)
+        except (TypeError, ValueError):
+            out["rank"] = rank_val
+    return out
 
 
 class WebProvider:

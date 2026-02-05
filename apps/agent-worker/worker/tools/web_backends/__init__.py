@@ -1,6 +1,7 @@
-"""Web search backends: protocol, stub, ddg_html, searxng, fetch_stub, http_fetch, errors."""
+"""Web search backends: protocol, stub, ddg_html, baidu_html, searxng, fetch_stub, http_fetch, errors."""
 
 from worker.tools.web_backends.base import WebFetchBackend, WebSearchBackend
+from worker.tools.web_backends.baidu_html import BaiduHtmlSearchBackend
 from worker.tools.web_backends.ddg_html import DDGHtmlBackend
 from worker.tools.web_backends.fetch_stub import StubWebFetchBackend
 from worker.tools.web_backends.http_fetch import HttpxFetchBackend
@@ -31,6 +32,7 @@ __all__ = [
     "WebAuthError",
     "WebBadGatewayError",
     "StubWebSearchBackend",
+    "BaiduHtmlSearchBackend",
     "DDGHtmlBackend",
     "SearxngBackend",
 ]

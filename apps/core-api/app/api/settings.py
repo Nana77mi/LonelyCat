@@ -25,19 +25,31 @@ def get_db():
         db.close()
 
 
+# 与 agent-worker baidu_html 保持一致，避免百度 302→验证码；空字符串表示使用 backend 内置 UA
+_DEFAULT_FETCH_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/120.0.0.0 Safari/537.36"
+)
+
+
 def _default_settings() -> Dict[str, Any]:
-    """默认设置（stub、15000；fetch 含 timeout/max_bytes/user_agent）"""
+    """默认设置（stub、15000；fetch 含 timeout/max_bytes/user_agent 桌面 Chrome）"""
     return {
         "version": "settings_v0",
         "web": {
             "search": {
                 "backend": "stub",
                 "timeout_ms": 15000,
+                "baidu": {
+                    "cooldown_minutes": 10,
+                    "warm_up_enabled": True,
+                    "warm_up_ttl_seconds": 600,
+                },
             },
             "fetch": {
                 "timeout_ms": 15000,
                 "max_bytes": 5 * 1024 * 1024,
-                "user_agent": "Mozilla/5.0 (compatible; LonelyCat/1.0; +https://github.com/lonelycat)",
+                "user_agent": _DEFAULT_FETCH_USER_AGENT,
                 "fetch_delay_seconds": 0,
             },
         },
@@ -48,7 +60,7 @@ def _env_settings() -> Dict[str, Any]:
     """从环境变量读取的设置（用于合并，未设的键不出现）"""
     out: Dict[str, Any] = {}
     backend = (os.getenv("WEB_SEARCH_BACKEND") or "").strip().lower()
-    if backend in ("stub", "ddg_html", "searxng"):
+    if backend in ("stub", "ddg_html", "baidu_html", "searxng"):
         out.setdefault("web", {}).setdefault("search", {})["backend"] = backend
     raw_timeout = os.getenv("WEB_SEARCH_TIMEOUT_MS")
     if raw_timeout is not None and str(raw_timeout).strip():
@@ -93,8 +105,9 @@ def _env_settings() -> Dict[str, Any]:
             out.setdefault("web", {}).setdefault("fetch", {})["max_bytes"] = max(1024, int(raw_mb))
         except (TypeError, ValueError):
             pass
+    # 仅当显式设置且非旧 LonelyCat 时覆盖，避免 env 把 UA 回填为 LonelyCat/1.0
     ua = (os.getenv("WEB_FETCH_USER_AGENT") or "").strip()
-    if ua:
+    if ua and "LonelyCat" not in ua:
         out.setdefault("web", {}).setdefault("fetch", {})["user_agent"] = ua
     raw_delay = os.getenv("WEB_FETCH_DELAY_SECONDS")
     if raw_delay is not None and str(raw_delay).strip():

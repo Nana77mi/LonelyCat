@@ -35,6 +35,10 @@ _debug/
 
 # Docker / local data (SQLite, etc.)
 data/
+lonelycat_memory.db
+
+# Run artifacts (per-run serp.html, serp.meta.json)
+.artifacts/
 
 # Lock files (optional - some projects prefer to commit these)
 # pnpm-lock.yaml

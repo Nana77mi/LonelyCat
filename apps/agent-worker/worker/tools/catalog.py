@@ -226,7 +226,7 @@ def _mcp_cmd_from_env() -> Optional[List[str]]:
 
 
 def _web_search_backend_from_env() -> Any:
-    """根据 WEB_SEARCH_BACKEND 构造 backend：stub/ddg_html/searxng；未知值打 warning 并回退 stub。"""
+    """根据 WEB_SEARCH_BACKEND 构造 backend：stub/ddg_html/baidu_html/searxng；未知值打 warning 并回退 stub。"""
     backend_name = (os.getenv("WEB_SEARCH_BACKEND") or "stub").strip().lower()
     if backend_name == "stub":
         from worker.tools.web_backends.stub import StubWebSearchBackend
@@ -234,6 +234,27 @@ def _web_search_backend_from_env() -> Any:
     if backend_name == "ddg_html":
         from worker.tools.web_backends.ddg_html import DDGHtmlBackend
         return DDGHtmlBackend()
+    if backend_name == "baidu_html":
+        from worker.tools.web_backends.baidu_html import BaiduHtmlSearchBackend
+        timeout_ms = _web_fetch_timeout_ms()
+        proxy = (os.getenv("WEB_FETCH_PROXY") or os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or "").strip() or None
+        try:
+            cooldown_minutes = max(0, int(os.getenv("BAIDU_COOLDOWN_MINUTES", "10")))
+        except (TypeError, ValueError):
+            cooldown_minutes = 10
+        warm_up_enabled = os.getenv("BAIDU_WARM_UP", "1").strip() in ("1", "true", "yes")
+        try:
+            warm_up_ttl_seconds = max(0, int(os.getenv("BAIDU_WARM_UP_TTL_SECONDS", "600")))
+        except (TypeError, ValueError):
+            warm_up_ttl_seconds = 600
+        return BaiduHtmlSearchBackend(
+            timeout_ms=timeout_ms,
+            proxy=proxy,
+            user_agent=None,
+            cooldown_minutes=cooldown_minutes,
+            warm_up_enabled=warm_up_enabled,
+            warm_up_ttl_seconds=warm_up_ttl_seconds,
+        )
     if backend_name == "searxng":
         base_url = (os.getenv("SEARXNG_BASE_URL") or "").strip()
         if not base_url:
@@ -260,8 +281,11 @@ def _web_search_timeout_ms() -> int:
         return 15000
 
 
-def _web_search_backend_from_settings(web_search: Dict[str, Any]) -> Any:
-    """根据 settings 中 web.search 构造 backend：stub/ddg_html/searxng；缺 base_url 时 searxng 回退 stub。"""
+def _web_search_backend_from_settings(
+    web_search: Dict[str, Any],
+    web_fetch: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """根据 settings 中 web.search 构造 backend：stub/ddg_html/baidu_html/searxng。baidu_html 复用 web_fetch 的 timeout/proxy/user_agent。"""
     raw_backend = web_search.get("backend")
     backend_name = (str(raw_backend or "stub")).strip().lower()
     if backend_name == "stub":
@@ -270,6 +294,24 @@ def _web_search_backend_from_settings(web_search: Dict[str, Any]) -> Any:
     if backend_name == "ddg_html":
         from worker.tools.web_backends.ddg_html import DDGHtmlBackend
         return DDGHtmlBackend()
+    if backend_name == "baidu_html":
+        from worker.tools.web_backends.baidu_html import BaiduHtmlSearchBackend
+        fetch_cfg = web_fetch or {}
+        timeout_ms = int(fetch_cfg.get("timeout_ms") or 0) or _web_search_timeout_from_settings(web_search)
+        timeout_ms = max(1000, timeout_ms)
+        proxy = (str(fetch_cfg.get("proxy") or "")).strip() or None
+        baidu_cfg = (web_search.get("baidu") or {}) if isinstance(web_search.get("baidu"), dict) else {}
+        cooldown_minutes = max(0, int(baidu_cfg.get("cooldown_minutes") or 10))
+        warm_up_enabled = bool(baidu_cfg.get("warm_up_enabled", True))
+        warm_up_ttl_seconds = max(0, int(baidu_cfg.get("warm_up_ttl_seconds") or 600))
+        return BaiduHtmlSearchBackend(
+            timeout_ms=timeout_ms,
+            proxy=proxy,
+            user_agent=None,
+            cooldown_minutes=cooldown_minutes,
+            warm_up_enabled=warm_up_enabled,
+            warm_up_ttl_seconds=warm_up_ttl_seconds,
+        )
     if backend_name == "searxng":
         searxng = web_search.get("searxng") or {}
         base_url = (str(searxng.get("base_url") or "")).strip()
@@ -356,8 +398,14 @@ def build_catalog_from_settings(settings: Dict[str, Any]) -> ToolCatalog:
     catalog = ToolCatalog(preferred_provider_order=order)
     web = settings.get("web") or {}
     search = web.get("search") or {}
-    search_backend = _web_search_backend_from_settings(search)
-    web_timeout_ms = _web_search_timeout_from_settings(search)
+    fetch_cfg = web.get("fetch") or {}
+    search_backend = _web_search_backend_from_settings(search, web_fetch=fetch_cfg)
+    backend_name = (str((search.get("backend") or "stub")).strip().lower())
+    if backend_name == "baidu_html":
+        web_timeout_ms = int(fetch_cfg.get("timeout_ms") or 0) or _web_search_timeout_from_settings(search)
+        web_timeout_ms = max(1000, web_timeout_ms)
+    else:
+        web_timeout_ms = _web_search_timeout_from_settings(search)
     fetch_backend = _web_fetch_backend_from_env(web_settings=web)
     fetch_cfg = web.get("fetch") or {}
     fetch_timeout_ms = int(fetch_cfg.get("timeout_ms") or 0) or _web_fetch_timeout_ms()
@@ -411,11 +459,13 @@ def _default_catalog_factory() -> ToolCatalog:
     catalog = ToolCatalog(preferred_provider_order=order)
     search_backend = _web_search_backend_from_env()
     fetch_backend = _web_fetch_backend_from_env()
-    web_timeout_ms = (
-        _searxng_timeout_ms()
-        if getattr(search_backend, "backend_id", None) == "searxng"
-        else _web_search_timeout_ms()
-    )
+    backend_id = getattr(search_backend, "backend_id", None)
+    if backend_id == "searxng":
+        web_timeout_ms = _searxng_timeout_ms()
+    elif backend_id == "baidu_html":
+        web_timeout_ms = _web_fetch_timeout_ms()
+    else:
+        web_timeout_ms = _web_search_timeout_ms()
     fetch_timeout_ms = _web_fetch_timeout_ms()
     catalog.register_provider(
         "web",

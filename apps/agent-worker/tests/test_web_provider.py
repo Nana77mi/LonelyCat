@@ -139,3 +139,20 @@ def test_normalize_filters_items_without_url():
     assert norm[0]["url"] == "https://a.com"
     assert norm[1]["title"] == "123"
     assert norm[1]["snippet"] == "456"
+
+
+def test_normalize_and_truncate_preserve_rank_sequence_after_slice():
+    """任意 backend 的 items 超过 max_results 时，normalize+truncate 后取前 N 条，rank 为连续 1..N 且为 int。"""
+    raw = [
+        {"title": f"T{i}", "url": f"https://example.com/p{i}", "snippet": ""}
+        for i in range(5)
+    ]
+    norm = normalize_search_items(raw, "any_backend")
+    assert len(norm) == 5
+    truncated = [truncate_fields(it) for it in norm]
+    max_results = 2
+    taken = truncated[:max_results]
+    assert len(taken) == max_results
+    for idx, it in enumerate(taken):
+        assert it.get("rank") == idx + 1
+        assert isinstance(it["rank"], int)

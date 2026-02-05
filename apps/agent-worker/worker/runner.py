@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import os
 import time
@@ -16,6 +17,7 @@ from worker.db_models import MessageModel, MessageRole
 from worker.task_context import TaskContext, run_task_with_steps
 from worker.tools import ToolRuntime
 from worker.tools.catalog import build_catalog_from_settings
+from worker.tools.web_backends.errors import WebBlockedError, WebParseError
 
 
 def _clear_invalid_ssl_cert_env_on_windows() -> None:
@@ -189,7 +191,80 @@ class TaskRunner:
         llm: Optional[Any] = None,
     ) -> None:
         """research_report 业务逻辑：ToolRuntime 调用 search/fetch_pages，再 extract → dedupe_rank → write_report（含可选总结）。"""
-        search_result = runtime.invoke(ctx, "web.search", {"query": query})
+        def _find_search_step() -> Optional[Dict[str, Any]]:
+            query_for_match = (query.strip() if isinstance(query, str) else str(query)) or ""
+            for s in reversed(ctx._steps):
+                if s.get("name") != "tool.web.search":
+                    continue
+                meta = s.get("meta") or {}
+                args_preview = meta.get("args_preview") or ""
+                if query_for_match and query_for_match in args_preview:
+                    return s
+            return next((s for s in reversed(ctx._steps) if s.get("name") == "tool.web.search"), None)
+
+        def _write_search_summary(backend_label: str, result_count: int, search_step: Optional[Dict[str, Any]], ok: bool) -> None:
+            ctx.artifacts["search_summary"] = {
+                "backend": backend_label,
+                "result_count": result_count,
+                "ok": ok,
+                "error_code": search_step.get("error_code") if search_step else None,
+                "detail_code": (search_step.get("meta") or {}).get("detail_code") if search_step else None,
+                "duration_ms": search_step.get("duration_ms") if search_step else None,
+            }
+
+        def _write_serp_artifacts(exc: object) -> None:
+            """WebParseError/WebBlockedError 带 serp_html 时落盘 search/serp.html 与 search/serp.meta.json，并写入 ctx.artifacts['search_serp_artifacts']。"""
+            serp_html = getattr(exc, "serp_html", None)
+            serp_meta = getattr(exc, "serp_meta", None)
+            if not serp_html or not getattr(ctx, "artifact_dir", None):
+                return
+            search_dir = os.path.join(ctx.artifact_dir, "search")
+            try:
+                os.makedirs(search_dir, exist_ok=True)
+            except OSError:
+                return
+            serp_html_path = os.path.join(search_dir, "serp.html")
+            serp_meta_path = os.path.join(search_dir, "serp.meta.json")
+            try:
+                with open(serp_html_path, "w", encoding="utf-8") as f:
+                    f.write(serp_html)
+                if serp_meta is not None:
+                    with open(serp_meta_path, "w", encoding="utf-8") as f:
+                        json.dump(serp_meta, f, ensure_ascii=False, indent=2)
+            except OSError:
+                return
+            ctx.artifacts["search_serp_artifacts"] = {
+                "serp_html": "search/serp.html",
+                "serp_meta": "search/serp.meta.json",
+            }
+
+        # 提前设置 artifact_dir，以便 WebParseError 时能落盘 SERP
+        if getattr(ctx.run, "id", None) is not None:
+            base = os.environ.get("WEB_FETCH_ARTIFACT_BASE", ".artifacts")
+            ctx.artifact_dir = os.path.join(base, str(ctx.run.id))
+            try:
+                os.makedirs(ctx.artifact_dir, exist_ok=True)
+            except OSError:
+                ctx.artifact_dir = None
+
+        try:
+            search_result = runtime.invoke(ctx, "web.search", {"query": query})
+        except Exception as e:
+            if isinstance(e, (WebParseError, WebBlockedError)):
+                _write_serp_artifacts(e)
+            search_step = _find_search_step()
+            _write_search_summary("stub", 0, search_step, ok=False)
+            if "search_serp_artifacts" in ctx.artifacts:
+                ctx.artifacts["search_summary"]["search_serp_artifacts"] = ctx.artifacts["search_serp_artifacts"]
+            serp_meta = getattr(e, "serp_meta", None)
+            if isinstance(serp_meta, dict):
+                if serp_meta.get("user_agent") is not None:
+                    ctx.artifacts["search_summary"]["effective_user_agent"] = (serp_meta.get("user_agent") or "")[:200]
+                if serp_meta.get("cooldown_remaining_sec") is not None:
+                    ctx.artifacts["search_summary"]["cooldown_remaining_sec"] = max(
+                        0, int(serp_meta["cooldown_remaining_sec"])
+                    )
+            raise
         # web.search canonical 形状为 {"items": [...]}；list 仅历史兼容，后续淘汰
         raw_sources = (
             search_result.get("items", search_result)
@@ -201,18 +276,11 @@ class TaskRunner:
         raw_sources = raw_sources[:max_sources]
         for s in raw_sources:
             s.setdefault("provider", "stub")
-        # 实际使用的搜索后端：用于 report 标题展示（来自 WebProvider 的 normalize，非硬编码）
         backend_label = raw_sources[0].get("provider", "stub") if raw_sources else "stub"
+        search_step = _find_search_step()
+        _write_search_summary(backend_label, len(raw_sources), search_step, ok=True)
 
-        # 可选：为本 run 设置 artifact_dir，供 web.fetch 落盘 raw.html / extracted.txt / meta.json（PR#3）
-        if getattr(ctx.run, "id", None) is not None:
-            base = os.environ.get("WEB_FETCH_ARTIFACT_BASE", ".artifacts")
-            ctx.artifact_dir = os.path.join(base, str(ctx.run.id))
-            try:
-                os.makedirs(ctx.artifact_dir, exist_ok=True)
-            except OSError:
-                ctx.artifact_dir = None
-
+        # artifact_dir 已在 search 前设置，供 web.fetch 与 WebParseError 落盘
         # 抓取间隔（秒），0=不启用；从 settings_snapshot 读取，可在设置中调节
         input_json = getattr(ctx.run, "input_json", None) or {}
         snapshot = (input_json.get("settings_snapshot") or {}) if isinstance(input_json, dict) else {}

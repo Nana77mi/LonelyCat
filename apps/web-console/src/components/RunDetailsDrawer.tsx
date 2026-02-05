@@ -47,6 +47,7 @@ function buildDebugBundle(run: Run): string {
   const lines: string[] = [
     `run_id: ${run.id}`,
     `trace_id: ${traceId}`,
+    `artifact_dir: .artifacts/${run.id} (目录名=run_id，非 trace_id)`,
     `type: ${run.type}`,
     `status: ${run.status}`,
     `facts_snapshot_id: ${factsSnapshotId}`,
@@ -60,9 +61,40 @@ function buildDebugBundle(run: Run): string {
     lines.push(`  proxy: ${fetchSettings?.proxy ?? "(unset)"}`);
     lines.push(`  timeout_ms: ${fetchSettings?.timeout_ms ?? "(default)"}`);
     lines.push(`  max_bytes: ${fetchSettings?.max_bytes ?? "(default)"}`);
-    lines.push(`  user_agent: ${fetchSettings?.user_agent ? "(set)" : "(default)"}`);
+    const uaSetting = fetchSettings?.user_agent as string | undefined;
+    const uaPreview = uaSetting ? (uaSetting.length > 80 ? uaSetting.slice(0, 80) + "…" : uaSetting) : "(default)";
+    lines.push(`  user_agent (settings): ${uaPreview}`);
   }
   const artifacts = (output.artifacts as Record<string, unknown> | undefined) ?? {};
+  const searchSummary = artifacts.search_summary as {
+    backend?: string;
+    result_count?: number;
+    ok?: boolean;
+    error_code?: string;
+    detail_code?: string;
+    duration_ms?: number;
+    effective_user_agent?: string;
+    cooldown_remaining_sec?: number;
+  } | undefined;
+  if (run.type === "research_report" && searchSummary) {
+    lines.push("search_summary:");
+    const codeDisplay = searchSummary.detail_code ?? searchSummary.error_code ?? "—";
+    lines.push(`  backend=${searchSummary.backend ?? "—"} result_count=${searchSummary.result_count ?? "—"} ok=${searchSummary.ok ?? "?"} error_code=${codeDisplay} duration_ms=${searchSummary.duration_ms ?? "—"}`);
+    const cooldownSec = searchSummary.cooldown_remaining_sec;
+    if (cooldownSec !== undefined && cooldownSec !== null) {
+      const sec = Math.max(0, Number(cooldownSec));
+      const mins = Math.max(1, Math.ceil(sec / 60));
+      lines.push(`  cooldown_remaining_sec=${sec} (约 ${mins} 分钟后可重试)`);
+      lines.push("  (cooldown is per-process)");
+    }
+    const effectiveUa = searchSummary.effective_user_agent;
+    if (effectiveUa !== undefined && effectiveUa !== "") {
+      const effectiveUaPreview = effectiveUa.length > 80 ? effectiveUa.slice(0, 80) + "…" : effectiveUa;
+      lines.push(`  effective_user_agent (search): ${effectiveUaPreview}`);
+    } else {
+      lines.push("  effective_user_agent (search): (see search/serp.meta.json if saved)");
+    }
+  }
   const fetchSummaries = artifacts.fetch_summaries as Array<{ url?: string; ok?: boolean; final_url?: string; status_code?: number; truncated?: boolean; cache_hit?: boolean }> | undefined;
   if (run.type === "research_report" && fetchSummaries?.length) {
     lines.push("fetch_summary:");
