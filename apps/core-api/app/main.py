@@ -42,8 +42,8 @@ from app.api.conversations import router as conversations_router
 from app.api.internal import router as internal_router
 from app.api.memory import router as memory_router
 from app.api.runs import router as runs_router
-from app.api.settings import router as settings_router
-from app.db import init_db as init_core_db
+from app.api.settings import router as settings_router, get_current_settings
+from app.db import SessionLocal, init_db as init_core_db
 from app.settings import Settings
 
 # 初始化数据库（包括 conversations 和 messages 表）
@@ -63,6 +63,23 @@ app.include_router(conversations_router, prefix="/conversations", tags=["convers
 app.include_router(runs_router, prefix="/runs", tags=["runs"])
 app.include_router(settings_router, prefix="/settings", tags=["settings"])
 app.include_router(internal_router)  # 内部 API，无需 prefix（已在 router 中定义）
+
+
+@app.on_event("startup")
+def _startup_sandbox_docker_log() -> None:
+    """启动时输出 docker context 与 docker info 摘要到日志（PR1.5 Win/WSL 联调）。"""
+    try:
+        from app.services.sandbox.docker_health import log_docker_context_and_info
+        db = SessionLocal()
+        try:
+            settings = get_current_settings(db)
+            cli = (settings.get("sandbox") or {}).get("docker") or {}
+            cli_path = (cli.get("cli_path") or "").strip() or "docker"
+            log_docker_context_and_info(cli_path)
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[sandbox] startup docker log skipped: {e}")
 
 
 @app.get("/health")
