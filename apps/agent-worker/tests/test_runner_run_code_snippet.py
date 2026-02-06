@@ -109,6 +109,40 @@ def test_run_code_snippet_missing_conversation_id_raises():
         runner._handle_run_code_snippet(run, lambda: True)
 
 
+def test_run_code_snippet_failed_exec_maps_to_ok_false():
+    """沙箱返回 status=FAILED 时任务标为失败（ok=False），Tasks/DB 显示失败而非成功。"""
+    runner = TaskRunner()
+    run = MagicMock()
+    run.input_json = {
+        "conversation_id": "conv-1",
+        "language": "python",
+        "code": "print(1)",
+        "settings_snapshot": {},
+    }
+    run.type = "run_code_snippet"
+    run.id = "run-1"
+    run.title = None
+
+    catalog, _ = _make_run_code_snippet_catalog({
+        "exec_id": "e_31c1",
+        "status": "FAILED",
+        "exit_code": 126,
+        "artifacts_dir": "projects/conv-1/artifacts/e_31c1",
+    })
+    try:
+        with patch("worker.runner.build_catalog_from_settings", return_value=catalog):
+            result = runner._handle_run_code_snippet(run, lambda: True)
+    finally:
+        catalog.close_providers()
+
+    assert result.get("ok") is False
+    assert result.get("result", {}).get("status") == "FAILED"
+    assert result.get("result", {}).get("exit_code") == 126
+    err = result.get("error") or {}
+    assert err.get("code") == "EXEC_FAILED"
+    assert "126" in (err.get("message") or "")
+
+
 def test_execute_dispatches_run_code_snippet():
     """execute() 当 run.type=run_code_snippet 时派发到 _handle_run_code_snippet。"""
     runner = TaskRunner()

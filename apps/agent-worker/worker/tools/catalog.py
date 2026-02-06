@@ -510,7 +510,10 @@ def build_catalog_from_settings(settings: Dict[str, Any]) -> ToolCatalog:
     catalog.register_provider("builtin", BuiltinProvider())
     catalog.register_provider("stub", StubProvider())
 
-    _skills_base_url = (os.getenv("LONELYCAT_CORE_API_URL") or os.getenv("CORE_API_URL") or "http://localhost:5173").strip()
+    # 优先用 snapshot 中的 core_api_url（与创建 run 的 core-api 一致），否则用 worker 进程 env
+    _skills_base_url = (settings.get("core_api_url") or os.getenv("LONELYCAT_CORE_API_URL") or os.getenv("CORE_API_URL") or "http://localhost:5173")
+    if isinstance(_skills_base_url, str):
+        _skills_base_url = _skills_base_url.strip()
     if _skills_base_url:
         from worker.tools.skills_provider import SkillsProvider
         catalog.register_provider("skills", SkillsProvider(base_url=_skills_base_url))

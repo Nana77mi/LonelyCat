@@ -1604,6 +1604,52 @@ def test_agent_loop_decision_reply_and_run(temp_db, monkeypatch) -> None:
     assert run["conversation_id"] == conversation_id
 
 
+def test_agent_loop_run_code_snippet_injects_conversation_id_into_input(temp_db, monkeypatch) -> None:
+    """会话侧：run_code_snippet 时若 run.input 缺 conversation_id，则补全为当前会话 id。"""
+    db, _ = temp_db
+    request = conversations.ConversationCreateRequest(title="Test Chat")
+    conv = asyncio.run(conversations._create_conversation(request, db))
+    _commit_db(db)
+    conversation_id = conv["id"]
+
+    def mock_decide(*args, **kwargs):
+        from app.services.agent_decision import Decision, RunDecision
+        # LLM 可能只填了 language/code 未填 conversation_id
+        return Decision(
+            decision="run",
+            reply=None,
+            run=RunDecision(
+                type="run_code_snippet",
+                title="Run code",
+                conversation_id=conversation_id,
+                input={"language": "python", "code": "print(1)"},  # 故意不填 conversation_id
+            ),
+            confidence=0.9,
+            reason="User asked to run code",
+        )
+
+    monkeypatch.setattr(conversations, "AGENT_LOOP_ENABLED", True)
+    monkeypatch.setattr(conversations, "AGENT_DECISION_AVAILABLE", True)
+    with patch("app.api.conversations.AgentDecision") as mock_agent_decision_class:
+        mock_agent_decision = MagicMock()
+        mock_agent_decision.decide = MagicMock(side_effect=mock_decide)
+        mock_agent_decision.get_active_facts = MagicMock(return_value=[])
+        mock_agent_decision_class.return_value = mock_agent_decision
+
+        message_request = conversations.MessageCreateRequest(content="帮我跑这段代码：print(1)")
+        result = asyncio.run(conversations._create_message(conversation_id, message_request, db))
+        _commit_db(db)
+
+    from app.api.runs import _list_conversation_runs
+    runs_result = asyncio.run(_list_conversation_runs(conversation_id, db))
+    assert len(runs_result["items"]) == 1
+    run = runs_result["items"][0]
+    assert run["type"] == "run_code_snippet"
+    assert run["input"]["conversation_id"] == conversation_id
+    assert run["input"]["language"] == "python"
+    assert run["input"]["code"] == "print(1)"
+
+
 def test_agent_loop_decision_fallback_to_chat_flow(temp_db, monkeypatch) -> None:
     """Test Agent Loop: Decision failure falls back to chat_flow."""
     db, _ = temp_db

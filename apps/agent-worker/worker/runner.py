@@ -610,6 +610,14 @@ class TaskRunner:
                     ctx.result["exit_code"] = out.get("exit_code")
                     ctx.result["artifacts_dir"] = out.get("artifacts_dir")
                     ctx.artifacts["exec"] = out
+                    # 沙箱执行失败（如 exit_code 126）时任务应标为失败，Tasks UI 与 DB 一致
+                    if out.get("status") != "SUCCEEDED":
+                        exit_code = out.get("exit_code")
+                        ctx.set_error(
+                            "EXEC_FAILED",
+                            f"执行失败 (exit_code={exit_code})，详见 artifacts 或 stdout/stderr。",
+                            retryable=False,
+                        )
             return run_task_with_steps(run, "run_code_snippet", body)
         finally:
             if catalog is not None and snapshot is not None:

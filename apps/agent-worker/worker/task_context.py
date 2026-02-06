@@ -56,6 +56,11 @@ class TaskContext:
         """清除顶层 error，用于部分成功时不再展示整段失败。"""
         self._error = None
 
+    def set_error(self, code: str, message: str, *, retryable: bool = False) -> None:
+        """由 handler 在无异常但业务失败时设置顶层 error（如 run_code_snippet 的 exec status=FAILED）。"""
+        self._ok = False
+        self._error = {"code": code, "message": message, "retryable": retryable}
+
     @property
     def result(self) -> Dict[str, Any]:
         return self._result

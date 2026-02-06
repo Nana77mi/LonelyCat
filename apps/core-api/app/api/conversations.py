@@ -510,6 +510,9 @@ async def _create_message(
                                 store = MemoryStore()
                                 active_facts_for_run, _ = await fetch_active_facts_from_store(store, conversation_id=conv_id)
                                 run_input["facts_snapshot_id"] = compute_facts_snapshot_id(active_facts_for_run)
+                        if run_type_normalized == "run_code_snippet":
+                            if not run_input.get("conversation_id"):
+                                run_input["conversation_id"] = conv_id
                         run_request = RunCreateRequest(
                             type=decision.run.type,
                             title=decision.run.title,
@@ -557,6 +560,9 @@ async def _create_message(
                                 store = MemoryStore()
                                 active_facts_for_run, _ = await fetch_active_facts_from_store(store, conversation_id=run_input["conversation_id"])
                                 run_input["facts_snapshot_id"] = compute_facts_snapshot_id(active_facts_for_run)
+                        if run_type_normalized == "run_code_snippet":
+                            if not run_input.get("conversation_id"):
+                                run_input["conversation_id"] = decision.run.conversation_id or conversation_id
                         reply_conv_id = decision.run.conversation_id or conversation_id
                         run_request = RunCreateRequest(
                             type=decision.run.type,

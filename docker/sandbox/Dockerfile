@@ -1,5 +1,6 @@
 # Sandbox image for LonelyCat (Phase 1). See docs/spec/sandbox.md.
 # Base: python:3.12-slim; user sandbox uid 1000; --user=1000:1000, --workdir=/workspace/work.
+# 构建时请用: docker build --platform linux/amd64 --pull ... 避免架构不一致导致 "cannot execute binary file"。
 FROM python:3.12-slim
 
 # Install bash, coreutils, findutils, jq, git (optional). Slim may lack some.

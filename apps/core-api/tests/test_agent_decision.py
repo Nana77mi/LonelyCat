@@ -427,6 +427,29 @@ def test_agent_decision_build_prompt():
 
 
 @patch("app.services.agent_decision.AGENT_WORKER_AVAILABLE", True)
+def test_agent_decision_prompt_includes_run_code_snippet_rule_and_example():
+    """决策 prompt 包含 run_code_snippet 的规则与示例，便于 LLM 在用户要求跑代码时产出正确 run.input。"""
+    agent_decision = AgentDecision()
+    agent_decision._llm = MockLLM("")
+    agent_decision._memory_client = MockMemoryClient()
+
+    prompt = agent_decision._build_decision_prompt(
+        user_message="帮我跑这段代码",
+        conversation_id="conv-1",
+        history_messages=[],
+        active_facts=[],
+        recent_runs=[],
+    )
+
+    assert "run_code_snippet" in prompt
+    assert "language" in prompt
+    assert "code" in prompt or "script" in prompt
+    # 应有示例：用户说跑代码 -> type=run_code_snippet, run.input 含 language/code 等
+    assert "python" in prompt or "shell" in prompt
+    assert "run.input" in prompt or "input" in prompt
+
+
+@patch("app.services.agent_decision.AGENT_WORKER_AVAILABLE", True)
 @patch("app.services.agent_decision.fetch_active_facts")
 def test_agent_decision_get_active_facts(mock_fetch_active_facts):
     """Test AgentDecision.get_active_facts() returns facts from memory client."""

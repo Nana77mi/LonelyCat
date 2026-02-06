@@ -95,6 +95,7 @@ class TestSandboxExecRecord:
             "image", "cmd", "args", "cwd", "env_keys", "policy_snapshot",
             "status", "exit_code", "error_reason", "started_at", "ended_at",
             "duration_ms", "artifacts_path", "stdout_truncated", "stderr_truncated",
+            "idempotency_key",
         }
         assert required.issubset(cols), f"missing columns: {required - cols}"
 

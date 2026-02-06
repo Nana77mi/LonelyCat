@@ -53,17 +53,37 @@ def test_skills_provider_list_tools_returns_skills_from_api():
     assert "script" in str(meta.input_schema)
 
 
-def test_skills_provider_list_tools_empty_when_api_fails():
-    """GET /skills 失败或非 200 时 list_tools 返回空列表（降级，不抛）。"""
+def test_skills_provider_list_tools_raises_with_base_url_and_reason_when_api_fails():
+    """GET /skills 失败时（默认 fallback 关）抛出 SkillsListError，message 含 base_url 与原因。"""
+    from worker.tools.skills_provider import SkillsListError, SkillsProvider
+
+    mock_client = MagicMock()
+    mock_client.get.return_value.status_code = 500
+
+    provider = SkillsProvider(base_url="http://core:5173", client=mock_client)
+    with pytest.raises(SkillsListError) as exc_info:
+        provider.list_tools()
+    assert "http://core:5173/skills" in str(exc_info.value)
+    assert "500" in str(exc_info.value) or "HTTP" in str(exc_info.value)
+    assert exc_info.value.base_url == "http://core:5173"
+    assert "500" in exc_info.value.reason or "HTTP" in exc_info.value.reason
+
+
+def test_skills_provider_list_tools_fallback_when_env_set(monkeypatch):
+    """SKILLS_LIST_FALLBACK=1 时 GET /skills 失败仍返回占位 python.run/shell.run。"""
     from worker.tools.skills_provider import SkillsProvider
 
+    monkeypatch.setenv("SKILLS_LIST_FALLBACK", "1")
     mock_client = MagicMock()
     mock_client.get.return_value.status_code = 500
 
     provider = SkillsProvider(base_url="http://core:5173", client=mock_client)
     tools = provider.list_tools()
 
-    assert tools == []
+    names = [t.name for t in tools]
+    assert "skill.python.run" in names
+    assert "skill.shell.run" in names
+    assert len(tools) == 2
 
 
 def test_skills_provider_invoke_calls_invoke_api():

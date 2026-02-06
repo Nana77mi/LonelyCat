@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
 from typing import Any, Optional
 
 from sqlalchemy import (
@@ -60,8 +65,8 @@ class ProposalModel(Base):
     source_ref_kind = Column(SQLEnum(SourceKind), nullable=False)
     source_ref_ref_id = Column(String, nullable=False)
     source_ref_excerpt = Column(Text, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=_utc_now)
+    updated_at = Column(DateTime, nullable=False, default=_utc_now, onupdate=_utc_now)
 
 
 class FactModel(Base):
@@ -80,8 +85,8 @@ class FactModel(Base):
     source_ref_excerpt = Column(Text, nullable=True)
     confidence = Column(Float, nullable=True)
     version = Column(Integer, nullable=False, default=1)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=_utc_now)
+    updated_at = Column(DateTime, nullable=False, default=_utc_now, onupdate=_utc_now)
 
     # 复合索引：用于查询同一 scope/key 的 active facts
     __table_args__ = (
@@ -102,7 +107,7 @@ class AuditEventModel(Base):
     request_id = Column(String, nullable=True, index=True)
     diff_before = Column(JSON, nullable=True)
     diff_after = Column(JSON, nullable=True)
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, nullable=False, default=_utc_now, index=True)
 
 
 class KeyPolicyModel(Base):
@@ -111,8 +116,8 @@ class KeyPolicyModel(Base):
 
     key = Column(String, primary_key=True, index=True)
     strategy = Column(String, nullable=False)  # "overwrite_latest" | "keep_both"
-    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, nullable=False, default=_utc_now)
+    updated_at = Column(DateTime, nullable=False, default=_utc_now, onupdate=_utc_now)
 
 
 def init_db() -> None:

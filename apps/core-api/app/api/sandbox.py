@@ -292,6 +292,25 @@ def execute_sandbox_body(body: SandboxExecBody, request: Request, db: Session) -
             error_reason=e.to_reason(),
         )
         raise HTTPException(status_code=500, detail=e.to_reason())
+    except Exception as e:
+        # 其它未分类异常（如 ValueError 来自 path_adapter）统一返回 500 并带上真实信息，避免只返回 Internal Server Error
+        reason = {"code": "RUNTIME_ERROR", "message": str(e)}
+        ended_at = datetime.now(UTC)
+        try:
+            _update_exec_record(
+                db, exec_id, SandboxExecStatus.FAILED,
+                ended_at=ended_at,
+                duration_ms=int((ended_at - started_at).total_seconds() * 1000),
+                command=body.exec.command,
+                args_json=_args_json,
+                cwd=_cwd,
+                env_keys_json=_env_keys_json,
+                policy_snapshot=body.policy_overrides,
+                error_reason=reason,
+            )
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=reason)
 
     ended_at = datetime.now(UTC)
     # 单一时间源：started_at/ended_at 均 UTC datetime，duration_ms 据此计算

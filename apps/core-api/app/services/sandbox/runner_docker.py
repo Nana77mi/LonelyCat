@@ -268,13 +268,16 @@ def run_sandbox_exec(settings: dict, req: SandboxExecRequest, exec_id: str | Non
     exec_id = exec_id or f"e_{uuid.uuid4().hex[:16]}"
     project_id = req.project_id
 
-    # 仅使用三模板路径
-    inputs_host = adapter.host_path_native("projects", project_id, "inputs")
-    work_host = adapter.host_path_native("projects", project_id, "work")
-    artifacts_host = adapter.host_path_native("projects", project_id, "artifacts", exec_id)
-    inputs_docker = adapter.docker_mount_path("projects", project_id, "inputs")
-    work_docker = adapter.docker_mount_path("projects", project_id, "work")
-    artifacts_docker = adapter.docker_mount_path("projects", project_id, "artifacts", exec_id)
+    try:
+        # 仅使用三模板路径（首次使用 adapter 会解析 workspace 根，未配置时抛 ValueError）
+        inputs_host = adapter.host_path_native("projects", project_id, "inputs")
+        work_host = adapter.host_path_native("projects", project_id, "work")
+        artifacts_host = adapter.host_path_native("projects", project_id, "artifacts", exec_id)
+        inputs_docker = adapter.docker_mount_path("projects", project_id, "inputs")
+        work_docker = adapter.docker_mount_path("projects", project_id, "work")
+        artifacts_docker = adapter.docker_mount_path("projects", project_id, "artifacts", exec_id)
+    except ValueError as e:
+        raise SandboxRuntimeError(f"workspace 未配置或路径无效: {e}")
 
     try:
         os.makedirs(inputs_host, exist_ok=True)
@@ -308,6 +311,7 @@ def run_sandbox_exec(settings: dict, req: SandboxExecRequest, exec_id: str | Non
     container_name = f"lonelycat-sbx-{exec_id[:8]}"
     cmd = [
         docker_cmd, "run", "--rm",
+        "--platform=linux/amd64",  # 与 build 一致，避免 "cannot execute binary file"
         "--network=none",
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
@@ -322,6 +326,9 @@ def run_sandbox_exec(settings: dict, req: SandboxExecRequest, exec_id: str | Non
         cmd.extend(["-v", m])
     for k, v in (req.env or {}).items():
         cmd.extend(["-e", f"{k}={v}"])
+    # python.run: 直接以 python 为进程，避免 ENTRYPOINT bash 在某些环境下导致 "cannot execute binary file"
+    if (req.command or "").strip().lower() == "python":
+        cmd.extend(["--entrypoint", ""])
     cmd.append(image)
     cmd.extend([req.command] + req.args)
 
