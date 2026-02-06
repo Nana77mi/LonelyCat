@@ -95,7 +95,8 @@ class SandboxExecBody(BaseModel):
     skill_id: str | None = None
     exec: ExecBody
     inputs: list[InputItem] = []
-    policy_overrides: dict[str, Any] | None = None
+    manifest_limits: dict[str, Any] | None = None  # skill manifest.limits，合并入 policy
+    policy_overrides: dict[str, Any] | None = None  # 仅请求层 overrides
     task_ref: TaskRefBody | None = None
     request_id: str | None = None  # 可选，用于幂等（与 Idempotency-Key 二选一）
 
@@ -198,16 +199,9 @@ def _record_to_response(rec: SandboxExecRecord) -> dict:
     }
 
 
-@router.post("/execs", response_model=dict)
-def post_sandbox_execs(
-    request: Request,
-    body: SandboxExecBody,
-    db: Session = Depends(get_db),
-) -> dict:
+def execute_sandbox_body(body: SandboxExecBody, request: Request, db: Session) -> dict:
     """
-    执行沙箱任务。policy 校验、normpath 防穿越、挂载仅三模板路径。
-    审计：先插 RUNNING 再 update。幂等：Idempotency-Key 或 request_id，插入时写 key，并发重复则 IntegrityError 后查回已存在记录并返回（避免双执行）。
-    响应：exec_id、status（RUNNING 或最终态），客户端可轮询 GET /execs/{id}。
+    执行沙箱请求体（先插 RUNNING、再 run、再 update）。供 POST /sandbox/execs 与 POST /skills/{id}/invoke 复用。
     """
     idempotency_key = request.headers.get("Idempotency-Key") or body.request_id
     if idempotency_key and idempotency_key.strip():
@@ -245,6 +239,7 @@ def post_sandbox_execs(
         cwd=body.exec.cwd or "work",
         env=body.exec.env,
         inputs=[SandboxExecInput(path=x.path, content=x.content) for x in body.inputs],
+        manifest_limits=body.manifest_limits,
         policy_overrides=body.policy_overrides,
         task_id=task_id,
         conversation_id=conversation_id,
@@ -321,6 +316,20 @@ def post_sandbox_execs(
     )
     rec = db.query(SandboxExecRecord).filter(SandboxExecRecord.exec_id == exec_id).first()
     return _record_to_response(rec)
+
+
+@router.post("/execs", response_model=dict)
+def post_sandbox_execs(
+    request: Request,
+    body: SandboxExecBody,
+    db: Session = Depends(get_db),
+) -> dict:
+    """
+    执行沙箱任务。policy 校验、normpath 防穿越、挂载仅三模板路径。
+    审计：先插 RUNNING 再 update。幂等：Idempotency-Key 或 request_id，插入时写 key，并发重复则 IntegrityError 后查回已存在记录并返回（避免双执行）。
+    响应：exec_id、status（RUNNING 或最终态），客户端可轮询 GET /execs/{id}。
+    """
+    return execute_sandbox_body(body, request, db)
 
 
 @router.get("/execs", response_model=list)

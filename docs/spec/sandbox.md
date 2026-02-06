@@ -88,7 +88,7 @@ workspace/
 
 ## 7. Skills 标准（manifest）
 
-- **目录（repo 根）**：`skills/<skill_id>/manifest.json`，`skills/_schema/manifest.schema.json`。
+- **目录（repo 根）**：`skills/<skill_id>/manifest.json`，`skills/_schema/manifest.schema.json`。目录名必须等于 `id`（含点，如 `shell.run`）。
 - **字段五组**：Identity（schema_version, id, name, description）、Interface（interface.inputs, interface.outputs）、Runtime（runtime.kind=docker, image, entrypoint）、Security（permissions.fs, permissions.net）、Limits（limits.*）。
 - **manifest.schema.json 约束**：
   - `id` 必须匹配 `[a-z0-9]+(\.[a-z0-9]+)+`（如 shell.run）。

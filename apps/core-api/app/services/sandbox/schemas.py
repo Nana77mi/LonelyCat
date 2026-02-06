@@ -28,7 +28,7 @@ class SandboxExecInput:
 
 @dataclass
 class SandboxExecRequest:
-    """POST /sandbox/execs 请求体（内部用）。"""
+    """POST /sandbox/execs 请求体（内部用）。合并顺序：默认 ← Settings ← manifest_limits ← policy_overrides。"""
     project_id: str
     skill_id: str | None
     exec_kind: str  # shell | python
@@ -37,7 +37,8 @@ class SandboxExecRequest:
     cwd: str = "work"
     env: dict[str, str] | None = None
     inputs: list[SandboxExecInput] = field(default_factory=list)
-    policy_overrides: dict[str, Any] | None = None
+    manifest_limits: dict[str, Any] | None = None  # 来自 skill manifest.limits，合并入 policy
+    policy_overrides: dict[str, Any] | None = None  # 仅请求层 overrides（更严）
     task_id: str | None = None
     conversation_id: str | None = None
 

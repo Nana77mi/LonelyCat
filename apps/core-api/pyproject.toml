@@ -9,6 +9,7 @@ dependencies = [
   "uvicorn>=0.27",
   "lonelycat-memory",
   "lonelycat-protocol",
+  "jsonschema>=4.20",
 ]
 
 [project.optional-dependencies]
