@@ -95,4 +95,4 @@ workspace/
   - `runtime.kind` 必须是 `docker`。
   - `permissions.net.mode` Phase 1 只能是 `none`。
   - `permissions.fs.read` / `permissions.fs.write` 只能在 `inputs/**`、`work/**`、`artifacts/**` 三类前缀下。
-- **调用**：PR4 提供 POST /skills/{id}/invoke 作为上层入口；MCP：list_tools ← GET /skills，call_tool ← POST /skills/{id}/invoke。
+- **调用**：PR4 提供 POST /skills/{id}/invoke 作为上层入口；MCP：list_tools ← GET /skills，call_tool ← POST /skills/{id}/invoke。PR5：agent-worker 内 SkillsProvider 将 GET /skills 映射为 list_tools、POST /skills/{id}/invoke 映射为 invoke，工具名为 skill.\<id\>（如 skill.shell.run）。
