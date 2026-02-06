@@ -38,6 +38,7 @@ DEFAULT_ALLOWED_RUN_TYPES = [
     "sleep",
     "summarize_conversation",
     "research_report",
+    "run_code_snippet",  # PR6: language+code/script → skill.python.run / skill.shell.run
     "edit_docs_propose",
     "edit_docs_apply",
     "edit_docs_cancel",
