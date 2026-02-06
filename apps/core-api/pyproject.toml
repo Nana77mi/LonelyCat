@@ -20,3 +20,7 @@ test = [
 
 [tool.pytest.ini_options]
 addopts = "-q"
+markers = [
+  "integration: sandbox integration tests (real docker, skip without docker)",
+  "sandbox_it: same as integration, use with RUN_DOCKER_IT=1 or diagnose",
+]
