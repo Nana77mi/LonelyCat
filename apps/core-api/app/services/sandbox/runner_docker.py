@@ -211,10 +211,11 @@ def _run_docker_streaming(
     return (proc.returncode or 0, "SUCCEEDED" if proc.returncode == 0 else "FAILED", out_bytes, err_bytes, out_truncated, err_truncated)
 
 
-def run_sandbox_exec(settings: dict, req: SandboxExecRequest) -> SandboxExecResponse:
+def run_sandbox_exec(settings: dict, req: SandboxExecRequest, exec_id: str | None = None) -> SandboxExecResponse:
     """
     执行沙箱任务：policy 校验、准备目录、写 inputs、docker run、截断写 stdout/stderr、生成 manifest/meta。
     挂载仅限 workspace/projects/<project_id>/{inputs,work,artifacts} 三模板路径。
+    exec_id 可选，由 API 传入时用于审计记录对齐。
     """
     # Policy
     base_policy = _policy_from_settings(settings)
@@ -230,7 +231,7 @@ def run_sandbox_exec(settings: dict, req: SandboxExecRequest) -> SandboxExecResp
     except Exception as e:
         raise SandboxRuntimeError(f"workspace 配置无效: {e}")
 
-    exec_id = f"e_{uuid.uuid4().hex[:16]}"
+    exec_id = exec_id or f"e_{uuid.uuid4().hex[:16]}"
     project_id = req.project_id
 
     # 仅使用三模板路径
@@ -303,6 +304,15 @@ def run_sandbox_exec(settings: dict, req: SandboxExecRequest) -> SandboxExecResp
             policy.max_stderr_bytes,
         )
     if status == "TIMEOUT":
+        # 超时后 subprocess kill 可能未通知 docker 清理，强制 rm 避免残留容器
+        try:
+            subprocess.run(
+                [docker_cmd, "rm", "-f", container_name],
+                capture_output=True,
+                timeout=5,
+            )
+        except Exception:
+            pass
         error_reason = {"code": "TIMEOUT", "message": f"执行超时（{timeout_sec}s）"}
     else:
         error_reason = None

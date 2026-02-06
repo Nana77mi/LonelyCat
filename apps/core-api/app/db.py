@@ -41,6 +41,7 @@ class RunStatus(str, Enum):
 
 class SandboxExecStatus(str, Enum):
     """沙箱执行状态枚举"""
+    RUNNING = "RUNNING"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
     TIMEOUT = "TIMEOUT"
@@ -181,9 +182,10 @@ class SandboxExecRecord(Base):
     started_at = Column(DateTime, nullable=False)
     ended_at = Column(DateTime, nullable=True)
     duration_ms = Column(Integer, nullable=True)
-    artifacts_path = Column(String, nullable=True)
+    artifacts_path = Column(String, nullable=True)  # 相对 workspace_root：projects/<project_id>/artifacts/<exec_id>
     stdout_truncated = Column(Boolean, nullable=False, default=False)
     stderr_truncated = Column(Boolean, nullable=False, default=False)
+    idempotency_key = Column(String, nullable=True, unique=True, index=True)  # 幂等：同 key 返回同一 exec
 
     __table_args__ = (
         Index("idx_sandbox_execs_task_id", "task_id"),
@@ -200,6 +202,8 @@ def init_db() -> None:
     _migrate_add_cancel_fields()
     # 迁移：添加 conversation 相关字段（如果不存在）
     _migrate_add_conversation_fields()
+    # 迁移：sandbox_execs 添加 idempotency_key（如果不存在）
+    _migrate_sandbox_execs_idempotency_key()
     # 创建 settings 表（create_all 会创建，无需单独迁移除非表已存在但缺列）
 
 
@@ -289,6 +293,21 @@ def _migrate_add_conversation_fields() -> None:
     except Exception as e:
         # 迁移失败不影响启动，只记录错误
         print(f"Warning: Failed to migrate conversation fields: {e}")
+
+
+def _migrate_sandbox_execs_idempotency_key() -> None:
+    """迁移：为 sandbox_execs 表添加 idempotency_key 列（如果不存在）。幂等：重复执行不报错。"""
+    try:
+        inspector = inspect(engine)
+        if "sandbox_execs" not in inspector.get_table_names():
+            return
+        columns = [col["name"] for col in inspector.get_columns("sandbox_execs")]
+        if "idempotency_key" not in columns:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE sandbox_execs ADD COLUMN idempotency_key VARCHAR"))
+                conn.commit()
+    except Exception as e:
+        print(f"Warning: Failed to migrate sandbox_execs idempotency_key: {e}")
 
 
 def get_db():
