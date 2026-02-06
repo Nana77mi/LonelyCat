@@ -5,7 +5,7 @@ import os
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from app.api.sandbox import (
     ExecBody,
@@ -31,12 +31,11 @@ def get_skills_list() -> list:
 
 class SkillInvokeBody(BaseModel):
     """POST /skills/{id}/invoke 请求体：project_id 必填，其余为技能输入与可选 task_ref。"""
+    model_config = ConfigDict(extra="allow")  # script, code, timeout_ms 等按 manifest.interface.inputs
+
     project_id: str
     task_id: str | None = None
     conversation_id: str | None = None
-
-    class Config:
-        extra = "allow"  # script, code, timeout_ms 等按 manifest.interface.inputs
 
 
 def _build_exec_from_manifest(skill_id: str, manifest: dict[str, Any], body: dict[str, Any]) -> SandboxExecBody:

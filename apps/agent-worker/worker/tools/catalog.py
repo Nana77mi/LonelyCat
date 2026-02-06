@@ -510,6 +510,11 @@ def build_catalog_from_settings(settings: Dict[str, Any]) -> ToolCatalog:
     catalog.register_provider("builtin", BuiltinProvider())
     catalog.register_provider("stub", StubProvider())
 
+    _skills_base_url = (os.getenv("LONELYCAT_CORE_API_URL") or os.getenv("CORE_API_URL") or "http://localhost:5173").strip()
+    if _skills_base_url:
+        from worker.tools.skills_provider import SkillsProvider
+        catalog.register_provider("skills", SkillsProvider(base_url=_skills_base_url))
+
     servers = _mcp_servers_from_env()
     if servers is not None:
         from worker.tools.mcp_provider import MCPProvider
@@ -523,7 +528,10 @@ def build_catalog_from_settings(settings: Dict[str, Any]) -> ToolCatalog:
             catalog.register_provider(provider_id, MCPProvider(server_name=name, provider_id=provider_id, cmd=cmd, cwd=cwd, env=env))
             mcp_ids.append(provider_id)
         if mcp_ids:
-            order = ["web", "builtin"] + mcp_ids + ["stub"]
+            order = ["web", "builtin"] + mcp_ids + ["skills", "stub"]
+            catalog.set_preferred_provider_order(order)
+        else:
+            order = ["web", "builtin", "skills", "stub"]
             catalog.set_preferred_provider_order(order)
     else:
         cmd = _mcp_cmd_from_env()
@@ -533,7 +541,10 @@ def build_catalog_from_settings(settings: Dict[str, Any]) -> ToolCatalog:
             provider_id = f"mcp_{name}"
             cwd = os.getenv("MCP_SERVER_CWD")
             catalog.register_provider(provider_id, MCPProvider(server_name=name, provider_id=provider_id, cmd=cmd, cwd=cwd or None, env=None))
-            order = ["web", "builtin", provider_id, "stub"]
+            order = ["web", "builtin", provider_id, "skills", "stub"]
+            catalog.set_preferred_provider_order(order)
+        else:
+            order = ["web", "builtin", "skills", "stub"]
             catalog.set_preferred_provider_order(order)
 
     return catalog
@@ -570,6 +581,12 @@ def _default_catalog_factory() -> ToolCatalog:
     catalog.register_provider("builtin", BuiltinProvider())
     catalog.register_provider("stub", StubProvider())
 
+    # PR5: SkillsProvider — list_tools ← GET /skills，invoke ← POST /skills/{id}/invoke
+    _skills_base_url = (os.getenv("LONELYCAT_CORE_API_URL") or os.getenv("CORE_API_URL") or "http://localhost:5173").strip()
+    if _skills_base_url:
+        from worker.tools.skills_provider import SkillsProvider
+        catalog.register_provider("skills", SkillsProvider(base_url=_skills_base_url))
+
     servers = _mcp_servers_from_env()
     if servers is not None:
         # 2.2 v0.2：多 MCP server，MCP_SERVERS_JSON 优先
@@ -584,7 +601,10 @@ def _default_catalog_factory() -> ToolCatalog:
             catalog.register_provider(provider_id, MCPProvider(server_name=name, provider_id=provider_id, cmd=cmd, cwd=cwd, env=env))
             mcp_ids.append(provider_id)
         if mcp_ids:
-            order = ["web", "builtin"] + mcp_ids + ["stub"]
+            order = ["web", "builtin"] + mcp_ids + ["skills", "stub"]
+            catalog.set_preferred_provider_order(order)
+        else:
+            order = ["web", "builtin", "skills", "stub"]
             catalog.set_preferred_provider_order(order)
     else:
         cmd = _mcp_cmd_from_env()
@@ -594,7 +614,10 @@ def _default_catalog_factory() -> ToolCatalog:
             provider_id = f"mcp_{name}"
             cwd = os.getenv("MCP_SERVER_CWD")
             catalog.register_provider(provider_id, MCPProvider(server_name=name, provider_id=provider_id, cmd=cmd, cwd=cwd or None, env=None))
-            order = ["web", "builtin", provider_id, "stub"]
+            order = ["web", "builtin", provider_id, "skills", "stub"]
+            catalog.set_preferred_provider_order(order)
+        else:
+            order = ["web", "builtin", "skills", "stub"]
             catalog.set_preferred_provider_order(order)
 
     return catalog
