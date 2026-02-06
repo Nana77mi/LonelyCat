@@ -1,8 +1,6 @@
 """PR1.5: HostPathAdapter 与 Settings sandbox 测试。"""
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 
 from app.services.sandbox.path_adapter import HostPathAdapter, detect_runtime
@@ -32,8 +30,9 @@ class TestHostPathAdapter:
         native, docker = adapter.resolve_workspace_root()
         assert native == "D:\\Project\\lonelycat\\workspace"
         assert docker == "D:\\Project\\lonelycat\\workspace"
-        assert Path(adapter.host_path_native("projects", "p1")) == Path("D:/Project/lonelycat/workspace/projects/p1")
-        assert Path(adapter.docker_mount_path("projects", "p1")) == Path("D:/Project/lonelycat/workspace/projects/p1")
+        # 规范化斜杠后比较，避免 CI(Linux) 与本地(Windows) 路径分隔符差异
+        assert adapter.host_path_native("projects", "p1").replace("\\", "/") == "D:/Project/lonelycat/workspace/projects/p1"
+        assert adapter.docker_mount_path("projects", "p1").replace("\\", "/") == "D:/Project/lonelycat/workspace/projects/p1"
 
     def test_wsl_mode_uses_workspace_root_wsl(self):
         settings = {
@@ -48,8 +47,8 @@ class TestHostPathAdapter:
         native, docker = adapter.resolve_workspace_root()
         assert native == "/mnt/d/Project/lonelycat/workspace"
         assert docker == "/mnt/d/Project/lonelycat/workspace"
-        assert Path(adapter.host_path_native("projects", "p1")) == Path("/mnt/d/Project/lonelycat/workspace/projects/p1")
-        assert Path(adapter.docker_mount_path("projects", "p1")) == Path("/mnt/d/Project/lonelycat/workspace/projects/p1")
+        assert adapter.host_path_native("projects", "p1").replace("\\", "/") == "/mnt/d/Project/lonelycat/workspace/projects/p1"
+        assert adapter.docker_mount_path("projects", "p1").replace("\\", "/") == "/mnt/d/Project/lonelycat/workspace/projects/p1"
 
     def test_missing_workspace_root_raises(self):
         settings = {"sandbox": {"workspace_root_win": "", "workspace_root_wsl": "", "runtime_mode": "windows"}}
