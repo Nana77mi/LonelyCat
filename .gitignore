@@ -32,6 +32,7 @@ configs/config.yaml
 
 # Debug / scratch (root-level debug docs, PR drafts, check scripts)
 _debug/
+PR_BODY_*.md
 
 # Docker / local data (SQLite, etc.)
 data/
