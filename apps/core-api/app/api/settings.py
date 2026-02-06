@@ -37,9 +37,17 @@ BOCHA_DEFAULT_BASE_URL = "https://api.bochaai.com"
 
 
 def _default_settings() -> Dict[str, Any]:
-    """默认设置（stub、15000；fetch 含 timeout/max_bytes/user_agent 桌面 Chrome）"""
+    """默认设置（stub、15000；fetch 含 timeout/max_bytes/user_agent 桌面 Chrome；sandbox Win/WSL 双栈）"""
     return {
         "version": "settings_v0",
+        "sandbox": {
+            "workspace_root_win": "",  # e.g. D:\\Project\\lonelycat\\workspace
+            "workspace_root_wsl": "",  # e.g. /mnt/d/Project/lonelycat/workspace
+            "runtime_mode": "auto",    # auto | windows | wsl
+            "docker": {
+                "cli_path": "",       # optional, e.g. docker.exe on Windows
+            },
+        },
         "web": {
             "search": {
                 "backend": "stub",
@@ -150,6 +158,19 @@ def _env_settings() -> Dict[str, Any]:
             out.setdefault("web", {}).setdefault("fetch", {})["fetch_delay_seconds"] = delay
         except (TypeError, ValueError):
             pass
+    # sandbox: workspace roots, runtime_mode, docker.cli_path
+    win_root = (os.getenv("SANDBOX_WORKSPACE_ROOT_WIN") or "").strip()
+    if win_root:
+        out.setdefault("sandbox", {})["workspace_root_win"] = win_root
+    wsl_root = (os.getenv("SANDBOX_WORKSPACE_ROOT_WSL") or "").strip()
+    if wsl_root:
+        out.setdefault("sandbox", {})["workspace_root_wsl"] = wsl_root
+    runtime = (os.getenv("SANDBOX_RUNTIME_MODE") or "").strip().lower()
+    if runtime in ("auto", "windows", "wsl"):
+        out.setdefault("sandbox", {})["runtime_mode"] = runtime
+    cli_path = (os.getenv("SANDBOX_DOCKER_CLI_PATH") or "").strip()
+    if cli_path:
+        out.setdefault("sandbox", {}).setdefault("docker", {})["cli_path"] = cli_path
     return out
 
 
@@ -228,6 +249,7 @@ class SettingsUpdateBody(BaseModel):
     """PUT 请求体（白名单字段）"""
     version: str | None = None
     web: Dict[str, Any] | None = None
+    sandbox: Dict[str, Any] | None = None
 
 
 @router.get("", response_model=Dict[str, Any])
@@ -250,6 +272,11 @@ def put_settings(
         current["web"] = _deep_merge(
             current.get("web") or {},
             body.web,
+        )
+    if body.sandbox is not None:
+        current["sandbox"] = _deep_merge(
+            current.get("sandbox") or {},
+            body.sandbox,
         )
     # 持久化：只存用户可编辑部分（可选：存完整 current，便于一致）
     row = db.query(SettingsModel).filter(SettingsModel.key == SETTINGS_KEY).first()
