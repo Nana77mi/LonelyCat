@@ -1,0 +1,57 @@
+{
+  "schema_version": "1.0",
+  "id": "shell.run",
+  "name": "Run Shell Command",
+  "description": "Execute a shell command inside Docker sandbox and return stdout/stderr and artifacts.",
+  "runtime": {
+    "kind": "docker",
+    "image": "lonelycat-sandbox:py312",
+    "entrypoint": "bash"
+  },
+  "interface": {
+    "inputs": {
+      "type": "object",
+      "properties": {
+        "script": { "type": "string", "description": "Shell script content to run." },
+        "timeout_ms": { "type": "integer", "minimum": 1000 }
+      },
+      "required": ["script"]
+    },
+    "outputs": {
+      "type": "object",
+      "properties": {
+        "exit_code": { "type": "integer" },
+        "stdout": { "type": "string" },
+        "stderr": { "type": "string" },
+        "artifacts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Relative paths under artifacts dir."
+        }
+      },
+      "required": ["exit_code", "stdout", "stderr", "artifacts"]
+    }
+  },
+  "permissions": {
+    "fs": {
+      "read": ["inputs/**"],
+      "write": ["work/**", "artifacts/**"]
+    },
+    "net": { "mode": "none" }
+  },
+  "limits": {
+    "timeout_ms": 60000,
+    "memory_mb": 1024,
+    "cpu_cores": 1,
+    "pids": 256,
+    "max_stdout_bytes": 1048576,
+    "max_stderr_bytes": 1048576,
+    "max_artifacts_bytes_total": 52428800
+  },
+  "examples": [
+    {
+      "input": { "script": "echo hello && ls -la /workspace/inputs" },
+      "output_summary": "Print hello and list inputs directory."
+    }
+  ]
+}

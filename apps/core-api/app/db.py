@@ -39,6 +39,14 @@ class RunStatus(str, Enum):
     CANCELED = "canceled"
 
 
+class SandboxExecStatus(str, Enum):
+    """沙箱执行状态枚举"""
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    TIMEOUT = "TIMEOUT"
+    POLICY_DENIED = "POLICY_DENIED"
+
+
 # 数据库配置
 # 默认与 memory 包共享数据库（可通过 LONELYCAT_CORE_API_DB_URL 使用独立数据库）
 # 使用绝对路径，确保 core-api 与 agent-worker 无论从何目录启动都使用同一 DB 文件
@@ -150,6 +158,37 @@ class SettingsModel(Base):
     key = Column(String, primary_key=True, index=True)
     value = Column(JSON, nullable=False)  # SettingsV0 等
     updated_at = Column(DateTime, nullable=False, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+
+
+class SandboxExecRecord(Base):
+    """沙箱执行记录（审计与回放）"""
+    __tablename__ = "sandbox_execs"
+
+    exec_id = Column(String, primary_key=True, index=True)
+    project_id = Column(String, nullable=False, index=True)
+    task_id = Column(String, nullable=True, index=True)
+    conversation_id = Column(String, nullable=True, index=True)
+    skill_id = Column(String, nullable=True, index=True)
+    image = Column(String, nullable=True)
+    cmd = Column(String, nullable=True)
+    args = Column(Text, nullable=True)  # JSON array string
+    cwd = Column(String, nullable=True)
+    env_keys = Column(Text, nullable=True)  # JSON array of keys, no sensitive values
+    policy_snapshot = Column(JSON, nullable=True)
+    status = Column(SQLEnum(SandboxExecStatus), nullable=False, index=True)
+    exit_code = Column(Integer, nullable=True)
+    error_reason = Column(Text, nullable=True)
+    started_at = Column(DateTime, nullable=False)
+    ended_at = Column(DateTime, nullable=True)
+    duration_ms = Column(Integer, nullable=True)
+    artifacts_path = Column(String, nullable=True)
+    stdout_truncated = Column(Boolean, nullable=False, default=False)
+    stderr_truncated = Column(Boolean, nullable=False, default=False)
+
+    __table_args__ = (
+        Index("idx_sandbox_execs_task_id", "task_id"),
+        Index("idx_sandbox_execs_project_id", "project_id"),
+    )
 
 
 def init_db() -> None:
