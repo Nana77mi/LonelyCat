@@ -1,0 +1,85 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SkillManifest",
+  "description": "Sandbox skill manifest (Phase 1). id must match [a-z0-9]+(.[a-z0-9]+)+; runtime.kind=docker; permissions.net.mode=none; fs read/write only inputs/** work/** artifacts/**",
+  "type": "object",
+  "required": ["schema_version", "id", "name", "description", "runtime", "interface", "permissions", "limits"],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.0" },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(\\.[a-z0-9]+)+$",
+      "description": "e.g. shell.run, python.run"
+    },
+    "name": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "runtime": {
+      "type": "object",
+      "required": ["kind", "image", "entrypoint"],
+      "properties": {
+        "kind": { "type": "string", "const": "docker" },
+        "image": { "type": "string", "minLength": 1 },
+        "entrypoint": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "interface": {
+      "type": "object",
+      "required": ["inputs", "outputs"],
+      "properties": {
+        "inputs": { "type": "object", "description": "JSON Schema for inputs" },
+        "outputs": { "type": "object", "description": "JSON Schema for outputs" }
+      },
+      "additionalProperties": true
+    },
+    "permissions": {
+      "type": "object",
+      "required": ["fs", "net"],
+      "properties": {
+        "fs": {
+          "type": "object",
+          "properties": {
+            "read": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Only inputs/** work/** artifacts/** prefixes allowed"
+            },
+            "write": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Only work/** artifacts/** prefixes allowed"
+            }
+          },
+          "additionalProperties": false
+        },
+        "net": {
+          "type": "object",
+          "required": ["mode"],
+          "properties": {
+            "mode": { "type": "string", "const": "none", "description": "Phase 1 only none" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "timeout_ms": { "type": "integer", "minimum": 1000 },
+        "memory_mb": { "type": "integer", "minimum": 1 },
+        "cpu_cores": { "type": "number", "minimum": 0.1 },
+        "pids": { "type": "integer", "minimum": 1 },
+        "max_stdout_bytes": { "type": "integer", "minimum": 0 },
+        "max_stderr_bytes": { "type": "integer", "minimum": 0 },
+        "max_artifacts_bytes_total": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "examples": {
+      "type": "array",
+      "items": { "type": "object" }
+    }
+  },
+  "additionalProperties": true
+}

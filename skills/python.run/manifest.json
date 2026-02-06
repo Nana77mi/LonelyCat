@@ -1,0 +1,58 @@
+{
+  "schema_version": "1.0",
+  "id": "python.run",
+  "name": "Run Python Code",
+  "description": "Execute Python code inside Docker sandbox and return stdout/stderr and artifacts.",
+  "runtime": {
+    "kind": "docker",
+    "image": "lonelycat-sandbox:py312",
+    "entrypoint": "python"
+  },
+  "interface": {
+    "inputs": {
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "description": "Python code to run (e.g. -c)." },
+        "script_path": { "type": "string", "description": "Path under inputs, e.g. main.py." },
+        "timeout_ms": { "type": "integer", "minimum": 1000 }
+      },
+      "required": []
+    },
+    "outputs": {
+      "type": "object",
+      "properties": {
+        "exit_code": { "type": "integer" },
+        "stdout": { "type": "string" },
+        "stderr": { "type": "string" },
+        "artifacts": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Relative paths under artifacts dir."
+        }
+      },
+      "required": ["exit_code", "stdout", "stderr", "artifacts"]
+    }
+  },
+  "permissions": {
+    "fs": {
+      "read": ["inputs/**"],
+      "write": ["work/**", "artifacts/**"]
+    },
+    "net": { "mode": "none" }
+  },
+  "limits": {
+    "timeout_ms": 60000,
+    "memory_mb": 1024,
+    "cpu_cores": 1,
+    "pids": 256,
+    "max_stdout_bytes": 1048576,
+    "max_stderr_bytes": 1048576,
+    "max_artifacts_bytes_total": 52428800
+  },
+  "examples": [
+    {
+      "input": { "code": "print(1)" },
+      "output_summary": "Print 1."
+    }
+  ]
+}
