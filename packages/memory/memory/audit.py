@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy.orm import Session
@@ -72,7 +72,7 @@ class AuditLogger:
                 request_id=request_id,
                 diff_before=diff.before if diff else None,
                 diff_after=diff.after if diff else None,
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc),
             )
             db.add(event_model)
             if not self._use_external_db:

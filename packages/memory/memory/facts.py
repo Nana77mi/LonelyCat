@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import and_, or_
@@ -201,7 +201,7 @@ class MemoryStore:
         db = self._get_db()
         try:
             proposal_id = uuid.uuid4().hex
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             
             proposal_model = ProposalModel(
                 id=proposal_id,
@@ -314,7 +314,7 @@ class MemoryStore:
                 return None
             
             model.status = ProposalStatus.REJECTED
-            model.updated_at = datetime.utcnow()
+            model.updated_at = datetime.now(timezone.utc)
             
             if not self._use_external_db:
                 db.commit()
@@ -358,7 +358,7 @@ class MemoryStore:
                 return None
             
             model.status = ProposalStatus.EXPIRED
-            model.updated_at = datetime.utcnow()
+            model.updated_at = datetime.now(timezone.utc)
             
             if not self._use_external_db:
                 db.commit()
@@ -475,7 +475,7 @@ class MemoryStore:
             
             # 更新 proposal 状态
             proposal_model.status = ProposalStatus.ACCEPTED
-            proposal_model.updated_at = datetime.utcnow()
+            proposal_model.updated_at = datetime.now(timezone.utc)
             
             if not self._use_external_db:
                 db.commit()
@@ -509,7 +509,7 @@ class MemoryStore:
     ) -> Fact:
         """内部方法：创建 Fact"""
         fact_id = uuid.uuid4().hex
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
         fact_model = FactModel(
             id=fact_id,
@@ -567,7 +567,7 @@ class MemoryStore:
         fact_model.source_ref_excerpt = source_excerpt
         if confidence is not None:
             fact_model.confidence = confidence
-        fact_model.updated_at = datetime.utcnow()
+        fact_model.updated_at = datetime.now(timezone.utc)
         
         # 记录审计事件（包含 diff）
         diff = AuditEventDiff(
@@ -689,7 +689,7 @@ class MemoryStore:
                 return None
             
             model.status = FactStatus.REVOKED
-            model.updated_at = datetime.utcnow()
+            model.updated_at = datetime.now(timezone.utc)
             
             if not self._use_external_db:
                 db.commit()
@@ -731,7 +731,7 @@ class MemoryStore:
                 return None
             
             model.status = FactStatus.ARCHIVED
-            model.updated_at = datetime.utcnow()
+            model.updated_at = datetime.now(timezone.utc)
             
             if not self._use_external_db:
                 db.commit()
@@ -773,7 +773,7 @@ class MemoryStore:
                 return None
             
             model.status = FactStatus.ACTIVE
-            model.updated_at = datetime.utcnow()
+            model.updated_at = datetime.now(timezone.utc)
             
             if not self._use_external_db:
                 db.commit()
@@ -800,7 +800,7 @@ class MemoryStore:
         """
         db = self._get_db()
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
             expired_ids = []
             
             # 查询所有 pending 状态的 proposal

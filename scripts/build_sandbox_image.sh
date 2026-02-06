@@ -12,6 +12,6 @@ if [ ! -f "$DOCKERFILE" ]; then
 fi
 cd "$REPO_ROOT"
 
-echo "Building lonelycat-sandbox:py312 from docker/sandbox/Dockerfile ..."
-docker build -f docker/sandbox/Dockerfile -t lonelycat-sandbox:py312 .
-echo "Done. Verify with: docker run --rm lonelycat-sandbox:py312 python -c \"print(1)\""
+echo "Building lonelycat-sandbox:py312 from docker/sandbox/Dockerfile (--platform linux/amd64 --pull --no-cache) ..."
+docker build --platform linux/amd64 --pull --no-cache -f docker/sandbox/Dockerfile -t lonelycat-sandbox:py312 .
+echo "Done. Verify with: docker run --platform linux/amd64 --rm lonelycat-sandbox:py312 python -c \"print(1)\""

@@ -58,7 +58,18 @@ function Start-Bg {
     Write-Host "Started $Name (pid=$($proc.Id)), log: $LogPath"
 }
 
-# Core API
+# Core API（设置 REPO_ROOT；从 .env 注入变量供沙箱等使用）
+$env:REPO_ROOT = $RepoRoot
+$envPath = Join-Path $RepoRoot ".env"
+if (Test-Path $envPath) {
+    Get-Content $envPath -Encoding UTF8 | ForEach-Object {
+        $line = $_.Trim()
+        if ($line -and $line[0] -ne '#' -and $line -match '^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
+            $key, $val = $matches[1], $matches[2].Trim().Trim('"').Trim("'")
+            Set-Item -Path "env:$key" -Value $val -ErrorAction SilentlyContinue
+        }
+    }
+}
 Write-Host "Starting core-api (port $ApiPort)..."
 Start-Bg -Name "core-api" -PidFile $ApiPidFile -LogPath "$PidDir\core-api.log" -EnvPath "packages" -ProcessArgs @(
     "-m", "uvicorn", "app.main:app", "--reload", "--host", "127.0.0.1", "--port", $ApiPort, "--app-dir", "apps/core-api"

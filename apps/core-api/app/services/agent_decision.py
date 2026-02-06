@@ -243,6 +243,7 @@ Decision rules:
 - Use "run" when the user wants a background task and doesn't need immediate response.
 - Use "reply_and_run" when you should acknowledge the request AND start a task.
 - **Research / lookup**: When the user asks to 查/查一下/查下/搜索/查查 (e.g. "帮我查下现在估值最高的公司", "查一下最畅销的手机", "搜索当前某某"), use "run" with type "research_report". Put the user's question or topic in run.input.query (and optionally run.title). Do NOT use "reply" for such lookup requests—they need real-time or factual data via research_report.
+- **Run code**: When the user asks to run/execute code (e.g. "帮我跑这段代码", "执行下面的 Python", "运行这段 shell"), use "run" or "reply_and_run" with type "run_code_snippet". run.input must include: conversation_id (current conversation), language ("python" or "shell"), and for Python use "code" (the code string), for shell use "script" (the script string).
 - Always set conversation_id to the current conversation_id (unless it's a system/automatic task).
 - Only use task types from the whitelist above.
 
@@ -268,10 +269,13 @@ Rules:
 - If decision="reply_and_run": must provide BOTH reply and run
 - conversation_id: use "{conversation_id}" if user is in a conversation, null for system/automatic tasks
 - For research_report: run.input must include "query" with the user's lookup question (e.g. "现在估值最高的公司是哪个")
+- For run_code_snippet: run.input must include conversation_id, language ("python" or "shell"), and code (for python) or script (for shell).
 
 Examples (user -> decision):
 - "帮我查下现在估值最高的公司" -> decision=run, type=research_report, run.input.query="现在估值最高的公司是哪个"
 - "查一下最畅销的手机品牌" -> decision=run, type=research_report, run.input.query="最畅销的手机品牌"
+- "帮我跑这段代码：print(1+1)" -> decision=run, type=run_code_snippet, run.input.conversation_id=current, run.input.language="python", run.input.code="print(1+1)"
+- "执行下面的 shell：echo hello" -> decision=run, type=run_code_snippet, run.input.language="shell", run.input.script="echo hello"
 - "你好" -> decision=reply
 """.format(
             allowed_types=", ".join(AGENT_ALLOWED_RUN_TYPES),

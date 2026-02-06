@@ -15,7 +15,7 @@ from app.api.sandbox import (
     execute_sandbox_body,
     get_db,
 )
-from app.services.skills.loader import load_manifest, list_skills
+from app.services.skills.loader import is_skills_root_configured, load_manifest, list_skills
 
 router = APIRouter(tags=["skills"])
 
@@ -25,8 +25,18 @@ def get_skills_list() -> list:
     """
     列出所有技能（来自 repo 根 skills/ 目录）。供 MCP list_tools 等使用。
     返回每项：id, name, description, runtime, interface, permissions, limits。
+    未配置 skills 根（无 REPO_ROOT/SKILLS_ROOT 且无有效 skills/_schema）时返回 503 并提示。
     """
-    return list_skills()
+    skills_list = list_skills()
+    if not skills_list and not is_skills_root_configured():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "SKILLS_NOT_CONFIGURED",
+                "message": "Skills root not configured. Set REPO_ROOT or SKILLS_ROOT, or run from repo root with skills/_schema/manifest.schema.json present.",
+            },
+        )
+    return skills_list
 
 
 class SkillInvokeBody(BaseModel):

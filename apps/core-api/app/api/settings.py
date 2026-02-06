@@ -171,6 +171,10 @@ def _env_settings() -> Dict[str, Any]:
     cli_path = (os.getenv("SANDBOX_DOCKER_CLI_PATH") or "").strip()
     if cli_path:
         out.setdefault("sandbox", {}).setdefault("docker", {})["cli_path"] = cli_path
+    # core_api_url：worker 从 settings_snapshot 取此 URL 调用 GET /skills、POST /skills/{id}/invoke
+    core_url = (os.getenv("LONELYCAT_CORE_API_URL") or os.getenv("CORE_API_URL") or "").strip()
+    if core_url:
+        out["core_api_url"] = core_url
     return out
 
 

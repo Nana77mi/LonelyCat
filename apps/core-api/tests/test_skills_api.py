@@ -44,13 +44,16 @@ def test_get_skills_list():
             assert "inputs" in s["interface"]
 
 
-def test_get_skills_list_empty_when_no_skills_dir(monkeypatch):
-    """当 skills 目录不存在时返回空列表。"""
+def test_get_skills_list_503_when_not_configured(monkeypatch):
+    """当 skills 根未配置（如 REPO_ROOT 指向无 skills/_schema 的目录）时返回 503 并提示。"""
     monkeypatch.setenv("REPO_ROOT", tempfile.mkdtemp())
+    monkeypatch.delenv("SKILLS_ROOT", raising=False)
     client = TestClient(app)
     r = client.get("/skills")
-    assert r.status_code == 200
-    assert r.json() == []
+    assert r.status_code == 503
+    data = r.json()
+    assert data.get("detail", {}).get("code") == "SKILLS_NOT_CONFIGURED"
+    assert "REPO_ROOT" in str(data.get("detail", {}).get("message", ""))
 
 
 def test_post_skill_invoke_shell_run():

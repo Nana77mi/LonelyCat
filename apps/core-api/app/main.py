@@ -1,4 +1,16 @@
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
+
+# 可选：仅当 LONELYCAT_LOAD_DOTENV=1 时从仓库根加载 .env（生产建议用 up.ps1 等脚本层注入）
+if os.environ.get("LONELYCAT_LOAD_DOTENV", "").strip() == "1":
+    _env_file = Path(__file__).resolve().parent.parent.parent.parent / ".env"
+    if _env_file.exists():
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(_env_file)
+        except Exception:
+            pass
 
 try:
     from fastapi import FastAPI, WebSocket

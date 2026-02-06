@@ -348,6 +348,120 @@ def test_create_run_with_conversation_id(temp_db) -> None:
     assert excinfo.value.status_code == 404
 
 
+# ---------- run_code_snippet input 校验（TDD 会话驱动沙箱跑代码） ----------
+
+
+def test_create_run_run_code_snippet_rejects_missing_conversation_id(temp_db) -> None:
+    """run_code_snippet 缺少 input.conversation_id 时返回 400。"""
+    db, _ = temp_db
+    request = runs.RunCreateRequest(
+        type="run_code_snippet",
+        input={"language": "python", "code": "print(1)"},
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(runs._create_run(request, db))
+    assert excinfo.value.status_code == 400
+    assert "conversation_id" in (excinfo.value.detail or "").lower()
+
+
+def test_create_run_run_code_snippet_rejects_missing_language(temp_db) -> None:
+    """run_code_snippet 缺少 input.language 时返回 400。"""
+    db, _ = temp_db
+    request = runs.RunCreateRequest(
+        type="run_code_snippet",
+        conversation_id="conv-1",
+        input={"conversation_id": "conv-1", "code": "print(1)"},
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(runs._create_run(request, db))
+    assert excinfo.value.status_code == 400
+    assert "language" in (excinfo.value.detail or "").lower()
+
+
+def test_create_run_run_code_snippet_rejects_python_without_code(temp_db) -> None:
+    """run_code_snippet language=python 时缺少 input.code 返回 400。"""
+    db, _ = temp_db
+    request = runs.RunCreateRequest(
+        type="run_code_snippet",
+        conversation_id="conv-1",
+        input={"conversation_id": "conv-1", "language": "python"},
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(runs._create_run(request, db))
+    assert excinfo.value.status_code == 400
+    assert "code" in (excinfo.value.detail or "").lower()
+
+
+def test_create_run_run_code_snippet_rejects_shell_without_script(temp_db) -> None:
+    """run_code_snippet language=shell 时缺少 input.script 返回 400。"""
+    db, _ = temp_db
+    request = runs.RunCreateRequest(
+        type="run_code_snippet",
+        conversation_id="conv-1",
+        input={"conversation_id": "conv-1", "language": "shell"},
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(runs._create_run(request, db))
+    assert excinfo.value.status_code == 400
+    assert "script" in (excinfo.value.detail or "").lower()
+
+
+def test_create_run_run_code_snippet_rejects_invalid_language(temp_db) -> None:
+    """run_code_snippet input.language 非 python/shell 时返回 400。"""
+    db, _ = temp_db
+    request = runs.RunCreateRequest(
+        type="run_code_snippet",
+        conversation_id="conv-1",
+        input={"conversation_id": "conv-1", "language": "ruby", "code": "puts 1"},
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        asyncio.run(runs._create_run(request, db))
+    assert excinfo.value.status_code == 400
+    assert "language" in (excinfo.value.detail or "").lower()
+
+
+def test_create_run_run_code_snippet_accepts_valid_python(temp_db) -> None:
+    """run_code_snippet 合法 python input 可创建 run。"""
+    db, _ = temp_db
+    from app.api import conversations
+    conv_request = conversations.ConversationCreateRequest(title="Test")
+    conv = asyncio.run(conversations._create_conversation(conv_request, db))
+    _commit_db(db)
+    cid = conv["id"]
+    request = runs.RunCreateRequest(
+        type="run_code_snippet",
+        conversation_id=cid,
+        input={"conversation_id": cid, "language": "python", "code": "print(1+1)"},
+    )
+    response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    assert response["type"] == "run_code_snippet"
+    assert response["input"]["language"] == "python"
+    assert response["input"]["code"] == "print(1+1)"
+    assert response["input"]["conversation_id"] == cid
+
+
+def test_create_run_run_code_snippet_accepts_valid_shell(temp_db) -> None:
+    """run_code_snippet 合法 shell input 可创建 run。"""
+    db, _ = temp_db
+    from app.api import conversations
+    conv_request = conversations.ConversationCreateRequest(title="Test")
+    conv = asyncio.run(conversations._create_conversation(conv_request, db))
+    _commit_db(db)
+    cid = conv["id"]
+    request = runs.RunCreateRequest(
+        type="run_code_snippet",
+        conversation_id=cid,
+        input={"conversation_id": cid, "language": "shell", "script": "echo hello"},
+    )
+    response = asyncio.run(runs._create_run(request, db))
+    _commit_db(db)
+    assert response["type"] == "run_code_snippet"
+    assert response["input"]["language"] == "shell"
+    assert response["input"]["script"] == "echo hello"
+    assert response["input"]["conversation_id"] == cid
+
+
 def test_create_run_injects_trace_id_when_missing(temp_db) -> None:
     """创建 run 时若 input 无 trace_id，则自动写入 32 位 hex trace_id。"""
     db, _ = temp_db

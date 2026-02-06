@@ -1,5 +1,6 @@
 """Tests for ToolCatalog and ToolRuntime: args/result preview, step name tool.{name}."""
 
+import os
 from unittest.mock import Mock
 
 import pytest
@@ -10,8 +11,9 @@ from worker.tools.catalog import get_default_catalog
 from worker.tools.runtime import ToolNotFoundError, _preview
 
 
-def test_catalog_get_and_list():
+def test_catalog_get_and_list(monkeypatch):
     """默认 catalog 含 WebProvider，web.search 由 web 提供；list_tools 含 web.search/web.fetch/text.summarize。"""
+    monkeypatch.setenv("SKILLS_LIST_FALLBACK", "1")  # CI 无 core-api 时 SkillsProvider 返回占位不抛错
     catalog = get_default_catalog()
     meta = catalog.get("web.search")
     assert meta is not None
@@ -80,8 +82,9 @@ def test_runtime_invoke_web_fetch():
     assert steps[0]["meta"].get("risk_level") == "read_only"
 
 
-def test_runtime_unknown_tool_raises_tool_not_found_error():
+def test_runtime_unknown_tool_raises_tool_not_found_error(monkeypatch):
     """Tool 不存在时抛出 ToolNotFoundError，error.code 稳定。"""
+    monkeypatch.setenv("SKILLS_LIST_FALLBACK", "1")  # CI 无 core-api 时 catalog.get/list_tools 不因 SkillsProvider 抛错
     run = Mock()
     run.input_json = {}
     ctx = TaskContext(run, "test")

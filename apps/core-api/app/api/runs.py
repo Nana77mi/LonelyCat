@@ -36,6 +36,43 @@ class RunCreateRequest(BaseModel):
     parent_run_id: Optional[str] = None  # 父 run ID（用于追踪重试关系）
 
 
+def _validate_run_code_snippet_input(request: RunCreateRequest) -> None:
+    """run_code_snippet 类型时校验 input 含 conversation_id、language、code/script。"""
+    inp = request.input or {}
+    conv_id = inp.get("conversation_id")
+    if not (isinstance(conv_id, str) and conv_id.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="run_code_snippet requires input.conversation_id (non-empty string)",
+        )
+    lang = inp.get("language")
+    if not isinstance(lang, str):
+        raise HTTPException(
+            status_code=400,
+            detail="run_code_snippet requires input.language (python or shell)",
+        )
+    lang = lang.strip().lower()
+    if lang not in ("python", "shell"):
+        raise HTTPException(
+            status_code=400,
+            detail="run_code_snippet requires input.language to be 'python' or 'shell'",
+        )
+    if lang == "python":
+        code = inp.get("code")
+        if code is None or (isinstance(code, str) and not code.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="run_code_snippet with language=python requires non-empty input.code",
+            )
+    else:
+        script = inp.get("script")
+        if script is None or (isinstance(script, str) and not script.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="run_code_snippet with language=shell requires non-empty input.script",
+            )
+
+
 class RunResponse(BaseModel):
     """Run 响应"""
     id: str
@@ -116,6 +153,9 @@ def _serialize_run(run: RunModel) -> Dict[str, Any]:
 
 async def _create_run(request: RunCreateRequest, db: Session) -> Dict[str, Any]:
     """创建新 Run（内部函数，便于测试）"""
+    if (request.type or "").strip().replace(" ", "_") == "run_code_snippet":
+        _validate_run_code_snippet_input(request)
+
     run_id = str(uuid.uuid4())
     now = datetime.now(UTC)
     

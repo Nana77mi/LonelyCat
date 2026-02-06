@@ -251,7 +251,12 @@ def test_default_catalog_factory_with_mcp_servers_json_registers_multiple_server
         {"name": "srv1", "cmd": _echo_server_cmd(), "cwd": None},
         {"name": "srv2", "cmd": _echo_server_cmd(), "cwd": None},
     ])
-    with patch.dict(os.environ, {"MCP_SERVERS_JSON": servers_json}, clear=False):
+    # CI 无 core-api：令 _skills_base_url 为空以便不注册 SkillsProvider，避免 list_tools 时 GET /skills 抛错
+    with patch.dict(
+        os.environ,
+        {"MCP_SERVERS_JSON": servers_json, "LONELYCAT_CORE_API_URL": " ", "CORE_API_URL": " "},
+        clear=False,
+    ):
         catalog = catalog_mod._default_catalog_factory()
     try:
         order = catalog._preferred_provider_order

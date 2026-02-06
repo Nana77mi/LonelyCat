@@ -24,13 +24,29 @@ def _find_repo_root() -> Path | None:
     return None
 
 
+def _schema_sentinel(skills_dir: Path) -> bool:
+    """skills 目录有效的标志：存在 _schema/manifest.schema.json（不依赖具体 skill 如 python.run）。"""
+    return (skills_dir / "_schema" / "manifest.schema.json").is_file()
+
+
+def _find_skills_root_from_cwd() -> Path | None:
+    """从 cwd 向上查找含 skills/_schema/manifest.schema.json 的目录，返回该 skills 路径。"""
+    anchor = Path(os.getcwd()).resolve()
+    for parent in [anchor, *anchor.parents]:
+        skills_dir = parent / "skills"
+        if _schema_sentinel(skills_dir):
+            return skills_dir
+    return None
+
+
 def get_skills_root() -> Path:
     """
     Skills 目录解析顺序：
     1) 环境变量 REPO_ROOT → <REPO_ROOT>/skills
-    2) 环境变量 SKILLS_ROOT → 直接作为 skills 目录（可指向 skills 目录本身）
-    3) 从当前文件向上找 .git 或 pyproject.toml 作为 repo 根 → <repo_root>/skills
-    4) 最后 fallback 到 cwd/skills
+    2) 环境变量 SKILLS_ROOT → 直接作为 skills 目录
+    3) 从当前文件向上找 .git 或 pyproject.toml 作为 repo 根 → <repo_root>/skills（若该路径有 _schema 则采用）
+    4) 从 cwd 向上找含 skills/_schema/manifest.schema.json 的目录
+    5) 最后 fallback 到 cwd/skills
     """
     if os.environ.get("SKILLS_ROOT"):
         return Path(os.environ["SKILLS_ROOT"]).resolve()
@@ -38,12 +54,23 @@ def get_skills_root() -> Path:
         return Path(os.environ["REPO_ROOT"]).resolve() / "skills"
     repo = _find_repo_root()
     if repo is not None:
-        return repo / "skills"
+        candidate = repo / "skills"
+        if _schema_sentinel(candidate):
+            return candidate
+    from_cwd = _find_skills_root_from_cwd()
+    if from_cwd is not None:
+        return from_cwd
     return Path(os.getcwd()).resolve() / "skills"
 
 
 def _get_schema_path() -> Path:
     return get_skills_root() / "_schema" / "manifest.schema.json"
+
+
+def is_skills_root_configured() -> bool:
+    """skills 根目录是否已有效配置：目录存在且存在 _schema/manifest.schema.json。"""
+    root = get_skills_root()
+    return root.is_dir() and _schema_sentinel(root)
 
 
 def _load_schema() -> dict[str, Any] | None:
