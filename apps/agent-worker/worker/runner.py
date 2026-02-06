@@ -16,7 +16,7 @@ from worker.db import RunModel
 from worker.db_models import MessageModel, MessageRole
 from worker.task_context import TaskContext, run_task_with_steps
 from worker.tools import ToolRuntime
-from worker.tools.catalog import build_catalog_from_settings
+from worker.tools.catalog import build_catalog_from_settings, get_default_catalog
 from worker.tools.web_backends.errors import WebBlockedError, WebParseError
 
 
@@ -116,6 +116,8 @@ class TaskRunner:
             return self._handle_edit_docs_apply(run, db, heartbeat_callback)
         elif run_type == "edit_docs_cancel":
             return self._handle_edit_docs_cancel(run, db, heartbeat_callback)
+        elif run_type == "run_code_snippet":
+            return self._handle_run_code_snippet(run, heartbeat_callback)
         else:
             raise ValueError(f"Unknown task type: {run.type}")
 
@@ -556,6 +558,62 @@ class TaskRunner:
                 ctx.artifacts["canceled"] = True
 
         return run_task_with_steps(run, "edit_docs_cancel", body)
+
+    def _handle_run_code_snippet(
+        self,
+        run: RunModel,
+        heartbeat_callback: Callable[[], bool],
+    ) -> Dict[str, Any]:
+        """PR6: run_code_snippet — language+code/script → 调用 skill.python.run / skill.shell.run，收集 exec 结果。"""
+        input_json = run.input_json or {}
+        if not isinstance(input_json, dict):
+            raise ValueError("input_json must be a dict")
+        conversation_id = input_json.get("conversation_id")
+        if not conversation_id or not isinstance(conversation_id, str):
+            raise ValueError("input_json['conversation_id'] must be a non-empty string")
+        conversation_id = conversation_id.strip()
+        if not conversation_id:
+            raise ValueError("input_json['conversation_id'] must be a non-empty string")
+        language = (input_json.get("language") or "python").strip().lower()
+        code = input_json.get("code")
+        script = input_json.get("script")
+        if language == "python":
+            if code is None or (isinstance(code, str) and not code.strip()):
+                raise ValueError("input_json['code'] required for language=python")
+            tool_name = "skill.python.run"
+            args = {"project_id": conversation_id, "code": code if isinstance(code, str) else str(code)}
+        elif language == "shell":
+            if script is None or (isinstance(script, str) and not script.strip()):
+                raise ValueError("input_json['script'] required for language=shell")
+            tool_name = "skill.shell.run"
+            args = {"project_id": conversation_id, "script": script if isinstance(script, str) else str(script)}
+        else:
+            raise ValueError("input_json['language'] must be 'python' or 'shell'")
+        if input_json.get("timeout_ms") is not None:
+            args["timeout_ms"] = int(input_json["timeout_ms"])
+
+        snapshot = input_json.get("settings_snapshot")
+        catalog = build_catalog_from_settings(snapshot) if snapshot is not None else get_default_catalog()
+        try:
+            runtime = ToolRuntime(catalog=catalog)
+
+            def body(ctx: TaskContext) -> None:
+                with ctx.step(f"tool.{tool_name}") as step_meta:
+                    if not heartbeat_callback():
+                        raise RuntimeError("Heartbeat failed")
+                    out = runtime.invoke(ctx, tool_name, args)
+                    step_meta["provider_id"] = "skills"
+                    step_meta["args_preview"] = {k: (v[:200] + "..." if isinstance(v, str) and len(v) > 200 else v) for k, v in args.items()}
+                    step_meta["result_preview"] = out
+                    ctx.result["exec_id"] = out.get("exec_id")
+                    ctx.result["status"] = out.get("status")
+                    ctx.result["exit_code"] = out.get("exit_code")
+                    ctx.result["artifacts_dir"] = out.get("artifacts_dir")
+                    ctx.artifacts["exec"] = out
+            return run_task_with_steps(run, "run_code_snippet", body)
+        finally:
+            if catalog is not None and snapshot is not None:
+                catalog.close_providers()
 
     def _handle_summarize_conversation(
         self,

@@ -1,6 +1,6 @@
 """防线：所有任务 output 必须包含 version/task_type/trace_id/steps/artifacts（测试层）。"""
 
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -9,12 +9,16 @@ from protocol.run_constants import is_valid_trace_id
 from agent_worker.llm.stub import StubLLM
 from worker.db_models import MessageRole
 from worker.runner import TaskRunner
+from worker.tools.catalog import ToolCatalog
+from worker.tools.provider import BuiltinProvider, StubProvider
+from worker.tools.skills_provider import SkillsProvider
 
 # 与 core-api DEFAULT_ALLOWED_RUN_TYPES 对齐，至少包含已迁移到 task_result_v0 的类型
 ALLOWED_RUN_TYPES = [
     "sleep",
     "summarize_conversation",
     "research_report",
+    "run_code_snippet",
     "edit_docs_propose",
     "edit_docs_apply",
     "edit_docs_cancel",
@@ -125,12 +129,45 @@ def test_edit_docs_cancel_output_has_schema():
     _assert_task_result_v0_schema(result, "edit_docs_cancel")
 
 
+def test_run_code_snippet_output_has_schema():
+    """run_code_snippet 的 output 符合 task_result_v0。"""
+    runner = TaskRunner()
+    run = Mock()
+    run.input_json = {
+        "conversation_id": "c1",
+        "language": "python",
+        "code": "print(1)",
+        "settings_snapshot": {},
+    }
+    run.type = "run_code_snippet"
+    run.id = "r1"
+    run.title = None
+    client = Mock()
+    client.get.return_value.status_code = 200
+    client.get.return_value.json.return_value = [
+        {"id": "python.run", "name": "Run Python", "interface": {"inputs": {}}, "limits": {}},
+    ]
+    client.post.return_value.status_code = 200
+    client.post.return_value.json.return_value = {"exec_id": "e1", "status": "SUCCEEDED", "exit_code": 0}
+    catalog = ToolCatalog(preferred_provider_order=["skills", "builtin", "stub"])
+    catalog.register_provider("skills", SkillsProvider(base_url="http://x", client=client))
+    catalog.register_provider("builtin", BuiltinProvider())
+    catalog.register_provider("stub", StubProvider())
+    try:
+        with patch("worker.runner.build_catalog_from_settings", return_value=catalog):
+            result = runner._handle_run_code_snippet(run, lambda: True)
+    finally:
+        catalog.close_providers()
+    _assert_task_result_v0_schema(result, "run_code_snippet")
+
+
 def test_all_allowed_run_types_have_schema_test():
     """确保 ALLOWED_RUN_TYPES 中每类都有对应的 schema 断言（本文件内通过各 test_*_output_has_schema 覆盖）。"""
     covered = {
         "sleep",
         "summarize_conversation",
         "research_report",
+        "run_code_snippet",
         "edit_docs_propose",
         "edit_docs_apply",
         "edit_docs_cancel",
