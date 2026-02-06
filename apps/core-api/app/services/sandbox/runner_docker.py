@@ -67,6 +67,38 @@ def _policy_from_settings(settings: dict) -> SandboxPolicy:
     return p
 
 
+def _merge_manifest_limits(base: SandboxPolicy, limits: dict | None) -> SandboxPolicy:
+    """合并 skill manifest limits；base 为 hard-cap，limits 只能更严格。"""
+    if not limits:
+        return base
+    p = SandboxPolicy(
+        net_mode=base.net_mode,
+        timeout_ms=base.timeout_ms,
+        max_stdout_bytes=base.max_stdout_bytes,
+        max_stderr_bytes=base.max_stderr_bytes,
+        max_artifacts_bytes_total=base.max_artifacts_bytes_total,
+        memory_mb=base.memory_mb,
+        cpu_cores=base.cpu_cores,
+        pids=base.pids,
+        max_concurrent_execs=base.max_concurrent_execs,
+    )
+    if isinstance(limits.get("timeout_ms"), (int, float)) and 1000 <= limits["timeout_ms"] <= base.timeout_ms:
+        p.timeout_ms = int(limits["timeout_ms"])
+    if isinstance(limits.get("memory_mb"), (int, float)) and 1 <= limits["memory_mb"] <= base.memory_mb:
+        p.memory_mb = int(limits["memory_mb"])
+    if isinstance(limits.get("cpu_cores"), (int, float)) and 0.1 <= limits["cpu_cores"] <= base.cpu_cores:
+        p.cpu_cores = float(limits["cpu_cores"])
+    if isinstance(limits.get("pids"), (int, float)) and 1 <= limits["pids"] <= base.pids:
+        p.pids = int(limits["pids"])
+    if isinstance(limits.get("max_stdout_bytes"), (int, float)) and 0 <= limits["max_stdout_bytes"] <= base.max_stdout_bytes:
+        p.max_stdout_bytes = int(limits["max_stdout_bytes"])
+    if isinstance(limits.get("max_stderr_bytes"), (int, float)) and 0 <= limits["max_stderr_bytes"] <= base.max_stderr_bytes:
+        p.max_stderr_bytes = int(limits["max_stderr_bytes"])
+    if isinstance(limits.get("max_artifacts_bytes_total"), (int, float)) and 0 <= limits["max_artifacts_bytes_total"] <= base.max_artifacts_bytes_total:
+        p.max_artifacts_bytes_total = int(limits["max_artifacts_bytes_total"])
+    return p
+
+
 def _merge_policy_overrides(base: SandboxPolicy, overrides: dict | None) -> SandboxPolicy:
     """合并请求 overrides；base 为 hard-cap，overrides 只能更严格（更小 timeout/内存等）。"""
     if not overrides:
@@ -219,6 +251,8 @@ def run_sandbox_exec(settings: dict, req: SandboxExecRequest, exec_id: str | Non
     """
     # Policy
     base_policy = _policy_from_settings(settings)
+    if req.manifest_limits:
+        base_policy = _merge_manifest_limits(base_policy, req.manifest_limits)
     policy = _merge_policy_overrides(base_policy, req.policy_overrides)
     _validate_exec_kind_command(req)
 

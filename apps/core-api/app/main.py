@@ -1,3 +1,5 @@
+from contextlib import asynccontextmanager
+
 try:
     from fastapi import FastAPI, WebSocket
     from fastapi.middleware.cors import CORSMiddleware
@@ -13,7 +15,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in offline tests
             raise NotImplementedError
 
     class FastAPI:  # type: ignore[no-redef]
-        def __init__(self, title: str | None = None) -> None:
+        def __init__(self, title: str | None = None, **kwargs: object) -> None:
             self.title = title
 
         def get(self, path: str):
@@ -44,6 +46,7 @@ from app.api.memory import router as memory_router
 from app.api.runs import router as runs_router
 from app.api.sandbox import router as sandbox_router
 from app.api.settings import router as settings_router, get_current_settings
+from app.api.skills import router as skills_router
 from app.db import SessionLocal, init_db as init_core_db
 from app.settings import Settings
 
@@ -51,23 +54,8 @@ from app.settings import Settings
 init_core_db()
 
 settings = Settings()
-app = FastAPI(title=settings.app_name)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:8000", "http://localhost:8001"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-app.include_router(memory_router, prefix="/memory", tags=["memory"])
-app.include_router(conversations_router, prefix="/conversations", tags=["conversations"])
-app.include_router(runs_router, prefix="/runs", tags=["runs"])
-app.include_router(settings_router, prefix="/settings", tags=["settings"])
-app.include_router(sandbox_router, prefix="/sandbox")
-app.include_router(internal_router)  # 内部 API，无需 prefix（已在 router 中定义）
 
 
-@app.on_event("startup")
 def _startup_sandbox_docker_log() -> None:
     """启动时输出 docker context 与 docker info 摘要到日志（PR1.5 Win/WSL 联调）。"""
     try:
@@ -82,6 +70,29 @@ def _startup_sandbox_docker_log() -> None:
             db.close()
     except Exception as e:
         print(f"[sandbox] startup docker log skipped: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    _startup_sandbox_docker_log()
+    yield
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:8000", "http://localhost:8001"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.include_router(memory_router, prefix="/memory", tags=["memory"])
+app.include_router(conversations_router, prefix="/conversations", tags=["conversations"])
+app.include_router(runs_router, prefix="/runs", tags=["runs"])
+app.include_router(settings_router, prefix="/settings", tags=["settings"])
+app.include_router(sandbox_router, prefix="/sandbox")
+app.include_router(skills_router, prefix="/skills")
+app.include_router(internal_router)  # 内部 API，无需 prefix（已在 router 中定义）
 
 
 @app.get("/health")
