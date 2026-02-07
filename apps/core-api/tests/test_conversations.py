@@ -1628,8 +1628,11 @@ def test_agent_loop_run_code_snippet_injects_conversation_id_into_input(temp_db,
             reason="User asked to run code",
         )
 
+        # 开启 agent_decision 以得到 decision="run"；关闭编排以走“直接创建 run_code_snippet”分支，验证 input 缺 conversation_id 时会被补全
     monkeypatch.setattr(conversations, "AGENT_LOOP_ENABLED", True)
+    monkeypatch.setattr(conversations, "USE_ORCHESTRATION_FOR_RUN_CODE_SNIPPET", False)
     monkeypatch.setattr(conversations, "AGENT_DECISION_AVAILABLE", True)
+
     with patch("app.api.conversations.AgentDecision") as mock_agent_decision_class:
         mock_agent_decision = MagicMock()
         mock_agent_decision.decide = MagicMock(side_effect=mock_decide)

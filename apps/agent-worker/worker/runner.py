@@ -63,6 +63,9 @@ class TaskRunner:
         db: Session,
         llm: BaseLLM,
         heartbeat_callback: Callable[[], bool],
+        *,
+        worker_id: Optional[str] = None,
+        lease_seconds: int = 60,
     ) -> Dict[str, Any]:
         """执行任务
         
@@ -74,6 +77,8 @@ class TaskRunner:
             db: 数据库会话
             llm: LLM 实例
             heartbeat_callback: 心跳回调函数，返回 True 表示续租成功，False 表示失败
+            worker_id: 可选，agent_loop_turn 时用于创建子 run（避免被其他 worker 抢占）
+            lease_seconds: 可选，与 worker_id 配合使用
             
         Returns:
             任务执行结果（必须含 ok 字段）
@@ -120,6 +125,12 @@ class TaskRunner:
             return self._handle_edit_docs_cancel(run, db, heartbeat_callback)
         elif run_type == "run_code_snippet":
             return self._handle_run_code_snippet(run, heartbeat_callback)
+        elif run_type == "agent_loop_turn":
+            return self._handle_agent_loop_turn(
+                run, db, llm, heartbeat_callback,
+                worker_id=worker_id,
+                lease_seconds=lease_seconds,
+            )
         else:
             raise ValueError(f"Unknown task type: {run.type}")
 
@@ -757,6 +768,93 @@ class TaskRunner:
         finally:
             if catalog is not None and snapshot is not None:
                 catalog.close_providers()
+
+    def _handle_agent_loop_turn(
+        self,
+        run: RunModel,
+        db: Session,
+        llm: BaseLLM,
+        heartbeat_callback: Callable[[], bool],
+        *,
+        worker_id: Optional[str] = None,
+        lease_seconds: int = 60,
+    ) -> Dict[str, Any]:
+        """agent_loop_turn：单步推进状态机。调用 orchestration-step；若 reply 则返回完成；若 create_run 则标准创建子 run 并 yield，由子 run 完成后唤醒父 run。"""
+        base_url = os.getenv("CORE_API_URL", "http://localhost:5173").rstrip("/")
+        step_url = f"{base_url}/internal/runs/{run.id}/orchestration-step"
+        runs_url = f"{base_url}/runs"
+        yield_url = f"{base_url}/internal/runs/{run.id}/yield-waiting-child"
+
+        inp = run.input_json or {}
+        step_index = inp.get("step_index", 0)
+        previous_output_json = inp.get("previous_output_json")
+        run_ids_so_far: List[str] = list(inp.get("run_ids") or [])
+
+        try:
+            if not heartbeat_callback():
+                return {"ok": False, "error": "Heartbeat failed"}
+            with httpx.Client(timeout=60.0) as client:
+                step_resp = client.post(
+                    step_url,
+                    json={"step_index": step_index, "previous_output_json": previous_output_json},
+                )
+            if step_resp.status_code != 200:
+                return {
+                    "ok": False,
+                    "error": f"orchestration-step returned {step_resp.status_code}: {step_resp.text[:500]}",
+                }
+            step_data = step_resp.json()
+            action = step_data.get("action")
+            if action == "reply":
+                final_reply = step_data.get("final_reply") or "任务已完成"
+                return {
+                    "ok": True,
+                    "final_reply": final_reply,
+                    "run_ids": run_ids_so_far,
+                }
+            if action == "wait":
+                return {"ok": True, "yielded": True}
+            if action != "create_run":
+                return {
+                    "ok": True,
+                    "final_reply": "任务已完成",
+                    "run_ids": run_ids_so_far,
+                }
+            run_request = step_data.get("run_request")
+            if not run_request:
+                return {"ok": False, "error": "orchestration-step create_run missing run_request"}
+            with httpx.Client(timeout=30.0) as client:
+                create_resp = client.post(runs_url, json=run_request)
+            if create_resp.status_code != 200:
+                return {
+                    "ok": False,
+                    "error": f"POST /runs returned {create_resp.status_code}: {create_resp.text[:500]}",
+                }
+            create_data = create_resp.json()
+            run_obj = create_data.get("run") or create_data
+            child_run_id = run_obj.get("id") if isinstance(run_obj, dict) else None
+            if not child_run_id:
+                return {"ok": False, "error": "POST /runs did not return run.id"}
+            new_run_ids = run_ids_so_far + [child_run_id]
+            with httpx.Client(timeout=10.0) as client:
+                yield_resp = client.post(
+                    yield_url,
+                    json={
+                        "child_run_id": child_run_id,
+                        "step_index": step_index,
+                        "run_ids": new_run_ids,
+                    },
+                )
+            if yield_resp.status_code != 204:
+                return {
+                    "ok": False,
+                    "error": f"yield-waiting-child returned {yield_resp.status_code}: {yield_resp.text[:500]}",
+                }
+            return {"ok": True, "yielded": True}
+        except httpx.RequestError as e:
+            return {"ok": False, "error": f"Request to core-api failed: {e}"}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
     def _handle_summarize_conversation(
         self,

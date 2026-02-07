@@ -78,9 +78,10 @@ def fetch_runnable_candidate(db: Session, now: datetime) -> Optional[str]:
     1. status = 'queued'
     2. status = 'running' AND lease_expires_at < now (租约过期，可接管)
     
-    排除 canceled 状态（终态，不应被执行）
+    排除 canceled 状态（终态，不应被执行）。
+    仅拉取 QUEUED 与过期 RUNNING，不拉取 WAITING_CHILD（父在等子完成时不可被拉取）。
     
-    排序：先 queued，再过期 running，按 created_at ASC（公平）
+    排序：先 queued，再过期 running，按 created_at ASC（FIFO，避免后创建的 child 先跑）。
     
     Args:
         db: 数据库会话

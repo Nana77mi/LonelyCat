@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { Run } from "../api/runs";
 import { formatTime } from "../utils/time";
 import { RunDetailsDrawer } from "./RunDetailsDrawer";
@@ -15,6 +15,10 @@ type RunsPanelProps = {
   onCancelRun?: (runId: string) => void;
   onApplyEditDocs?: (run: Run) => void;
   onCancelEditDocs?: (run: Run) => void;
+  /** When set, open the drawer for this run (e.g. from chat "查看输出"). */
+  runIdToOpen?: string | null;
+  /** Called when the run details drawer is closed. */
+  onDrawerClose?: () => void;
 };
 
 export const RunsPanel = ({
@@ -28,9 +32,18 @@ export const RunsPanel = ({
   onCancelRun,
   onApplyEditDocs,
   onCancelEditDocs,
+  runIdToOpen,
+  onDrawerClose,
 }: RunsPanelProps) => {
   const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
   const [selectedRun, setSelectedRun] = useState<Run | null>(null);
+
+  useEffect(() => {
+    if (runIdToOpen) {
+      const run = runs.find((r) => r.id === runIdToOpen) ?? null;
+      setSelectedRun(run);
+    }
+  }, [runIdToOpen, runs]);
 
   const toggleErrorExpansion = (runId: string) => {
     setExpandedErrors((prev) => {
@@ -264,7 +277,10 @@ export const RunsPanel = ({
       </div>
       <RunDetailsDrawer
         run={selectedRun}
-        onClose={() => setSelectedRun(null)}
+        onClose={() => {
+          setSelectedRun(null);
+          onDrawerClose?.();
+        }}
         onRetryRun={onRetryRun}
         onApplyEditDocs={onApplyEditDocs}
         onCancelEditDocs={onCancelEditDocs}

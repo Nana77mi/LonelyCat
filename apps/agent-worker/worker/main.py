@@ -106,8 +106,12 @@ def execute_with_heartbeat(
         from agent_worker.llm.factory import build_llm_from_env
         llm = build_llm_from_env()
         
-        # 执行任务
-        result = runner.execute(run, db, llm, heartbeat_callback)
+        # 执行任务（agent_loop_turn 需要 worker_id/lease_seconds 以便在进程内执行子 run）
+        result = runner.execute(
+            run, db, llm, heartbeat_callback,
+            worker_id=worker_id,
+            lease_seconds=lease_seconds,
+        )
         return result
     finally:
         db.close()
@@ -202,6 +206,9 @@ def run_worker() -> None:
                         _error_to_str(result.get("error")),
                         output_json=result,
                     )
+                elif result.get("yielded"):
+                    # agent_loop_turn 已通过 yield-waiting-child 将父 run 置为 QUEUED，不调用 complete_success
+                    print(f"Run {run.id} yielded (waiting for child), parent re-queued")
                 else:
                     print(f"Run {run.id} completed successfully")
                     complete_success(db, run.id, result)

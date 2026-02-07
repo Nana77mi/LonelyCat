@@ -30,6 +30,7 @@ const App = () => {
   const [runs, setRuns] = useState<Run[]>([]);
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState<string | null>(null);
+  const [runIdToOpenForDrawer, setRunIdToOpenForDrawer] = useState<string | null>(null);
   const [memoryDrawerOpen, setMemoryDrawerOpen] = useState(false);
   const [settingsDrawerOpen, setSettingsDrawerOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -117,8 +118,18 @@ const App = () => {
     loadRuns();
   }, [conversationId, location.pathname]);
 
+  // 兜底：消息列表末尾已是 assistant 时关闭“发送中”loading，避免三个点残留（含 2s 刷新后的更新）
+  useEffect(() => {
+    if (!loading) return;
+    if (messages.length > 0 && messages[messages.length - 1].role === "assistant") {
+      setLoading(false);
+    }
+  }, [loading, messages]);
+
   // 当前展示的对话 id（用于轮询/延迟刷新时只更新“当前对话”的消息，避免切对话后旧请求覆盖）
   const currentConvIdRef = useRef<string | null>(null);
+  /** 本轮发送的 client_turn_id；用于丢弃迟到/错轮的响应，避免“上一轮超时”插进下一轮 */
+  const pendingTurnIdRef = useRef<string | null>(null);
   // 轮询 runs（持续轮询，有活跃任务时 2 秒一次，无活跃任务时 5 秒一次，不停止）
   const pollingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const previousRunsRef = useRef<Run[]>([]); // 保存上一次的 runs 状态，用于检测状态变化
@@ -345,10 +356,22 @@ const App = () => {
       }
 
       setLoading(true);
+      const turnId = crypto.randomUUID();
+      pendingTurnIdRef.current = turnId;
 
       try {
-        // A3.2: 调用真实的 sendMessage API
-        const response = await sendMessage(targetConversationId!, content);
+        // A3.2: 调用真实的 sendMessage API（带 client_turn_id 做轮次隔离）
+        const response = await sendMessage(targetConversationId!, content, { client_turn_id: turnId });
+
+        // 轮次隔离：若响应对应的不是当前 pending 轮次，丢弃，避免“上一轮超时”插进下一轮
+        const responseTurnId =
+          response.assistant_message?.meta_json && typeof response.assistant_message.meta_json === "object"
+            ? (response.assistant_message.meta_json as Record<string, unknown>).client_turn_id as string | undefined
+            : undefined;
+        if (pendingTurnIdRef.current != null && responseTurnId !== undefined && responseTurnId !== pendingTurnIdRef.current) {
+          setLoading(false);
+          return;
+        }
 
         // 检查更新前的消息数量（排除临时消息），用于判断是否需要更新标题
         const previousMessageCount = messages.filter((msg) => msg.id !== tempId && !msg.meta_json?.optimistic).length;
@@ -389,6 +412,9 @@ const App = () => {
 
           return allMessages;
         });
+
+        // 收到响应并合并消息后立即关闭 loading，避免“三个点”打字指示器残留
+        setLoading(false);
 
         // 立即刷新任务列表（Agent Decision 可能创建了新的 run），并确保轮询在跑
         if (targetConversationId) {
@@ -693,13 +719,20 @@ const App = () => {
                     messages={messages} 
                     onSendMessage={handleSendMessage} 
                     loading={loading || messagesLoading}
+                    runs={runs}
+                    onOpenRunDetails={conversationId ? (runId) => setRunIdToOpenForDrawer(runId) : undefined}
                   />
                 }
               />
               <Route
                 path="/"
                 element={
-                  <ChatPage messages={messages} onSendMessage={handleSendMessage} loading={loading} />
+                  <ChatPage
+                    messages={messages}
+                    onSendMessage={handleSendMessage}
+                    loading={loading}
+                    runs={[]}
+                  />
                 }
               />
               <Route path="/memory" element={<MemoryPage />} />
@@ -720,6 +753,8 @@ const App = () => {
               onCancelRun={handleCancelRun}
               onApplyEditDocs={handleApplyEditDocs}
               onCancelEditDocs={handleCancelEditDocs}
+              runIdToOpen={runIdToOpenForDrawer}
+              onDrawerClose={() => setRunIdToOpenForDrawer(null)}
             />
           ) : undefined
         }
