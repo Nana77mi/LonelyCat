@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
@@ -371,3 +372,250 @@ def test_sandbox_health_probe_param(temp_db_and_workspace):
         assert isinstance(d3.get("probe_error"), str) and len(d3["probe_error"]) > 0
     finally:
         app.dependency_overrides.pop(get_db, None)
+
+# ===== PR-1: stdout/stderr/observation endpoints =====
+
+
+@contextmanager
+def temp_db_and_workspace_with_output():
+    """创建包含 stdout/stderr 文件的测试环境（独立 fixture）"""
+    fd, db_path = tempfile.mkstemp(suffix=".db")
+    os.close(fd)
+    root = tempfile.mkdtemp(prefix="lc_sandbox_pr1_")
+    try:
+        engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+        Base.metadata.create_all(bind=engine)
+        Session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        db = Session()
+        # 默认 settings，workspace 指向 temp 目录
+        settings_value = {
+            "version": "settings_v0",
+            "sandbox": {
+                "workspace_root_win": root,
+                "workspace_root_wsl": root,
+                "runtime_mode": "windows",
+            },
+        }
+        db.add(SettingsModel(key="v0", value=settings_value, updated_at=datetime.now(UTC)))
+        db.commit()
+        exec_id = "e_test1234567890ab"
+        artifacts_path = f"projects/p1/artifacts/{exec_id}"
+        art_dir = Path(root) / artifacts_path
+        art_dir.mkdir(parents=True, exist_ok=True)
+
+        # 创建 manifest.json
+        (art_dir / "manifest.json").write_text(
+            json.dumps({"files": [
+                {"path": "stdout.txt", "size": 7, "hash": "abc"},
+                {"path": "stderr.txt", "size": 22, "hash": "def"}
+            ]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        # 创建 stdout.txt 和 stderr.txt
+        stdout_content = "328350\n"
+        stderr_content = "Some warning message\n"
+        (art_dir / "stdout.txt").write_text(stdout_content, encoding="utf-8")
+        (art_dir / "stderr.txt").write_text(stderr_content, encoding="utf-8")
+
+        rec = SandboxExecRecord(
+            exec_id=exec_id,
+            project_id="p1",
+            task_id="task-1",
+            conversation_id=None,
+            skill_id="python.run",
+            image="lonelycat-sandbox:py312",
+            cmd="python",
+            args=json.dumps(["-c", "print(...)"], ensure_ascii=False),
+            cwd="work",
+            env_keys=json.dumps([], ensure_ascii=False),
+            policy_snapshot=None,
+            status=SandboxExecStatus.SUCCEEDED,
+            exit_code=0,
+            error_reason=None,
+            started_at=datetime.now(UTC),
+            ended_at=datetime.now(UTC),
+            duration_ms=100,
+            artifacts_path=artifacts_path,
+            stdout_truncated=False,
+            stderr_truncated=False,
+        )
+        db.add(rec)
+        db.commit()
+        yield db, root, exec_id, stdout_content, stderr_content
+        db.close()
+    finally:
+        try:
+            import shutil
+            shutil.rmtree(root, ignore_errors=True)
+        except Exception:
+            pass
+        try:
+            os.unlink(db_path)
+        except Exception:
+            pass
+
+
+def test_get_stdout_normal():
+    """GET /sandbox/execs/{id}/stdout 正常返回：content, truncated, bytes"""
+    with temp_db_and_workspace_with_output() as (db, root, exec_id, stdout_content, stderr_content):
+        def override_get_db():
+            try:
+                yield db
+            finally:
+                pass
+
+        app.dependency_overrides[get_db] = override_get_db
+        try:
+            client = TestClient(app)
+            r = client.get(f"/sandbox/execs/{exec_id}/stdout")
+            assert r.status_code == 200
+            data = r.json()
+            assert data["exec_id"] == exec_id
+            assert data["content"] == stdout_content
+            assert data["truncated"] is False
+            # bytes 是实际返回内容的字节数
+            assert data["bytes"] == len(stdout_content.encode("utf-8"))
+            assert data.get("missing_file") is None
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+
+
+def test_get_stdout_truncated():
+    """GET /sandbox/execs/{id}/stdout 返回 truncated=true（从 DB 字段）"""
+    with temp_db_and_workspace_with_output() as (db, root, exec_id, stdout_content, stderr_content):
+        # 修改 DB 记录，设置 stdout_truncated=True
+        rec = db.query(SandboxExecRecord).filter(SandboxExecRecord.exec_id == exec_id).first()
+        rec.stdout_truncated = True
+        db.commit()
+
+        def override_get_db():
+            try:
+                yield db
+            finally:
+                pass
+
+        app.dependency_overrides[get_db] = override_get_db
+        try:
+            client = TestClient(app)
+            r = client.get(f"/sandbox/execs/{exec_id}/stdout")
+            assert r.status_code == 200
+            data = r.json()
+            assert data["truncated"] is True
+            # 即使截断，bytes 也应该是实际返回内容的字节数
+            assert data["bytes"] == len(stdout_content.encode("utf-8"))
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+
+
+def test_get_stdout_missing_file():
+    """GET /sandbox/execs/{id}/stdout 文件不存在：返回 content="", missing_file=true"""
+    with temp_db_and_workspace_with_output() as (db, root, exec_id, stdout_content, stderr_content):
+        # 删除 stdout.txt 文件
+        art_dir = Path(root) / f"projects/p1/artifacts/{exec_id}"
+        (art_dir / "stdout.txt").unlink()
+
+        def override_get_db():
+            try:
+                yield db
+            finally:
+                pass
+
+        app.dependency_overrides[get_db] = override_get_db
+        try:
+            client = TestClient(app)
+            r = client.get(f"/sandbox/execs/{exec_id}/stdout")
+            assert r.status_code == 200
+            data = r.json()
+            assert data["exec_id"] == exec_id
+            assert data["content"] == ""
+            assert data["missing_file"] is True
+            assert data["bytes"] == 0
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+
+
+def test_get_stderr_normal():
+    """GET /sandbox/execs/{id}/stderr 正常返回：content, truncated, bytes"""
+    with temp_db_and_workspace_with_output() as (db, root, exec_id, stdout_content, stderr_content):
+        def override_get_db():
+            try:
+                yield db
+            finally:
+                pass
+
+        app.dependency_overrides[get_db] = override_get_db
+        try:
+            client = TestClient(app)
+            r = client.get(f"/sandbox/execs/{exec_id}/stderr")
+            assert r.status_code == 200
+            data = r.json()
+            assert data["exec_id"] == exec_id
+            assert data["content"] == stderr_content
+            assert data["truncated"] is False
+            assert data["bytes"] == len(stderr_content.encode("utf-8"))
+            assert data.get("missing_file") is None
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+
+
+def test_get_stderr_missing_file():
+    """GET /sandbox/execs/{id}/stderr 文件不存在：返回 content="", missing_file=true"""
+    with temp_db_and_workspace_with_output() as (db, root, exec_id, stdout_content, stderr_content):
+        # 删除 stderr.txt 文件
+        art_dir = Path(root) / f"projects/p1/artifacts/{exec_id}"
+        (art_dir / "stderr.txt").unlink()
+
+        def override_get_db():
+            try:
+                yield db
+            finally:
+                pass
+
+        app.dependency_overrides[get_db] = override_get_db
+        try:
+            client = TestClient(app)
+            r = client.get(f"/sandbox/execs/{exec_id}/stderr")
+            assert r.status_code == 200
+            data = r.json()
+            assert data["content"] == ""
+            assert data["missing_file"] is True
+            assert data["bytes"] == 0
+        finally:
+            app.dependency_overrides.pop(get_db, None)
+
+
+def test_get_observation_aggregated():
+    """GET /sandbox/execs/{id}/observation 聚合返回完整信息"""
+    with temp_db_and_workspace_with_output() as (db, root, exec_id, stdout_content, stderr_content):
+        def override_get_db():
+            try:
+                yield db
+            finally:
+                pass
+
+        app.dependency_overrides[get_db] = override_get_db
+        try:
+            client = TestClient(app)
+            r = client.get(f"/sandbox/execs/{exec_id}/observation")
+            assert r.status_code == 200
+            data = r.json()
+            assert data["exec_id"] == exec_id
+            assert data["exit_code"] == 0
+
+            # 验证 stdout
+            assert data["stdout"]["content"] == stdout_content
+            assert data["stdout"]["truncated"] is False
+            assert data["stdout"]["bytes"] == len(stdout_content.encode("utf-8"))
+
+            # 验证 stderr
+            assert data["stderr"]["content"] == stderr_content
+            assert data["stderr"]["truncated"] is False
+            assert data["stderr"]["bytes"] == len(stderr_content.encode("utf-8"))
+
+            # 验证 artifacts
+            assert "artifacts" in data
+            assert data["artifacts"]["missing_manifest"] is False
+            assert len(data["artifacts"]["files"]) > 0
+        finally:
+            app.dependency_overrides.pop(get_db, None)

@@ -7,6 +7,8 @@ import os
 import time
 from typing import Any, Callable, Dict, List, Optional
 
+import httpx
+
 logger = logging.getLogger(__name__)
 
 from sqlalchemy.orm import Session
@@ -151,6 +153,107 @@ class TaskRunner:
                 ctx.artifacts["duration_seconds"] = slept
 
         return run_task_with_steps(run, "sleep", body)
+
+    def _generate_final_response(self, observation: dict, exec_id: str) -> str:
+        """
+        PR-3: 根据 observation 生成人类可读回复
+
+        返回格式：
+        - stdout 非空：执行结果：{stdout} （exec_id={id}，可在任务详情查看 stdout/stderr/artifacts）
+        - 执行失败：执行失败（exit_code=X）：{error} （exec_id={id}，可在任务详情查看完整错误信息）
+        - 成功无输出：程序执行成功，但没有输出（提示：请在代码中使用 print() 输出结果）（exec_id={id}，可在任务详情查看 stdout/stderr/artifacts）
+        """
+        stdout_preview = observation.get("stdout_preview", "").strip()
+        stderr_preview = observation.get("stderr_preview", "").strip()
+        exit_code = observation.get("exit_code", 0)
+
+        if stdout_preview:
+            # stdout 非空：直接返回结果 + exec_id
+            lines = [f"执行结果：{stdout_preview}"]
+            if observation.get("stdout_truncated"):
+                lines.append(f"（输出已截断，exec_id={exec_id}，可在任务详情查看完整 stdout/stderr/artifacts）")
+            else:
+                lines.append(f"（exec_id={exec_id}，可在任务详情查看 stdout/stderr/artifacts）")
+            return "\n".join(lines)
+        elif exit_code != 0:
+            # 执行失败：显示错误信息 + exec_id
+            error_msg = stderr_preview if stderr_preview else "未知错误"
+            return f"执行失败（exit_code={exit_code}）：{error_msg}\n（exec_id={exec_id}，可在任务详情查看完整错误信息）"
+        else:
+            # 执行成功但无输出：提示用户 + exec_id
+            return "程序执行成功，但没有输出（提示：请在代码中使用 print() 输出结果）\n（exec_id={}，可在任务详情查看 stdout/stderr/artifacts）".format(exec_id)
+
+    def _fetch_observation(self, exec_id: str) -> dict:
+        """
+        PR-2: 从 core-api 获取 stdout/stderr/artifacts，只用 exec_id
+
+        返回:
+        {
+            "stdout_preview": "...",
+            "stderr_preview": "...",
+            "stdout_truncated": bool,
+            "stderr_truncated": bool,
+            "stdout_bytes": int,
+            "stderr_bytes": int,
+            "artifacts_count": int
+        }
+        """
+        core_api_url = os.getenv("CORE_API_URL", "http://localhost:8000")
+        observation = {
+            "stdout_preview": "",
+            "stderr_preview": "",
+            "stdout_truncated": False,
+            "stderr_truncated": False,
+            "stdout_bytes": 0,
+            "stderr_bytes": 0,
+            "artifacts_count": 0,
+        }
+
+        try:
+            # 优先尝试聚合 endpoint /observation
+            with httpx.Client(timeout=10.0) as client:
+                obs_resp = client.get(f"{core_api_url}/sandbox/execs/{exec_id}/observation")
+                if obs_resp.status_code == 200:
+                    data = obs_resp.json()
+                    observation["stdout_preview"] = data["stdout"]["content"][:1000]
+                    observation["stderr_preview"] = data["stderr"]["content"][:1000]
+                    observation["stdout_truncated"] = data["stdout"]["truncated"]
+                    observation["stderr_truncated"] = data["stderr"]["truncated"]
+                    observation["stdout_bytes"] = data["stdout"]["bytes"]
+                    observation["stderr_bytes"] = data["stderr"]["bytes"]
+                    observation["artifacts_count"] = len(data["artifacts"]["files"])
+                    return observation
+        except Exception as e:
+            logger.warning(f"Failed to fetch observation from /observation endpoint: {e}")
+
+        # 降级到 3 个单独请求
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                # GET stdout
+                stdout_resp = client.get(f"{core_api_url}/sandbox/execs/{exec_id}/stdout")
+                if stdout_resp.status_code == 200:
+                    stdout_data = stdout_resp.json()
+                    observation["stdout_preview"] = stdout_data["content"][:1000]
+                    observation["stdout_truncated"] = stdout_data.get("truncated", False)
+                    observation["stdout_bytes"] = stdout_data.get("bytes", 0)
+
+                # GET stderr
+                stderr_resp = client.get(f"{core_api_url}/sandbox/execs/{exec_id}/stderr")
+                if stderr_resp.status_code == 200:
+                    stderr_data = stderr_resp.json()
+                    observation["stderr_preview"] = stderr_data["content"][:1000]
+                    observation["stderr_truncated"] = stderr_data.get("truncated", False)
+                    observation["stderr_bytes"] = stderr_data.get("bytes", 0)
+
+                # GET artifacts
+                artifacts_resp = client.get(f"{core_api_url}/sandbox/execs/{exec_id}/artifacts")
+                if artifacts_resp.status_code == 200:
+                    artifacts_data = artifacts_resp.json()
+                    observation["artifacts_count"] = len(artifacts_data.get("files", []))
+        except Exception as e:
+            logger.warning(f"Failed to fetch observation from individual endpoints: {e}")
+
+        return observation
 
     def _handle_research_report(
         self,
@@ -610,6 +713,38 @@ class TaskRunner:
                     ctx.result["exit_code"] = out.get("exit_code")
                     ctx.result["artifacts_dir"] = out.get("artifacts_dir")
                     ctx.artifacts["exec"] = out
+
+                    # PR-2: OBSERVE 逻辑 - 只使用 exec_id，不依赖 artifacts_dir
+                    exec_id = out.get("exec_id")
+                    if exec_id:
+                        observation = self._fetch_observation(exec_id)
+                        ctx.result["observation"] = observation
+
+                        # 在 steps 中记录 observation step
+                        with ctx.step("observation") as obs_meta:
+                            obs_meta["exec_id"] = exec_id
+                            obs_meta["exit_code"] = out.get("exit_code")
+                            obs_meta["stdout_preview"] = observation.get("stdout_preview", "")[:200]
+                            obs_meta["stderr_preview"] = observation.get("stderr_preview", "")[:200]
+                            obs_meta["stdout_truncated"] = observation.get("stdout_truncated", False)
+                            obs_meta["stderr_truncated"] = observation.get("stderr_truncated", False)
+                            obs_meta["stdout_bytes"] = observation.get("stdout_bytes", 0)
+                            obs_meta["stderr_bytes"] = observation.get("stderr_bytes", 0)
+                            obs_meta["artifacts_count"] = observation.get("artifacts_count", 0)
+
+                    # PR-3: RESPOND 逻辑 - 根据 observation 生成最终回复
+                    final_response = self._generate_final_response(observation, exec_id)
+                    # 写入 ctx.result["reply"]（标准字段，UI 直接读取）
+                    ctx.result["reply"] = final_response
+                    # 保留 final_response 字段以兼容
+                    ctx.result["final_response"] = final_response
+
+                    # 记录到 steps
+                    with ctx.step("respond") as respond_meta:
+                        respond_meta["response_type"] = "direct"
+                        respond_meta["response_preview"] = final_response[:200]
+                        respond_meta["exec_id"] = exec_id
+
                     # 沙箱执行失败（如 exit_code 126）时任务应标为失败，Tasks UI 与 DB 一致
                     if out.get("status") != "SUCCEEDED":
                         exit_code = out.get("exit_code")
