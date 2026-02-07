@@ -254,21 +254,23 @@ export const markConversationRead = async (conversationId: string): Promise<Conv
  * 
  * @param conversationId 对话 ID
  * @param content 消息内容
- * @param personaId Persona ID（可选，用于 agent worker）
- * @returns 包含 user_message 和 assistant_message 的响应对象
+ * @param opts personaId（可选）、client_turn_id（可选，用于前端轮次隔离，丢弃过期响应）
+ * @returns 包含 user_message 和 assistant_message 的响应对象；assistant_message.meta_json 会原样带回 client_turn_id
  */
 export const sendMessage = async (
   conversationId: string,
   content: string,
-  personaId?: string
+  opts?: { personaId?: string; client_turn_id?: string }
 ): Promise<SendMessageResponse> => {
   const url = buildUrl(`/conversations/${conversationId}/messages`, {
-    persona_id: personaId,
+    persona_id: opts?.personaId,
   });
+  const body: { content: string; client_turn_id?: string } = { content };
+  if (opts?.client_turn_id) body.client_turn_id = opts.client_turn_id;
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(body),
   });
   if (!response.ok) {
     throw new Error(await buildErrorMessage("Failed to send message", response));

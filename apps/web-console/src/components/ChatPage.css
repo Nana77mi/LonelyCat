@@ -306,6 +306,90 @@
   }
 }
 
+/* run 完成消息卡片（run_code_snippet） */
+.message-run-card {
+  padding: 12px 16px;
+  border-radius: 12px;
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 100%;
+}
+
+.message-run-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.message-run-card-status {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 4px;
+}
+
+.message-run-card-status--succeeded {
+  background-color: #d1fae5;
+  color: #065f46;
+}
+
+.message-run-card-status--failed {
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+.message-run-card-status--canceled {
+  background-color: #f3f4f6;
+  color: #4b5563;
+}
+
+.message-run-card-status--running,
+.message-run-card-status--queued {
+  background-color: #dbeafe;
+  color: #1e40af;
+}
+
+.message-run-card-title {
+  font-size: 12px;
+  color: #64748b;
+}
+
+.message-run-card-body {
+  font-size: 14px;
+  line-height: 1.6;
+  color: #111827;
+  word-wrap: break-word;
+  white-space: pre-wrap;
+}
+
+.message-run-card-exec-id {
+  font-size: 11px;
+  color: #94a3b8;
+  font-family: ui-monospace, monospace;
+}
+
+.message-run-card-view-btn {
+  align-self: flex-start;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #2563eb;
+  background-color: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.2s, border-color 0.2s;
+}
+
+.message-run-card-view-btn:hover {
+  background-color: #dbeafe;
+  border-color: #93c5fd;
+}
+
 /* 响应式设计 */
 @media (max-width: 768px) {
   .chat-messages {

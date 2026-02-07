@@ -10,9 +10,56 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any, Dict, Optional
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.db import ConversationModel, MessageModel, MessageRole, RunModel, RunStatus
+from app.services.conversation_orchestrator import _extract_reply
+
+
+# 写入 parent input 的 previous_output_json 最大字节数，避免 input_json 越滚越大
+_PREVIOUS_OUTPUT_CAP_BYTES = 4096
+
+
+def _cap_previous_output_for_input(output_json: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """将子 run 的 output_json 做成可写入 parent input 的预览（observation 等），避免整份 artifacts 塞入导致 input 膨胀。"""
+    if not output_json or not isinstance(output_json, dict):
+        return output_json
+    import json
+    preview: Dict[str, Any] = {}
+    result = output_json.get("result") or {}
+    if isinstance(result, dict) and result.get("observation") is not None:
+        obs = result["observation"]
+        if isinstance(obs, dict):
+            preview["observation"] = dict(list(obs.items())[:5])
+        else:
+            preview["observation"] = obs
+    if not preview and result:
+        preview["result"] = result if isinstance(result, dict) else {"value": str(result)[:500]}
+    if not preview:
+        preview = dict(list(output_json.items())[:3])
+    raw = json.dumps(preview, ensure_ascii=False)
+    if len(raw.encode("utf-8")) <= _PREVIOUS_OUTPUT_CAP_BYTES:
+        return preview
+    return {"_truncated": True, "preview_bytes": len(raw.encode("utf-8"))}
+
+
+def _extract_exec_id(output_json: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Resolve exec_id from output_json (result/observation/meta/artifacts). Aligns with frontend resolveExecId."""
+    if not output_json or not isinstance(output_json, dict):
+        return None
+    result = output_json.get("result") or {}
+    artifacts = output_json.get("artifacts") or {}
+    candidates = [
+        result.get("exec_id"),
+        (result.get("observation") or {}).get("exec_id") if isinstance(result.get("observation"), dict) else None,
+        (result.get("meta") or {}).get("exec_id") if isinstance(result.get("meta"), dict) else None,
+        (artifacts.get("exec") or {}).get("exec_id") if isinstance(artifacts.get("exec"), dict) else None,
+    ]
+    for c in candidates:
+        if isinstance(c, str) and c.strip() and c.startswith("e_") and len(c) == 18:
+            return c
+    return None
 
 
 def _format_run_output_summary(output_json: Optional[Dict[str, Any]], run_type: Optional[str] = None) -> str:
@@ -45,6 +92,14 @@ def _format_run_output_summary(output_json: Optional[Dict[str, Any]], run_type: 
             query = result.get("query", "")
             source_count = result.get("source_count", 0)
             return f"调研完成：{query or '（无 query）'}，共 {source_count} 个来源。"
+        
+        # 特殊处理：run_code_snippet，用 reply 摘要而非 str(result)，避免聊天里一坨 dict
+        if (run_type or "").strip().replace(" ", "_") == "run_code_snippet":
+            reply = _extract_reply(output_json)
+            if reply:
+                return reply
+            exec_id = _extract_exec_id(output_json)
+            return f"代码执行完成（exec_id={exec_id or 'unknown'}）。请在任务详情查看输出。"
         
         # 如果有 summary 字段，使用它
         if "summary" in output_json:
@@ -99,12 +154,52 @@ def _compute_has_unread(conversation: ConversationModel) -> bool:
     return updated_at > last_read_at
 
 
+def _wake_parent_run_if_waiting(db: Session, run: RunModel) -> None:
+    """子 run 完成时若父 run 处于 WAIT_CHILD，则更新父 run 的 input 并重新入队。幂等：仅当 waiting_child_run_id==run.id 且 state 为 WAIT_CHILD 时推进并清空 waiting。"""
+    parent_run_id = getattr(run, "parent_run_id", None) or (run.input_json or {}).get("parent_run_id")
+    if not parent_run_id:
+        return
+    parent = db.query(RunModel).filter(RunModel.id == parent_run_id).first()
+    if parent is None:
+        return
+    out = parent.output_json or {}
+    if out.get("state") != "WAIT_CHILD":
+        return
+    waiting_run_id = out.get("waiting_child_run_id") or out.get("child_run_id")
+    if waiting_run_id != run.id:
+        return
+    step_index = out.get("waiting_step_index", out.get("step_index", 0))
+    run_ids = out.get("run_ids") or []
+    merged_input = dict(parent.input_json or {})
+    merged_input["step_index"] = step_index + 1
+    merged_input["previous_output_json"] = _cap_previous_output_for_input(run.output_json)
+    merged_input["run_ids"] = run_ids
+    now = datetime.now(UTC)
+    parent.input_json = merged_input
+    # 只清空等待相关字段，保留 output_json 其余 debug 信息
+    _wait_keys = ("state", "child_run_id", "waiting_child_run_id", "waiting_step_index", "run_ids")
+    parent.output_json = {k: v for k, v in (parent.output_json or {}).items() if k not in _wait_keys}
+    if not parent.output_json:
+        parent.output_json = None
+    parent.status = RunStatus.QUEUED
+    parent.worker_id = None
+    parent.lease_expires_at = None
+    parent.updated_at = now
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
 def emit_run_message(db: Session, run: RunModel) -> None:
     """在 run 完成时发送消息到对应的 conversation（幂等）
     
     根据 run.conversation_id 是否存在：
     - 如果存在：将消息发送到现有 conversation
     - 如果不存在：创建新 conversation
+    
+    同一轮已回复则跳过：run_code_snippet 若已在本对话的某条 agent_decision 消息的 meta.run_id/run_ids 中，
+    说明 create_message 已在该轮返回了最终回答，不再插入第二条“任务完成”消息，避免重复展示。
     
     幂等性保证：检查是否已存在相同 source_ref.kind="run" 且 source_ref.ref_id=run.id 的消息，
     如果存在则跳过，避免重复通知。
@@ -117,8 +212,15 @@ def emit_run_message(db: Session, run: RunModel) -> None:
         run: 已完成的 Run 对象（必须包含 status, conversation_id, title, type, output_json, error）
     """
     now = datetime.now(UTC)
-    
-    # 幂等性检查：是否已存在相同 run 的消息
+    run_type_norm = (run.type or "").strip().replace(" ", "_")
+    input_json = run.input_json or {}
+
+    # run_code_snippet 若带 parent_run_id 表示由 agent_loop_turn 编排创建，由编排的 task_done 统一写总结，此处不写；并唤醒父 run
+    if run_type_norm == "run_code_snippet" and input_json.get("parent_run_id"):
+        _wake_parent_run_if_waiting(db, run)
+        return
+
+    # 幂等性检查：是否已存在相同 run 的完成消息（kind=run 或 kind=run_done）
     # 
     # 性能说明：
     # - 当前实现：使用 JSON 字段查询（source_ref JSON）
@@ -130,60 +232,70 @@ def emit_run_message(db: Session, run: RunModel) -> None:
     #   4. 这样可以将 O(n) 的 JSON 查询优化为 O(log n) 的索引查询
     #
     # 使用 SQLAlchemy 的 JSON 操作符（兼容 SQLite 3.38+ 和 PostgreSQL）
-    # 如果数据库不支持，会回退到 Python 层面的过滤
+    # 检查是否已存在该 run 的完成消息（source_ref.kind 为 "run" 或 "run_done"）
     try:
-        # 尝试使用 JSON 操作符（SQLite 3.38+ 和 PostgreSQL 支持）
         existing_message = (
             db.query(MessageModel)
             .filter(
                 MessageModel.source_ref.isnot(None),
-                MessageModel.source_ref["kind"].astext == "run",
                 MessageModel.source_ref["ref_id"].astext == run.id,
+                or_(
+                    MessageModel.source_ref["kind"].astext == "run",
+                    MessageModel.source_ref["kind"].astext == "run_done",
+                ),
             )
             .first()
         )
     except Exception:
-        # 回退：查询所有 source_ref 不为空的消息，然后在 Python 中过滤
-        # 注意：如果消息量很大，这个回退路径会很慢，建议尽快实现冗余列优化
         all_messages_with_source_ref = (
             db.query(MessageModel)
             .filter(MessageModel.source_ref.isnot(None))
             .all()
         )
-        
         existing_message = None
         for msg in all_messages_with_source_ref:
-            if (
-                isinstance(msg.source_ref, dict)
-                and msg.source_ref.get("kind") == "run"
-                and msg.source_ref.get("ref_id") == run.id
-            ):
+            if not isinstance(msg.source_ref, dict):
+                continue
+            ref_id = msg.source_ref.get("ref_id")
+            kind = msg.source_ref.get("kind")
+            if ref_id == run.id and kind in ("run", "run_done"):
                 existing_message = msg
                 break
-    
+
     if existing_message:
         # 已存在，跳过（幂等）
         return
     
-    # 生成消息内容
-    if run.status == RunStatus.SUCCEEDED:
-        # 对于 summarize_conversation / research_report，使用特殊格式（含完整总结/报告正文）
-        run_type_norm = (run.type or "").strip().replace(" ", "_")
-        if run.type == "summarize_conversation":
-            content = _format_run_output_summary(run.output_json, run_type=run.type)
-        elif run_type_norm == "research_report":
-            content = _format_run_output_summary(run.output_json, run_type=run.type)
+    # 生成消息内容与 source_ref
+    if run_type_norm == "agent_loop_turn":
+        # task_done：仅由编排完成时写入，content 取自 output_json.final_reply
+        output_json = run.output_json or {}
+        if run.status == RunStatus.SUCCEEDED:
+            content = output_json.get("final_reply") or "任务已完成"
+        elif run.status == RunStatus.FAILED:
+            content = f"任务执行失败：{run.error or '未知错误'}"
+        elif run.status == RunStatus.CANCELED:
+            content = "任务已取消"
         else:
-            content = f"任务已完成：{run.title or run.type}\n\n{_format_run_output_summary(run.output_json, run_type=run.type)}"
-    elif run.status == RunStatus.FAILED:
-        error_msg = run.error or "未知错误"
-        content = f"任务执行失败：{run.title or run.type}\n\n错误：{error_msg}"
-    elif run.status == RunStatus.CANCELED:
-        content = f"任务已取消：{run.title or run.type}"
+            content = f"任务状态：{run.status.value}"
+        source_ref = {"kind": "run_done", "ref_id": run.id, "excerpt": None}
     else:
-        # 不应该到达这里，但为了安全起见
-        content = f"任务状态：{run.status.value} - {run.title or run.type}"
-    
+        if run.status == RunStatus.SUCCEEDED:
+            if run.type == "summarize_conversation":
+                content = _format_run_output_summary(run.output_json, run_type=run.type)
+            elif run_type_norm == "research_report":
+                content = _format_run_output_summary(run.output_json, run_type=run.type)
+            else:
+                content = f"任务已完成：{run.title or run.type}\n\n{_format_run_output_summary(run.output_json, run_type=run.type)}"
+        elif run.status == RunStatus.FAILED:
+            error_msg = run.error or "未知错误"
+            content = f"任务执行失败：{run.title or run.type}\n\n错误：{error_msg}"
+        elif run.status == RunStatus.CANCELED:
+            content = f"任务已取消：{run.title or run.type}"
+        else:
+            content = f"任务状态：{run.status.value} - {run.title or run.type}"
+        source_ref = {"kind": "run", "ref_id": run.id, "excerpt": None}
+
     # 情况 1：run.conversation_id != null - 发送到现有 conversation
     if run.conversation_id:
         conversation = db.query(ConversationModel).filter(ConversationModel.id == run.conversation_id).first()
@@ -200,7 +312,7 @@ def emit_run_message(db: Session, run: RunModel) -> None:
             role=MessageRole.ASSISTANT,
             content=content,
             created_at=now,
-            source_ref={"kind": "run", "ref_id": run.id, "excerpt": None},
+            source_ref=source_ref,
             meta_json=None,
             client_msg_id=None,
         )
@@ -247,7 +359,7 @@ def emit_run_message(db: Session, run: RunModel) -> None:
             role=MessageRole.ASSISTANT,
             content=content,
             created_at=message_time,
-            source_ref={"kind": "run", "ref_id": run.id, "excerpt": None},
+            source_ref=source_ref,
             meta_json=None,
             client_msg_id=None,
         )

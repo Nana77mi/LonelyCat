@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
-from app.agent_loop_config import AGENT_LOOP_ENABLED
+from app.agent_loop_config import AGENT_LOOP_ENABLED, USE_ORCHESTRATION_FOR_RUN_CODE_SNIPPET
 from app.api.runs import RunCreateRequest, _create_run, _list_conversation_runs
 from app.db import ConversationModel, MessageModel, MessageRole, SessionLocal
 
@@ -75,6 +75,7 @@ class MessageCreateRequest(BaseModel):
     source_ref: Optional[Dict[str, Any]] = None
     meta_json: Optional[Dict[str, Any]] = None
     client_msg_id: Optional[str] = None  # 客户端消息 ID，用于幂等性去重
+    client_turn_id: Optional[str] = None  # 客户端轮次 ID，用于前端丢弃过期响应（原样写回 assistant_message.meta_json）
 
 
 class ConversationResponse(BaseModel):
@@ -452,6 +453,8 @@ async def _create_message(
     # 3. Agent Decision Layer (if enabled)
     decision_used = False
     decision_run_id = None
+    decision_run_ids = None  # 本轮已回复的 run id 列表，供 emit_run_message 去重
+    task_start_run_ids = None  # agent_loop_turn 时为本轮创建的编排 run id 列表（task_start 消息 meta.run_ids_started）
     worker_error = None
     assistant_content = None
     
@@ -494,98 +497,177 @@ async def _create_message(
             elif decision.decision == "run":
                 # Create run only, no immediate reply (or optional hint message)
                 if decision.run:
-                    try:
-                        run_input = dict(decision.run.input) if decision.run.input else {}
-                        if not is_valid_trace_id(run_input.get("trace_id")):
-                            run_input["trace_id"] = uuid.uuid4().hex
-                        conv_id = decision.run.conversation_id or conversation_id
-                        run_type_normalized = (decision.run.type or "").strip().replace(" ", "_")
-                        if run_type_normalized == "research_report":
-                            if not (run_input.get("query") or (isinstance(run_input.get("query"), str) and not run_input["query"].strip())):
-                                run_input["query"] = (decision.run.title or request.content or "调研").strip() or "调研"
-                        if decision.run.type == "summarize_conversation":
-                            if "conversation_id" not in run_input or not run_input.get("conversation_id"):
-                                run_input["conversation_id"] = conv_id
-                            if _FACTS_FROM_STORE_AVAILABLE and fetch_active_facts_from_store and MemoryStore is not None:
-                                store = MemoryStore()
-                                active_facts_for_run, _ = await fetch_active_facts_from_store(store, conversation_id=conv_id)
-                                run_input["facts_snapshot_id"] = compute_facts_snapshot_id(active_facts_for_run)
-                        if run_type_normalized == "run_code_snippet":
-                            if not run_input.get("conversation_id"):
-                                run_input["conversation_id"] = conv_id
-                        run_request = RunCreateRequest(
-                            type=decision.run.type,
-                            title=decision.run.title,
-                            conversation_id=conv_id,
-                            input=run_input,
-                        )
-                        run_result = await _create_run(run_request, db)
-                        decision_run_id = run_result.get("id")
-                        logger.info(
-                            f"Run created: run_id={decision_run_id}, type={decision.run.type}, "
-                            f"conversation_id={conversation_id}"
-                        )
-                        
-                        # Optional: Create hint message
-                        if decision.run.title:
-                            assistant_content = f"我已开始后台任务：{decision.run.title}，完成后会通知你。"
+                    run_type_normalized = (decision.run.type or "").strip().replace(" ", "_")
+                    if run_type_normalized == "run_code_snippet":
+                        if AGENT_LOOP_ENABLED and USE_ORCHESTRATION_FOR_RUN_CODE_SNIPPET:
+                            # 两段式：创建 agent_loop_turn run，立即返回 task_start，编排由 worker 执行
+                            try:
+                                run_request = RunCreateRequest(
+                                    type="agent_loop_turn",
+                                    title=decision.run.title or "代码执行",
+                                    conversation_id=conversation_id,
+                                    input={
+                                        "conversation_id": conversation_id,
+                                        "user_message": request.content,
+                                    },
+                                )
+                                run_result = await _create_run(run_request, db)
+                                orchestration_run_id = run_result.get("id")
+                                decision_run_id = orchestration_run_id
+                                decision_run_ids = [orchestration_run_id] if orchestration_run_id else None
+                                task_start_run_ids = decision_run_ids
+                                assistant_content = "任务开始，正在后台执行，完成后会通知你。"
+                                logger.info(
+                                    f"agent_loop_turn created: run_id={orchestration_run_id}, conversation_id={conversation_id}"
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Failed to create agent_loop_turn run: {e}, conversation_id={conversation_id}",
+                                    exc_info=True,
+                                )
+                                assistant_content = f"抱歉，任务创建失败：{str(e)}"
                         else:
-                            assistant_content = f"我已开始后台任务：{decision.run.type}，完成后会通知你。"
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to create run: {e}, conversation_id={conversation_id}",
-                            exc_info=True
-                        )
-                        # Fallback: create error message
-                        assistant_content = f"抱歉，任务创建失败：{str(e)}"
+                            # 未开 agent_loop 时直接创建 run_code_snippet，并补全 input.conversation_id
+                            try:
+                                run_input = dict(decision.run.input) if decision.run.input else {}
+                                if "conversation_id" not in run_input or not run_input.get("conversation_id"):
+                                    run_input["conversation_id"] = decision.run.conversation_id or conversation_id
+                                conv_id = decision.run.conversation_id or conversation_id
+                                run_request = RunCreateRequest(
+                                    type="run_code_snippet",
+                                    title=decision.run.title or "代码执行",
+                                    conversation_id=conv_id,
+                                    input=run_input,
+                                )
+                                run_result = await _create_run(run_request, db)
+                                decision_run_id = run_result.get("id")
+                                decision_run_ids = [decision_run_id] if decision_run_id else None
+                                assistant_content = "我已开始后台任务：代码执行，完成后会通知你。"
+                                logger.info(
+                                    f"Run created: run_id={decision_run_id}, type=run_code_snippet, conversation_id={conversation_id}"
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Failed to create run: {e}, conversation_id={conversation_id}",
+                                    exc_info=True,
+                                )
+                                assistant_content = f"抱歉，任务创建失败：{str(e)}"
+                    else:
+                        try:
+                            run_input = dict(decision.run.input) if decision.run.input else {}
+                            if not is_valid_trace_id(run_input.get("trace_id")):
+                                run_input["trace_id"] = uuid.uuid4().hex
+                            conv_id = decision.run.conversation_id or conversation_id
+                            if run_type_normalized == "research_report":
+                                if not (run_input.get("query") or (isinstance(run_input.get("query"), str) and not run_input["query"].strip())):
+                                    run_input["query"] = (decision.run.title or request.content or "调研").strip() or "调研"
+                            if decision.run.type == "summarize_conversation":
+                                if "conversation_id" not in run_input or not run_input.get("conversation_id"):
+                                    run_input["conversation_id"] = conv_id
+                                if _FACTS_FROM_STORE_AVAILABLE and fetch_active_facts_from_store and MemoryStore is not None:
+                                    store = MemoryStore()
+                                    active_facts_for_run, _ = await fetch_active_facts_from_store(store, conversation_id=conv_id)
+                                    run_input["facts_snapshot_id"] = compute_facts_snapshot_id(active_facts_for_run)
+                            run_request = RunCreateRequest(
+                                type=decision.run.type,
+                                title=decision.run.title,
+                                conversation_id=conv_id,
+                                input=run_input,
+                            )
+                            run_result = await _create_run(run_request, db)
+                            decision_run_id = run_result.get("id")
+                            decision_run_ids = [decision_run_id] if decision_run_id else None
+                            logger.info(
+                                f"Run created: run_id={decision_run_id}, type={decision.run.type}, "
+                                f"conversation_id={conversation_id}"
+                            )
+                            if decision.run.title:
+                                assistant_content = f"我已开始后台任务：{decision.run.title}，完成后会通知你。"
+                            else:
+                                assistant_content = f"我已开始后台任务：{decision.run.type}，完成后会通知你。"
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to create run: {e}, conversation_id={conversation_id}",
+                                exc_info=True
+                            )
+                            assistant_content = f"抱歉，任务创建失败：{str(e)}"
             
             elif decision.decision == "reply_and_run":
                 # Reply AND create run
                 assistant_content = decision.reply.content if decision.reply else ""
                 
                 if decision.run:
-                    try:
-                        # For summarize_conversation, ensure conversation_id and facts_snapshot_id in input
-                        run_input = decision.run.input.copy() if decision.run.input else {}
-                        if not is_valid_trace_id(run_input.get("trace_id")):
-                            run_input["trace_id"] = uuid.uuid4().hex
-                        run_type_normalized = (decision.run.type or "").strip().replace(" ", "_")
-                        if run_type_normalized == "research_report":
-                            if not (run_input.get("query") or (isinstance(run_input.get("query"), str) and not run_input["query"].strip())):
-                                run_input["query"] = (decision.run.title or request.content or "调研").strip() or "调研"
-                        if decision.run.type == "summarize_conversation":
-                            if "conversation_id" not in run_input or not run_input.get("conversation_id"):
-                                run_input["conversation_id"] = decision.run.conversation_id or conversation_id
-                            if _FACTS_FROM_STORE_AVAILABLE and fetch_active_facts_from_store and MemoryStore is not None:
-                                store = MemoryStore()
-                                active_facts_for_run, _ = await fetch_active_facts_from_store(store, conversation_id=run_input["conversation_id"])
-                                run_input["facts_snapshot_id"] = compute_facts_snapshot_id(active_facts_for_run)
-                        if run_type_normalized == "run_code_snippet":
-                            if not run_input.get("conversation_id"):
-                                run_input["conversation_id"] = decision.run.conversation_id or conversation_id
-                        reply_conv_id = decision.run.conversation_id or conversation_id
-                        run_request = RunCreateRequest(
-                            type=decision.run.type,
-                            title=decision.run.title,
-                            conversation_id=reply_conv_id,
-                            input=run_input,
-                        )
-                        run_result = await _create_run(run_request, db)
-                        decision_run_id = run_result.get("id")
-                        logger.info(
-                            f"Run created: run_id={decision_run_id}, type={decision.run.type}, "
-                            f"conversation_id={conversation_id}"
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"Failed to create run: {e}, conversation_id={conversation_id}",
-                            exc_info=True
-                        )
-                        # Still send reply, but add error note
-                        if assistant_content:
-                            assistant_content += f"\n\n（注：任务创建失败：{str(e)}）"
-                        else:
-                            assistant_content = f"抱歉，任务创建失败：{str(e)}"
+                    run_type_normalized = (decision.run.type or "").strip().replace(" ", "_")
+                    if run_type_normalized == "run_code_snippet":
+                        try:
+                            run_request = RunCreateRequest(
+                                type="agent_loop_turn",
+                                title=decision.run.title or "代码执行",
+                                conversation_id=conversation_id,
+                                input={
+                                    "conversation_id": conversation_id,
+                                    "user_message": request.content,
+                                },
+                            )
+                            run_result = await _create_run(run_request, db)
+                            orchestration_run_id = run_result.get("id")
+                            decision_run_id = orchestration_run_id
+                            decision_run_ids = [orchestration_run_id] if orchestration_run_id else None
+                            task_start_run_ids = decision_run_ids
+                            prefix = (assistant_content or "").strip()
+                            assistant_content = (
+                                f"{prefix}\n\n任务已开始，完成后会通知你。" if prefix else "任务已开始，完成后会通知你。"
+                            )
+                            logger.info(
+                                f"agent_loop_turn created (reply_and_run): run_id={orchestration_run_id}, conversation_id={conversation_id}"
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to create agent_loop_turn run: {e}, conversation_id={conversation_id}",
+                                exc_info=True,
+                            )
+                            if assistant_content:
+                                assistant_content += f"\n\n（注：任务创建失败：{str(e)}）"
+                            else:
+                                assistant_content = f"抱歉，任务创建失败：{str(e)}"
+                    else:
+                        try:
+                            run_input = decision.run.input.copy() if decision.run.input else {}
+                            if not is_valid_trace_id(run_input.get("trace_id")):
+                                run_input["trace_id"] = uuid.uuid4().hex
+                            if run_type_normalized == "research_report":
+                                if not (run_input.get("query") or (isinstance(run_input.get("query"), str) and not run_input["query"].strip())):
+                                    run_input["query"] = (decision.run.title or request.content or "调研").strip() or "调研"
+                            if decision.run.type == "summarize_conversation":
+                                if "conversation_id" not in run_input or not run_input.get("conversation_id"):
+                                    run_input["conversation_id"] = decision.run.conversation_id or conversation_id
+                                if _FACTS_FROM_STORE_AVAILABLE and fetch_active_facts_from_store and MemoryStore is not None:
+                                    store = MemoryStore()
+                                    active_facts_for_run, _ = await fetch_active_facts_from_store(store, conversation_id=run_input["conversation_id"])
+                                    run_input["facts_snapshot_id"] = compute_facts_snapshot_id(active_facts_for_run)
+                            reply_conv_id = decision.run.conversation_id or conversation_id
+                            run_request = RunCreateRequest(
+                                type=decision.run.type,
+                                title=decision.run.title,
+                                conversation_id=reply_conv_id,
+                                input=run_input,
+                            )
+                            run_result = await _create_run(run_request, db)
+                            decision_run_id = run_result.get("id")
+                            decision_run_ids = [decision_run_id] if decision_run_id else None
+                            logger.info(
+                                f"Run created: run_id={decision_run_id}, type={decision.run.type}, "
+                                f"conversation_id={conversation_id}"
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"Failed to create run: {e}, conversation_id={conversation_id}",
+                                exc_info=True
+                            )
+                            if assistant_content:
+                                assistant_content += f"\n\n（注：任务创建失败：{str(e)}）"
+                            else:
+                                assistant_content = f"抱歉，任务创建失败：{str(e)}"
         
         except Exception as e:
             # Decision failed: fallback to chat_flow
@@ -674,6 +756,9 @@ async def _create_message(
     if worker_error:
         # Worker 失败：创建 system 错误消息，确保对话不中断
         assistant_message_id = str(uuid.uuid4())
+        error_meta = {"error": True, "error_type": "worker_failure", "error_message": worker_error}
+        if request.client_turn_id:
+            error_meta["client_turn_id"] = request.client_turn_id
         assistant_message = MessageModel(
             id=assistant_message_id,
             conversation_id=conversation_id,
@@ -681,26 +766,42 @@ async def _create_message(
             content=f"执行失败：{worker_error}",
             created_at=assistant_now,
             source_ref={"kind": "manual", "ref_id": f"worker_error_{conversation_id}", "excerpt": None},
-            meta_json={"error": True, "error_type": "worker_failure", "error_message": worker_error},
+            meta_json=error_meta,
             client_msg_id=None,
         )
     else:
         # Worker/Decision 成功：创建 assistant 消息
         assistant_message_id = str(uuid.uuid4())
         
-        # Build source_ref and meta_json based on whether Decision was used
+        # Build source_ref and meta_json. task_start 固定为 run_start + ref_id=orchestration run，与 task_done 的 run_done 成对
         if decision_used:
-            source_ref = {
-                "kind": "agent_decision",
-                "ref_id": conversation_id,
-                "excerpt": None,
-            }
+            if task_start_run_ids is not None:
+                source_ref = {
+                    "kind": "run_start",
+                    "ref_id": decision_run_id or "",
+                    "excerpt": None,
+                }
+            else:
+                source_ref = {
+                    "kind": "agent_decision",
+                    "ref_id": conversation_id,
+                    "excerpt": None,
+                }
             meta_json = {
                 "agent_decision": True,
                 "run_id": decision_run_id,
             }
+            if decision_run_ids is not None:
+                meta_json["run_ids"] = decision_run_ids
+            if task_start_run_ids is not None:
+                meta_json["run_ids_started"] = task_start_run_ids
         else:
             source_ref = {"kind": "chat", "ref_id": conversation_id, "excerpt": None}
+            meta_json = {}
+        if request.client_turn_id:
+            meta_json = dict(meta_json) if meta_json is not None else {}
+            meta_json["client_turn_id"] = request.client_turn_id
+        if not meta_json:
             meta_json = None
         
         assistant_message = MessageModel(

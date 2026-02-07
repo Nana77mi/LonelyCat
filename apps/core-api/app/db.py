@@ -34,6 +34,7 @@ class RunStatus(str, Enum):
     """Run 状态枚举"""
     QUEUED = "queued"
     RUNNING = "running"
+    WAITING_CHILD = "waiting_child"  # 父 run 等待子 run 完成，不可被 worker 拉取
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     CANCELED = "canceled"

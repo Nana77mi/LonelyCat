@@ -151,10 +151,24 @@ def _serialize_run(run: RunModel) -> Dict[str, Any]:
     }
 
 
+def _validate_agent_loop_turn_input(request: RunCreateRequest) -> None:
+    """agent_loop_turn 类型时校验 input 含 conversation_id、user_message。"""
+    inp = request.input or {}
+    conv_id = inp.get("conversation_id")
+    if not (isinstance(conv_id, str) and conv_id.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail="agent_loop_turn requires input.conversation_id (non-empty string)",
+        )
+
+
 async def _create_run(request: RunCreateRequest, db: Session) -> Dict[str, Any]:
     """创建新 Run（内部函数，便于测试）"""
-    if (request.type or "").strip().replace(" ", "_") == "run_code_snippet":
+    run_type_norm = (request.type or "").strip().replace(" ", "_")
+    if run_type_norm == "run_code_snippet":
         _validate_run_code_snippet_input(request)
+    elif run_type_norm == "agent_loop_turn":
+        _validate_agent_loop_turn_input(request)
 
     run_id = str(uuid.uuid4())
     now = datetime.now(UTC)
@@ -268,7 +282,10 @@ async def _list_conversation_runs(
     
     query = (
         db.query(RunModel)
-        .filter(RunModel.conversation_id == conversation_id)
+        .filter(
+            RunModel.conversation_id == conversation_id,
+            RunModel.parent_run_id.is_(None),
+        )
         .order_by(desc(RunModel.updated_at))
     )
     

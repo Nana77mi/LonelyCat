@@ -6,8 +6,11 @@ feature flags, model settings, and whitelist management.
 
 from __future__ import annotations
 
+import logging
 import os
 from typing import List
+
+_logger = logging.getLogger(__name__)
 
 
 def _read_bool_env(name: str, default: bool) -> bool:
@@ -48,6 +51,8 @@ DEFAULT_ALLOWED_RUN_TYPES = [
 
 # Agent Loop feature flag
 AGENT_LOOP_ENABLED = _read_bool_env("AGENT_LOOP_ENABLED", True)
+# 为 True 时 run_code_snippet 走 agent_loop_turn 编排；为 False 时直接创建 run_code_snippet（便于单测或兼容）
+USE_ORCHESTRATION_FOR_RUN_CODE_SNIPPET = _read_bool_env("USE_ORCHESTRATION_FOR_RUN_CODE_SNIPPET", True)
 
 # Decision model configuration (optional, defaults to chat model)
 AGENT_DECISION_MODEL = os.getenv("AGENT_DECISION_MODEL", None)
@@ -60,6 +65,20 @@ AGENT_ALLOWED_RUN_TYPES = _read_list_env(
 
 # Decision timeout (optional, in seconds)
 AGENT_DECISION_TIMEOUT_SECONDS = int(os.getenv("AGENT_DECISION_TIMEOUT_SECONDS", "30"))
+
+# Max steps for run_code_snippet loop (orchestrator cap; min(llm_max_steps, this))
+# Prevents prompt injection / runaway loops
+def _read_max_agent_loop_steps() -> int:
+    raw = os.getenv("MAX_AGENT_LOOP_STEPS", "5")
+    try:
+        n = int(raw.strip()) if raw else 5
+    except (ValueError, TypeError):
+        n = 5
+    return max(1, min(10, n))
+
+
+MAX_AGENT_LOOP_STEPS = _read_max_agent_loop_steps()
+_logger.info("MAX_AGENT_LOOP_STEPS effective = %s", MAX_AGENT_LOOP_STEPS)
 
 # Fallback mode (always "reply-only" for v0.1)
 AGENT_DECISION_FALLBACK_MODE = "reply-only"

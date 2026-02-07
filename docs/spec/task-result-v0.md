@@ -96,6 +96,17 @@
 - observation: 读取执行结果（stdout/stderr/artifacts）
 - respond: 生成最终回复（基于 observation）
 
+**tool_call step 的 meta 字段（Agent Loop v2）**：
+
+```json
+{
+  "tool_name": "skill.python.run",
+  "exec_id": "e_xxx"
+}
+```
+
+**约束**：如果工具调用返回 `exec_id`，应在 `tool_call.meta.exec_id` 中记录，方便 UI 在这一步就能看到可点击的 exec 链接，不必等到 `observation` 步骤。
+
 **observation step 的 meta 字段（Agent Loop v2）**：
 
 ```json

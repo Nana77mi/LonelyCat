@@ -1,14 +1,51 @@
 import { useState, useRef, useEffect } from "react";
 import type { Message } from "../api/conversations";
+import type { Run } from "../api/runs";
 import "./ChatPage.css";
 
 type ChatPageProps = {
   messages: Message[];
   onSendMessage: (content: string, retryMessageId?: string) => void;
   loading?: boolean;
+  /** Current conversation runs; used to render run_code_snippet completion as card. */
+  runs?: Run[];
+  /** Open run details drawer (e.g. from card "查看输出"). */
+  onOpenRunDetails?: (runId: string) => void;
 };
 
-export const ChatPage = ({ messages, onSendMessage, loading }: ChatPageProps) => {
+/** Extract user-facing reply from run.output (align with backend _extract_reply). */
+function getReplyFromRunOutput(output: Record<string, unknown> | null | undefined): string {
+  if (!output || typeof output !== "object") return "";
+  const reply = output.reply ?? output.final_response;
+  if (typeof reply === "string" && reply.trim()) return reply.trim();
+  const result = output.result as Record<string, unknown> | undefined;
+  if (result && typeof result === "object") {
+    const r = (result.reply ?? result.final_response) as string | undefined;
+    if (typeof r === "string" && r.trim()) return r.trim();
+  }
+  return "";
+}
+
+/** Resolve exec_id from run.output (align with RunDetailsDrawer resolveExecId). */
+function getExecIdFromRunOutput(output: Record<string, unknown> | null | undefined): string | undefined {
+  if (!output || typeof output !== "object") return undefined;
+  const result = (output.result as Record<string, unknown> | undefined) ?? {};
+  const artifacts = (output.artifacts as Record<string, unknown> | undefined) ?? {};
+  const candidates = [
+    result.exec_id,
+    (result.observation as Record<string, unknown> | undefined)?.exec_id,
+    (result.meta as Record<string, unknown> | undefined)?.exec_id,
+    (artifacts.exec as Record<string, unknown> | undefined)?.exec_id,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c.trim()) return c;
+  }
+  return undefined;
+}
+
+const RUN_CODE_SNIPPET_TYPE = "run_code_snippet";
+
+export const ChatPage = ({ messages, onSendMessage, loading, runs = [], onOpenRunDetails }: ChatPageProps) => {
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -75,6 +112,12 @@ export const ChatPage = ({ messages, onSendMessage, loading }: ChatPageProps) =>
             const isRetryable = isFailed && message.meta_json && typeof message.meta_json === "object" && "retryable" in message.meta_json && message.meta_json.retryable === true;
             // 检查是否是主动消息（run 完成）
             const isProactiveMessage = message.source_ref && message.source_ref.kind === "run";
+            const runId = message.source_ref?.ref_id;
+            const linkedRun = runId && runs.length > 0 ? runs.find((r) => r.id === runId) : undefined;
+            const isRunCodeSnippetCard =
+              isProactiveMessage &&
+              linkedRun &&
+              (linkedRun.type || "").trim().replace(/\s+/g, "_") === RUN_CODE_SNIPPET_TYPE;
 
             return (
               <div
@@ -104,12 +147,60 @@ export const ChatPage = ({ messages, onSendMessage, loading }: ChatPageProps) =>
                   )}
                 </div>
                 <div className="message-content">
-                  {isProactiveMessage && (
+                  {isProactiveMessage && !isRunCodeSnippetCard && (
                     <div className="message-proactive-badge">
                       <span className="message-proactive-label">任务完成</span>
                     </div>
                   )}
-                  <div className="message-text">{message.content}</div>
+                  {isRunCodeSnippetCard && linkedRun ? (
+                    <div className="message-run-card">
+                      <div className="message-run-card-header">
+                        <span
+                          className={`message-run-card-status message-run-card-status--${linkedRun.status}`}
+                        >
+                          {linkedRun.status === "succeeded"
+                            ? "成功"
+                            : linkedRun.status === "failed"
+                              ? "失败"
+                              : linkedRun.status === "canceled"
+                                ? "已取消"
+                                : linkedRun.status === "running"
+                                  ? "运行中"
+                                  : "排队中"}
+                        </span>
+                        {linkedRun.title && (
+                          <span className="message-run-card-title">{linkedRun.title}</span>
+                        )}
+                      </div>
+                      <div className="message-run-card-body">
+                        {getReplyFromRunOutput(linkedRun.output) || message.content || "代码执行完成。"}
+                      </div>
+                      {getExecIdFromRunOutput(linkedRun.output) && (
+                        <div className="message-run-card-exec-id">
+                          exec_id={getExecIdFromRunOutput(linkedRun.output)}
+                        </div>
+                      )}
+                      {onOpenRunDetails && (
+                        <button
+                          type="button"
+                          className="message-run-card-view-btn"
+                          onClick={() => onOpenRunDetails(linkedRun.id)}
+                          aria-label="查看输出"
+                        >
+                          查看输出
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      {isProactiveMessage && (
+                        <div className="message-proactive-badge">
+                          <span className="message-proactive-label">任务完成</span>
+                        </div>
+                      )}
+                      <div className="message-text">{message.content}</div>
+                    </>
+                  )}
                   {isFailed && errorMessage && (
                     <div className="message-error">
                       <span className="message-error-text">{errorMessage}</span>
