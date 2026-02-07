@@ -1,0 +1,46 @@
+{
+  "exec_id": "e_cd93cefedc9e4df4",
+  "project_id": "203a912f-79a9-44a7-865c-34d373be3b32",
+  "status": "SUCCEEDED",
+  "exit_code": 0,
+  "policy_snapshot": {
+    "timeout_ms": 60000,
+    "max_stdout_bytes": 1048576,
+    "max_stderr_bytes": 1048576
+  },
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "docker_mounts": [
+    "d:\\Project\\lonelycat\\LonelyCat\\workspace\\projects\\203a912f-79a9-44a7-865c-34d373be3b32\\inputs:/workspace/inputs:ro",
+    "d:\\Project\\lonelycat\\LonelyCat\\workspace\\projects\\203a912f-79a9-44a7-865c-34d373be3b32\\work:/workspace/work:rw",
+    "d:\\Project\\lonelycat\\LonelyCat\\workspace\\projects\\203a912f-79a9-44a7-865c-34d373be3b32\\artifacts\\e_cd93cefedc9e4df4:/workspace/artifacts:rw"
+  ],
+  "docker_image": "lonelycat-sandbox:py312",
+  "docker_args": [
+    "docker",
+    "run",
+    "--rm",
+    "--platform=linux/amd64",
+    "--network=none",
+    "--cap-drop=ALL",
+    "--security-opt=no-new-privileges",
+    "--user=1000:1000",
+    "--workdir=/workspace/work",
+    "--name=lonelycat-sbx-e_cd93ce",
+    "--memory=1024m",
+    "--cpus=1.0",
+    "--pids-limit=256",
+    "-v",
+    "d:\\Project\\lonelycat\\LonelyCat\\workspace\\projects\\203a912f-79a9-44a7-865c-34d373be3b32\\inputs:/workspace/inputs:ro",
+    "-v",
+    "d:\\Project\\lonelycat\\LonelyCat\\workspace\\projects\\203a912f-79a9-44a7-865c-34d373be3b32\\work:/workspace/work:rw",
+    "-v",
+    "d:\\Project\\lonelycat\\LonelyCat\\workspace\\projects\\203a912f-79a9-44a7-865c-34d373be3b32\\artifacts\\e_cd93cefedc9e4df4:/workspace/artifacts:rw",
+    "--entrypoint",
+    "",
+    "lonelycat-sandbox:py312",
+    "python",
+    "-c",
+    "print(sum(i*i for i in range(10)))"
+  ]
+}

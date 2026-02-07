@@ -1,0 +1,14 @@
+{
+  "files": [
+    {
+      "path": "stderr.txt",
+      "size": 73,
+      "hash": "6d3813ff88463e4203b898162627cb8eb29867e02c77deabde206c1296fc6ab5"
+    },
+    {
+      "path": "stdout.txt",
+      "size": 0,
+      "hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}
