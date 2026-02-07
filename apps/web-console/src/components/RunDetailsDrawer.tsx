@@ -1,5 +1,10 @@
-import { useState } from "react";
-import type { Run } from "../api/runs";
+import { useCallback, useState } from "react";
+import {
+  buildSandboxObservationUrl,
+  buildUrl,
+  isValidExecId,
+  type Run,
+} from "../api/runs";
 import "./RunDetailsDrawer.css";
 
 type RunDetailsDrawerProps = {
@@ -17,6 +22,33 @@ type StepItem = {
   error_code?: string | null;
   meta?: Record<string, unknown>;
 };
+
+/** Resolve exec_id from result/observation/meta/artifacts; only return if valid. */
+function resolveExecId(
+  result: Record<string, unknown>,
+  artifacts: Record<string, unknown>
+): string | undefined {
+  const candidates = [
+    result.exec_id,
+    (result.observation as Record<string, unknown> | undefined)?.exec_id,
+    (result.meta as Record<string, unknown> | undefined)?.exec_id,
+    (artifacts.exec as Record<string, unknown> | undefined)?.exec_id,
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && isValidExecId(c)) return c;
+  }
+  return undefined;
+}
+
+/** Step names that carry exec_id and should show the link in step meta. */
+function stepShowsExecIdLink(stepName: string | undefined): boolean {
+  if (!stepName) return false;
+  return (
+    stepName === "observation" ||
+    stepName === "respond" ||
+    stepName.startsWith("tool.")
+  );
+}
 
 const getStatusText = (status: Run["status"]): string => {
   switch (status) {
@@ -126,6 +158,55 @@ function buildDebugBundle(run: Run): string {
 
 export const RunDetailsDrawer = ({ run, onClose, onRetryRun, onApplyEditDocs, onCancelEditDocs }: RunDetailsDrawerProps) => {
   const [copyFeedback, setCopyFeedback] = useState<string | null>(null);
+  const [observationExecId, setObservationExecId] = useState<string | null>(null);
+  const [observationData, setObservationData] = useState<unknown>(null);
+  const [observationLoading, setObservationLoading] = useState(false);
+  const [observationError, setObservationError] = useState<string | null>(null);
+  const [observationCopyFeedback, setObservationCopyFeedback] = useState<string | null>(null);
+
+  const fetchObservation = useCallback(async (execId: string) => {
+    if (!isValidExecId(execId)) return;
+    setObservationExecId(execId);
+    setObservationData(null);
+    setObservationError(null);
+    setObservationLoading(true);
+    try {
+      const url = buildSandboxObservationUrl(execId);
+      if (!url) {
+        setObservationError("无效的 exec_id");
+        return;
+      }
+      const res = await fetch(url);
+      if (!res.ok) {
+        setObservationError(`请求失败: ${res.status}`);
+        return;
+      }
+      const data = await res.json();
+      setObservationData(data);
+    } catch (e) {
+      setObservationError(e instanceof Error ? e.message : "请求异常");
+    } finally {
+      setObservationLoading(false);
+    }
+  }, []);
+
+  const closeObservation = useCallback(() => {
+    setObservationExecId(null);
+    setObservationData(null);
+    setObservationError(null);
+  }, []);
+
+  const copyObservationJson = useCallback(async () => {
+    if (observationData == null) return;
+    try {
+      await navigator.clipboard.writeText(JSON.stringify(observationData, null, 2));
+      setObservationCopyFeedback("已复制");
+      setTimeout(() => setObservationCopyFeedback(null), 2000);
+    } catch {
+      setObservationCopyFeedback("复制失败");
+      setTimeout(() => setObservationCopyFeedback(null), 2000);
+    }
+  }, [observationData]);
 
   if (!run) {
     return null;
@@ -134,9 +215,10 @@ export const RunDetailsDrawer = ({ run, onClose, onRetryRun, onApplyEditDocs, on
   const input = (run.input || {}) as Record<string, unknown>;
   const output = (run.output || {}) as Record<string, unknown>;
   const result = (output.result as Record<string, unknown> | undefined) ?? {};
-  const traceId = (output.trace_id as string) ?? (input.trace_id as string) ?? "—";
-  const steps = (output.steps as StepItem[] | undefined) ?? [];
   const artifacts = (output.artifacts as Record<string, unknown> | undefined) ?? {};
+  const traceId = (output.trace_id as string) ?? (input.trace_id as string) ?? "—";
+  const execId = resolveExecId(result, artifacts);
+  const steps = (output.steps as StepItem[] | undefined) ?? [];
   const summaryArt = (artifacts.summary as { text?: string; format?: string } | undefined) ?? {};
   const reportArt = (artifacts.report as { text?: string; format?: string } | undefined) ?? {};
   const sourcesList = (artifacts.sources as Array<{ title?: string; url?: string; snippet?: string; provider?: string }> | undefined) ?? [];
@@ -214,6 +296,31 @@ export const RunDetailsDrawer = ({ run, onClose, onRetryRun, onApplyEditDocs, on
               <strong>Trace ID:</strong>
               <code className="run-drawer-code">{traceId}</code>
             </div>
+            {execId ? (
+              <div className="run-drawer-field">
+                <strong>Exec ID:</strong>{" "}
+                <button
+                  type="button"
+                  className="run-drawer-code run-drawer-exec-link"
+                  onClick={() => fetchObservation(execId)}
+                >
+                  {execId}
+                </button>
+                {buildSandboxObservationUrl(execId) ? (
+                  <>
+                    {" "}
+                    <a
+                      href={buildSandboxObservationUrl(execId)!}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      className="run-drawer-exec-external"
+                    >
+                      在新标签页打开
+                    </a>
+                  </>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
           <div className="run-drawer-section">
@@ -254,7 +361,7 @@ export const RunDetailsDrawer = ({ run, onClose, onRetryRun, onApplyEditDocs, on
                     <a
                       href={src.url}
                       target="_blank"
-                      rel="noopener noreferrer"
+                      rel="noreferrer noopener"
                       className="run-drawer-source-link"
                     >
                       {src.title ?? src.url ?? "—"}
@@ -315,18 +422,50 @@ export const RunDetailsDrawer = ({ run, onClose, onRetryRun, onApplyEditDocs, on
             <div className="run-drawer-section">
               <h4 className="run-drawer-section-title">Steps</h4>
               <ul className="run-drawer-steps">
-                {steps.map((step, i) => (
-                  <li key={i} className="run-drawer-step-item">
-                    <span className="run-drawer-step-name">{step.name ?? "—"}</span>
-                    <span className="run-drawer-step-meta">
-                      {step.duration_ms != null ? `${step.duration_ms} ms` : ""}
-                      {step.ok === false && step.error_code ? ` · ${step.error_code}` : ""}
-                    </span>
-                    {step.ok === false && (
-                      <span className="run-drawer-step-bad">failed</span>
-                    )}
-                  </li>
-                ))}
+                {steps.map((step, i) => {
+                  const stepExecId =
+                    typeof step.meta?.exec_id === "string" && isValidExecId(step.meta.exec_id)
+                      ? step.meta.exec_id
+                      : undefined;
+                  const showStepExecLink = stepExecId && stepShowsExecIdLink(step.name);
+                  return (
+                    <li key={i} className="run-drawer-step-item">
+                      <span className="run-drawer-step-name">{step.name ?? "—"}</span>
+                      <span className="run-drawer-step-meta">
+                        {step.duration_ms != null ? `${step.duration_ms} ms` : ""}
+                        {step.ok === false && step.error_code ? ` · ${step.error_code}` : ""}
+                        {showStepExecLink ? (
+                          <>
+                            {" · "}
+                            <button
+                              type="button"
+                              className="run-drawer-exec-link"
+                              onClick={() => fetchObservation(stepExecId)}
+                            >
+                              {stepExecId}
+                            </button>
+                            {buildSandboxObservationUrl(stepExecId) ? (
+                              <>
+                                {" "}
+                                <a
+                                  href={buildSandboxObservationUrl(stepExecId)!}
+                                  target="_blank"
+                                  rel="noreferrer noopener"
+                                  className="run-drawer-exec-external"
+                                >
+                                  新标签页
+                                </a>
+                              </>
+                            ) : null}
+                          </>
+                        ) : null}
+                      </span>
+                      {step.ok === false && (
+                        <span className="run-drawer-step-bad">failed</span>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}
@@ -343,6 +482,46 @@ export const RunDetailsDrawer = ({ run, onClose, onRetryRun, onApplyEditDocs, on
             </div>
           )}
         </div>
+
+        {observationExecId != null && (
+          <div className="run-drawer-observation">
+            <div className="run-drawer-observation-header">
+              <h4 className="run-drawer-observation-title">Observation — {observationExecId}</h4>
+              <button
+                type="button"
+                className="run-drawer-observation-close"
+                onClick={closeObservation}
+                aria-label="关闭"
+              >
+                <svg width="16" height="16" viewBox="0 0 20 20" fill="none">
+                  <path d="M15 5L5 15M5 5l10 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+              </button>
+            </div>
+            <div className="run-drawer-observation-actions">
+              {observationData != null && (
+                <button
+                  type="button"
+                  className="run-drawer-btn run-drawer-copy-btn"
+                  onClick={copyObservationJson}
+                >
+                  {observationCopyFeedback ?? "Copy JSON"}
+                </button>
+              )}
+            </div>
+            <div className="run-drawer-observation-body">
+              {observationLoading && <div className="run-drawer-observation-loading">加载中…</div>}
+              {observationError != null && (
+                <div className="run-drawer-observation-error">{observationError}</div>
+              )}
+              {!observationLoading && observationData != null && (
+                <pre className="run-drawer-observation-json">
+                  {JSON.stringify(observationData, null, 2)}
+                </pre>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </aside>
   );

@@ -161,3 +161,17 @@ def test_execute_dispatches_run_code_snippet():
 
     assert "ok" in result
     assert result.get("ok") is True
+
+
+@pytest.mark.skip(reason="Agent Loop v2 多步循环逻辑尚未在 runner 中实现")
+def test_run_code_snippet_multi_step_scenario_placeholder():
+    """多步场景（占位符）：第一步计算，第二步分析结果（待循环逻辑实现后启用）。
+    
+    预期行为：
+    - 根据 max_steps 控制执行步数
+    - 每步记录 tool_call、observation、respond 三个 step
+    - result.observation 包含最后一步的观察
+    - result.reply/final_response 基于最终 observation 生成
+    """
+    # 当前仅为占位符，待 worker._handle_run_code_snippet 实现循环后补充完整断言
+    pass

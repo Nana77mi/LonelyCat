@@ -4,19 +4,16 @@ const baseUrl =
   import.meta.env.VITE_API_BASE_URL ||
   "/api";
 
+/** Normalize base (no trailing slash) and path (single leading slash). */
 const joinBaseUrl = (base: string, path: string) => {
-  if (!base) {
-    return path.startsWith("/") ? path : `/${path}`;
-  }
-  const trimmedBase = base.replace(/\/+$/, "");
-  const trimmedPath = path.startsWith("/") ? path : `/${path}`;
-  return `${trimmedBase}${trimmedPath}`;
+  const trimmedBase = base ? base.replace(/\/+$/, "") : "";
+  const trimmedPath = path ? (path.startsWith("/") ? path.replace(/^\/+/, "/") : `/${path}`) : "/";
+  return trimmedBase ? `${trimmedBase}${trimmedPath}` : trimmedPath;
 };
 
-const buildUrl = (path: string, params?: Record<string, string | undefined>) => {
+/** Build full URL for API path (used by run list and e.g. sandbox exec links). */
+export const buildUrl = (path: string, params?: Record<string, string | undefined>) => {
   const joined = joinBaseUrl(baseUrl, path);
-  // If baseUrl is absolute (http:// or https://), use it directly
-  // Otherwise, treat as relative path (will use window.location.origin)
   const url = new URL(joined, baseUrl.startsWith("http") ? undefined : window.location.origin);
   if (params) {
     Object.entries(params).forEach(([key, value]) => {
@@ -26,6 +23,15 @@ const buildUrl = (path: string, params?: Record<string, string | undefined>) => 
     });
   }
   return url.toString();
+};
+
+/** Allowlist for exec_id (e_ + alphanumeric, no path chars). Max length 64. */
+export const isValidExecId = (s: string): boolean => /^e_[a-zA-Z0-9]{1,62}$/.test(s);
+
+/** Build sandbox observation URL only when exec_id is valid; otherwise null. */
+export const buildSandboxObservationUrl = (execId: string): string | null => {
+  if (!isValidExecId(execId)) return null;
+  return buildUrl(`sandbox/execs/${encodeURIComponent(execId)}/observation`);
 };
 
 const parseJson = async <T>(response: Response): Promise<T> => {

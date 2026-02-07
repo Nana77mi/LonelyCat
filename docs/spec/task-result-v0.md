@@ -90,7 +90,39 @@
 - llm_generate
 - （可选）persist_output
 
-### 3.3 Steps 约束
+### 3.3 Steps 命名建议（run_code_snippet 模板，Agent Loop v2）
+
+- tool_call: 调用工具（如 skill.python.run）
+- observation: 读取执行结果（stdout/stderr/artifacts）
+- respond: 生成最终回复（基于 observation）
+
+**observation step 的 meta 字段（Agent Loop v2）**：
+
+```json
+{
+  "exec_id": "e_xxx",
+  "exit_code": 0,
+  "stdout_preview": "前 200 字节",
+  "stderr_preview": "前 200 字节",
+  "stdout_truncated": false,
+  "stderr_truncated": false,
+  "stdout_bytes": 1234,
+  "stderr_bytes": 56,
+  "artifacts_count": 3
+}
+```
+
+**respond step 的 meta 字段（Agent Loop v2）**：
+
+```json
+{
+  "response_type": "direct",
+  "response_preview": "前 200 字节",
+  "exec_id": "e_xxx"
+}
+```
+
+### 3.4 Steps 约束
 
 - duration_ms 必须使用单调时钟计算（time.monotonic() / perf_counter()），避免负数。
 - 任意步骤失败：

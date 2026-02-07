@@ -44,6 +44,7 @@ class RunDecision(BaseModel):
     title: Optional[str] = None
     conversation_id: Optional[str] = None
     input: Dict[str, Any] = Field(default_factory=dict)
+    max_steps: Optional[int] = Field(default=3, description="最多执行步数，用于 Agent Loop v2 多步循环")
 
 
 class Decision(BaseModel):
@@ -257,7 +258,8 @@ Return ONLY a valid JSON object with this exact structure:
     "type": "string",
     "title": "string?",
     "conversation_id": "string|null",
-    "input": {{"any": "json"}}
+    "input": {{"any": "json"}},
+    "max_steps": 3
   }},
   "confidence": 0.0-1.0,
   "reason": "string"
@@ -276,6 +278,7 @@ Examples (user -> decision):
 - "查一下最畅销的手机品牌" -> decision=run, type=research_report, run.input.query="最畅销的手机品牌"
 - "帮我跑这段代码：print(1+1)" -> decision=run, type=run_code_snippet, run.input.conversation_id=current, run.input.language="python", run.input.code="print(1+1)"
 - "执行下面的 shell：echo hello" -> decision=run, type=run_code_snippet, run.input.language="shell", run.input.script="echo hello"
+- "帮我算这个数，然后解释" -> decision=run, type=run_code_snippet, run.input.conversation_id=current, run.input.language="python", run.input.code="...", run.input.max_steps=3
 - "你好" -> decision=reply
 """.format(
             allowed_types=", ".join(AGENT_ALLOWED_RUN_TYPES),
