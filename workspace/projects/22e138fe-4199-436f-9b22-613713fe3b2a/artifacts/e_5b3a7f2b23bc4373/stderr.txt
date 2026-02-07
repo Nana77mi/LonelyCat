@@ -1,1 +1,0 @@
-/usr/local/bin/python: /usr/local/bin/python: cannot execute binary file

@@ -1,4 +1,4 @@
-# Python
+﻿# Python
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -40,6 +40,12 @@ lonelycat_memory.db
 
 # Run artifacts (per-run serp.html, serp.meta.json)
 .artifacts/
+
+# Sandbox workspace runtime artifacts (do not commit)
+workspace/projects/
+
+# Cursor IDE plans/rules (local only)
+.cursor/
 
 # Lock files (optional - some projects prefer to commit these)
 # pnpm-lock.yaml
