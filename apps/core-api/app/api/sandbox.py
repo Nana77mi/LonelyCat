@@ -441,3 +441,131 @@ def list_sandbox_exec_artifacts(exec_id: str, db: Session = Depends(get_db)) -> 
     except (json.JSONDecodeError, OSError):
         base["missing_reason"] = "read_error"
         return base
+
+
+# ===== PR-1: stdout/stderr/observation endpoints =====
+
+def _read_output_file(exec_id: str, filename: str, db: Session) -> dict:
+    """
+    读取 stdout 或 stderr 文件
+    返回: {"exec_id": "...", "content": "...", "truncated": bool, "bytes": int, "missing_file": bool | None}
+    """
+    rec = db.query(SandboxExecRecord).filter(SandboxExecRecord.exec_id == exec_id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="exec not found")
+
+    base = {
+        "exec_id": exec_id,
+        "content": "",
+        "truncated": False,
+        "bytes": 0,
+        "missing_file": None,
+    }
+
+    if not rec.artifacts_path:
+        base["missing_file"] = True
+        return base
+
+    settings = get_current_settings(db)
+    try:
+        adapter = HostPathAdapter(settings)
+        root, _ = adapter.resolve_workspace_root()
+    except Exception:
+        raise HTTPException(status_code=500, detail="workspace config invalid")
+
+    from pathlib import Path
+    file_path = Path(root) / rec.artifacts_path / filename
+
+    if not file_path.is_file():
+        base["missing_file"] = True
+        return base
+
+    # 读取文件内容
+    try:
+        content = file_path.read_text(encoding="utf-8")
+        base["content"] = content
+        base["bytes"] = len(content.encode("utf-8"))  # 实际返回内容的字节数，不是文件 size
+    except (OSError, UnicodeDecodeError) as e:
+        base["missing_file"] = True
+        return base
+
+    # 从 DB 获取 truncated 标志
+    if filename == "stdout.txt":
+        base["truncated"] = rec.stdout_truncated
+    elif filename == "stderr.txt":
+        base["truncated"] = rec.stderr_truncated
+
+    return base
+
+
+@router.get("/execs/{exec_id}/stdout", response_model=dict)
+def get_sandbox_exec_stdout(exec_id: str, db: Session = Depends(get_db)) -> dict:
+    """
+    获取 exec 的 stdout 内容。
+    返回: {"exec_id": "...", "content": "...", "truncated": bool, "bytes": int, "missing_file": bool | None}
+    """
+    return _read_output_file(exec_id, "stdout.txt", db)
+
+
+@router.get("/execs/{exec_id}/stderr", response_model=dict)
+def get_sandbox_exec_stderr(exec_id: str, db: Session = Depends(get_db)) -> dict:
+    """
+    获取 exec 的 stderr 内容。
+    返回: {"exec_id": "...", "content": "...", "truncated": bool, "bytes": int, "missing_file": bool | None}
+    """
+    return _read_output_file(exec_id, "stderr.txt", db)
+
+
+@router.get("/execs/{exec_id}/observation", response_model=dict)
+def get_sandbox_exec_observation(exec_id: str, db: Session = Depends(get_db)) -> dict:
+    """
+    获取 exec 的完整 observation（stdout + stderr + artifacts + exit_code）。
+    返回聚合信息，减少 HTTP 请求次数。
+    """
+    rec = db.query(SandboxExecRecord).filter(SandboxExecRecord.exec_id == exec_id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="exec not found")
+
+    stdout_data = _read_output_file(exec_id, "stdout.txt", db)
+    stderr_data = _read_output_file(exec_id, "stderr.txt", db)
+
+    # 获取 artifacts（复用现有逻辑）
+    artifacts_dir = rec.artifacts_path
+    artifacts = {"files": [], "missing_manifest": True, "missing_reason": None}
+    if artifacts_dir:
+        settings = get_current_settings(db)
+        try:
+            adapter = HostPathAdapter(settings)
+            root, _ = adapter.resolve_workspace_root()
+            from pathlib import Path
+            manifest_path = Path(root) / artifacts_dir / "manifest.json"
+            if manifest_path.is_file():
+                try:
+                    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    artifacts = {
+                        "files": data.get("files", []),
+                        "missing_manifest": False,
+                        "missing_reason": None
+                    }
+                except (json.JSONDecodeError, OSError):
+                    artifacts["missing_reason"] = "read_error"
+        except Exception:
+            pass  # artifacts 读取失败不影响整体响应
+
+    return {
+        "exec_id": exec_id,
+        "exit_code": rec.exit_code,
+        "stdout": {
+            "content": stdout_data["content"],
+            "truncated": stdout_data["truncated"],
+            "bytes": stdout_data["bytes"],
+            "missing_file": stdout_data["missing_file"],
+        },
+        "stderr": {
+            "content": stderr_data["content"],
+            "truncated": stderr_data["truncated"],
+            "bytes": stderr_data["bytes"],
+            "missing_file": stderr_data["missing_file"],
+        },
+        "artifacts": artifacts,
+    }
