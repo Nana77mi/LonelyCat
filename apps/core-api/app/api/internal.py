@@ -9,6 +9,9 @@ from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
 # parent 处于 WAITING_CHILD 超过此时长视为超时，orchestration-step 返回 reply 兜底（需配合定时将 WAITING_CHILD 置为 QUEUED 的 job 才会被拉取到）
+_WAITING_CHILD_TIMEOUT_SECONDS = 600  # 10 min
+
+# parent 处于 WAITING_CHILD 超过此时长视为超时，orchestration-step 返回 reply 兜底（需配合定时将 WAITING_CHILD 置为 QUEUED 的 job 才会被拉取到）
 WAITING_CHILD_TIMEOUT_SECONDS = 600  # 10 min
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -193,25 +196,51 @@ async def yield_waiting_child(
     run_type_norm = (parent.type or "").strip().replace(" ", "_")
     if run_type_norm != "agent_loop_turn":
         raise HTTPException(status_code=400, detail=f"Run {run_id} is not agent_loop_turn")
-    out = parent.output_json or {}
-    if parent.status == RunStatus.WAITING_CHILD and (out.get("waiting_child_run_id") or out.get("child_run_id")):
-        existing = out.get("waiting_child_run_id") or out.get("child_run_id")
-        if existing == body.child_run_id:
-            return  # 204 no-op，HTTP 重试无副作用
-        raise HTTPException(status_code=409, detail=_WAITING_CHILD_CONFLICT_MSG)
     now = datetime.now(UTC)
-    parent.status = RunStatus.WAITING_CHILD
-    run_ids = list(body.run_ids) if body.run_ids else [body.child_run_id]
-    if body.child_run_id not in run_ids:
-        run_ids = run_ids + [body.child_run_id]
-    parent.output_json = {
-        "state": "WAIT_CHILD",
+    # 统一真源结构：output_json.waiting = { child_run_id, step_index, run_ids, since_ts }
+    waiting = {
         "child_run_id": body.child_run_id,
         "step_index": body.step_index,
-        "run_ids": run_ids,
-        "waiting_child_run_id": body.child_run_id,
-        "waiting_step_index": body.step_index,
+        "run_ids": list(body.run_ids) if body.run_ids else [body.child_run_id],
+        "since_ts": now.isoformat(),
     }
+    # 幂等：已 waiting 且 child_run_id 一致则 no-op；不一致则 409
+    existing_waiting = _read_waiting_info(parent.output_json)
+    if existing_waiting and existing_waiting.get("child_run_id") == body.child_run_id:
+        return
+    if existing_waiting:
+        raise HTTPException(status_code=409, detail=_WAITING_CHILD_CONFLICT_MSG)
+    parent.status = RunStatus.WAITING_CHILD
+    # 清空旧字段并写入新结构，避免混乱
+    parent.output_json = {
+        "waiting": waiting,
+    }
+    parent.worker_id = None
+    parent.lease_expires_at = None
+    parent.updated_at = now
+    db.commit()
+
+
+def _read_waiting_info(parent_output_json: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """从 parent.output_json 读取等待信息的真源结构（兼容旧字段）。
+    优先使用新的 output_json.waiting 结构；若不存在，则兼容读取顶层字段。
+    """
+    if not parent_output_json or not isinstance(parent_output_json, dict):
+        return None
+    if "waiting" in parent_output_json:
+        w = parent_output_json["waiting"]
+        if isinstance(w, dict):
+            return w
+    # 兼容旧字段
+    child_run_id = parent_output_json.get("waiting_child_run_id") or parent_output_json.get("child_run_id")
+    if child_run_id:
+        return {
+            "child_run_id": child_run_id,
+            "step_index": parent_output_json.get("waiting_step_index", parent_output_json.get("step_index", 0)),
+            "run_ids": parent_output_json.get("run_ids") or [],
+            "since_ts": None,
+        }
+    return None
     # 清空租约，避免被 worker 当作“过期 RUNNING”重拉
     parent.worker_id = None
     parent.lease_expires_at = None
@@ -239,22 +268,22 @@ async def orchestration_step(
             detail=f"Run {run_id} is not agent_loop_turn (type={run.type!r})",
         )
     out = run.output_json or {}
-    if out.get("state") == "WAIT_CHILD" and out.get("waiting_child_run_id") is not None:
-        if body.step_index == out.get("waiting_step_index"):
-            now = datetime.now(UTC)
-            updated = run.updated_at
-            if updated is not None and getattr(updated, "tzinfo", None) is None:
-                updated = updated.replace(tzinfo=UTC)
-            if updated is not None and (now - updated).total_seconds() > WAITING_CHILD_TIMEOUT_SECONDS:
-                # 兜底：waiting 超时，清空等待状态并返回 reply，由 worker 完成 parent
-                _wait_keys = ("state", "child_run_id", "waiting_child_run_id", "waiting_step_index", "run_ids")
-                run.output_json = {k: v for k, v in (run.output_json or {}).items() if k not in _wait_keys}
-                if not run.output_json:
-                    run.output_json = None
-                run.updated_at = now
-                db.commit()
-                return {"action": "reply", "final_reply": "子任务超时/失败，请重试。"}
-            return {"action": "wait", "child_run_id": out["waiting_child_run_id"]}
+    waiting = _read_waiting_info(out)
+    if waiting and body.step_index == waiting.get("step_index", 0):
+        now = datetime.now(UTC)
+        updated = run.updated_at
+        if updated is not None and getattr(updated, "tzinfo", None) is None:
+            updated = updated.replace(tzinfo=UTC)
+        if updated is not None and (now - updated).total_seconds() > WAITING_CHILD_TIMEOUT_SECONDS:
+            # 兜底：waiting 超时，清空等待状态并返回 reply，由 worker 完成 parent
+            _wait_keys = ("state", "child_run_id", "waiting_child_run_id", "waiting_step_index", "run_ids", "waiting")
+            run.output_json = {k: v for k, v in (run.output_json or {}).items() if k not in _wait_keys}
+            if not run.output_json:
+                run.output_json = None
+            run.updated_at = now
+            db.commit()
+            return {"action": "reply", "final_reply": "子任务超时/失败，请重试。"}
+        return {"action": "wait", "child_run_id": waiting["child_run_id"]}
     inp = run.input_json or {}
     conversation_id = inp.get("conversation_id")
     if not isinstance(conversation_id, str) or not conversation_id.strip():

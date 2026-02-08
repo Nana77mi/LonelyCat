@@ -786,9 +786,11 @@ class TaskRunner:
         yield_url = f"{base_url}/internal/runs/{run.id}/yield-waiting-child"
 
         inp = run.input_json or {}
-        step_index = inp.get("step_index", 0)
-        previous_output_json = inp.get("previous_output_json")
-        run_ids_so_far: List[str] = list(inp.get("run_ids") or [])
+        # 统一从 input_json.agent_loop 读可变状态，避免与用户输入混淆
+        loop = inp.get("agent_loop") or {}
+        step_index = loop.get("step_index", 0)
+        previous_output_json = loop.get("previous_output_json")
+        run_ids_so_far: List[str] = list(loop.get("run_ids") or [])
 
         try:
             if not heartbeat_callback():
@@ -839,11 +841,7 @@ class TaskRunner:
             with httpx.Client(timeout=10.0) as client:
                 yield_resp = client.post(
                     yield_url,
-                    json={
-                        "child_run_id": child_run_id,
-                        "step_index": step_index,
-                        "run_ids": new_run_ids,
-                    },
+                    json={"child_run_id": child_run_id},  # run_ids 由后端根据 waiting 结构管理
                 )
             if yield_resp.status_code != 204:
                 return {
