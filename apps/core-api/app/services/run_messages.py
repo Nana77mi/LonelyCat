@@ -268,17 +268,27 @@ def emit_run_message(db: Session, run: RunModel) -> None:
     
     # 生成消息内容与 source_ref
     if run_type_norm == "agent_loop_turn":
-        # task_done：仅由编排完成时写入，content 取自 output_json.final_reply
+        # task_done：agent_loop_turn 完成时，按终态生成内容；SUCCEEDED 时增加折叠区（最后一次 observation）
         output_json = run.output_json or {}
         if run.status == RunStatus.SUCCEEDED:
-            content = output_json.get("final_reply") or "任务已完成"
+            summary = output_json.get("final_reply") or "任务已完成"
+            # 提取最后一次 observation 用于折叠区展示
+            obs_preview = None
+            last_obs = (output_json.get("previous_output_json") or {}).get("result", {}).get("observation") or output_json.get("result", {}).get("observation")
+            if isinstance(last_obs, dict):
+                obs_preview = {k: v for k, v in list(last_obs.items())[:5]}
+            if obs_preview:
+                summary += f"\n【查看执行详情】\n最后一次执行结果预览：{obs_preview}\n（前端可按需展开完整步骤）"
+            source_ref = {"kind": "run_done", "ref_id": run.id, "excerpt": None}
         elif run.status == RunStatus.FAILED:
             content = f"任务执行失败：{run.error or '未知错误'}"
+            source_ref = {"kind": "run_done", "ref_id": run.id, "excerpt": None}
         elif run.status == RunStatus.CANCELED:
             content = "任务已取消"
+            source_ref = {"kind": "run_done", "ref_id": run.id, "excerpt": None}
         else:
             content = f"任务状态：{run.status.value}"
-        source_ref = {"kind": "run_done", "ref_id": run.id, "excerpt": None}
+            source_ref = {"kind": "run_done", "ref_id": run.id, "excerpt": None}
     else:
         if run.status == RunStatus.SUCCEEDED:
             if run.type == "summarize_conversation":

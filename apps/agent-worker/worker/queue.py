@@ -74,14 +74,14 @@ def _call_emit_run_message_api(run_id: str) -> None:
 def fetch_runnable_candidate(db: Session, now: datetime) -> Optional[str]:
     """获取可执行的候选 run ID
     
-    候选包含两类：
+    候选包含三类：
     1. status = 'queued'
     2. status = 'running' AND lease_expires_at < now (租约过期，可接管)
+    3. status = 'waiting_child' AND updated_at < now - 10min (超时兜底，执行一次 orchestration-step)
     
-    排除 canceled 状态（终态，不应被执行）。
-    仅拉取 QUEUED 与过期 RUNNING，不拉取 WAITING_CHILD（父在等子完成时不可被拉取）。
+    排除 canceled 状态（终态，不应被执行）
     
-    排序：先 queued，再过期 running，按 created_at ASC（FIFO，避免后创建的 child 先跑）。
+    排序：先 queued，再过期 running，最后超时 waiting_child，按 created_at ASC（公平）
     
     Args:
         db: 数据库会话
@@ -116,6 +116,22 @@ def fetch_runnable_candidate(db: Session, now: datetime) -> Optional[str]:
     
     if expired_run:
         return expired_run[0]
+    
+    # 兜底：捞取超时 waiting_child（updated_at < now - 10min），让 orchestration-step 返回 reply 并结束
+    stale_waiting_run = (
+        db.query(RunModel.id)
+        .filter(
+            and_(
+                RunModel.status == RunStatus.WAITING_CHILD,
+                RunModel.updated_at < (now - timedelta(seconds=600)),  # 10 min
+            )
+        )
+        .order_by(RunModel.created_at.asc())
+        .first()
+    )
+    
+    if stale_waiting_run:
+        return stale_waiting_run[0]
     
     return None
 
