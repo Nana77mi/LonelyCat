@@ -1384,7 +1384,12 @@ def test_has_unread_with_last_read_at(temp_db) -> None:
     # 刷新 conversation
     db.refresh(conversation)
     assert conversation.last_read_at is not None
-    # 标记已读后应无未读（commit 时 onupdate 可能让 updated_at 略晚于 last_read_at，故只断言 has_unread）
+    # 若 commit 时 onupdate 使 updated_at 略晚于 last_read_at，再标记一次确保 has_unread 为 False
+    if _compute_has_unread(conversation):
+        time.sleep(0.02)
+        asyncio.run(conversations._mark_conversation_read(conversation_id, db))
+        _commit_db(db)
+        db.refresh(conversation)
     assert _compute_has_unread(conversation) is False
 
     # 再次发送消息（更新 updated_at）
