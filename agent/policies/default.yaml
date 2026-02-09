@@ -1,0 +1,726 @@
+# LonelyCat Default Policies - Safety Kernel
+# This file defines what AI agents CAN and CANNOT do
+# Version: 0.1.0
+# Last Updated: 2026-02-09
+# Modification Protocol: writegate_required
+
+---
+# META
+meta:
+  policy_version: "0.1.0"
+  enforcement_layer: "core-api + agent-worker"
+  validation_mode: "deny_by_default"
+  audit_required: true
+  override_allowed: false  # Policies cannot be bypassed
+
+---
+# FORBIDDEN PATHS
+# AI agents MUST NEVER modify these paths
+# Violation: immediate abort + audit log
+
+forbidden_paths:
+  # Version Control
+  - .git/**
+  - .gitignore
+
+  # Secrets & Credentials
+  - .env
+  - .env.*
+  - "**/*.pem"
+  - "**/*.key"
+  - "**/credentials.*"
+  - "**/secrets.*"
+
+  # Package Management (managed by tools, not AI)
+  - node_modules/**
+  - .venv/**
+  - .venv-dev/**
+  - "**/__pycache__/**"
+  - "**/dist/**"
+  - "**/build/**"
+
+  # System Files
+  - "*.lock"
+  - pnpm-lock.yaml
+  - package-lock.json
+  - poetry.lock
+  - Pipfile.lock
+
+  # Safety Kernel (requires explicit user command)
+  - agent/policies/default.yaml  # This file!
+  - agent/policies/security_boundaries.md
+
+---
+# READ-ONLY PATHS
+# AI can read but MUST get approval before writing
+
+read_only_paths:
+  # Core Configuration
+  - Makefile
+  - pyproject.toml
+  - package.json
+  - tsconfig.json
+  - docker-compose.yml
+  - Dockerfile
+
+  # AI Cognition Source (read freely, write via WriteGate)
+  - agent/**
+
+  # Documentation (read freely, propose changes)
+  - docs/**
+  - README.md
+  - "**/*.md"
+
+  # Source Code (read freely, modify via WriteGate Phase 1+)
+  - apps/**/*.py
+  - apps/**/*.ts
+  - apps/**/*.tsx
+  - packages/**/*.py
+  - connectors/**/*.ts
+
+---
+# WRITE-ALLOWED PATHS
+# AI can propose writes without approval (but still audited)
+
+write_allowed_paths:
+  # Temporary/Workspace
+  - workspace/**
+  - .pids/**
+  - "*.log"
+
+  # Test Artifacts
+  - .pytest_cache/**
+  - htmlcov/**
+  - "**/*.pyc"
+
+  # Generated Files (by projection tool)
+  - AGENTS.md
+  - CLAUDE.md
+  - .cursor/rules/**
+
+---
+# RISK LEVELS
+# Tools and operations categorized by danger level
+
+risk_levels:
+  read_only:  # L0 - No side effects
+    tools:
+      - web.search
+      - web.fetch
+      - projection.query_implementation
+      - memory.list_facts
+    operations:
+      - read_file
+      - list_directory
+      - query_database
+    approval_required: false
+
+  write:  # L1 - Modifies data/files
+    tools:
+      - memory.propose
+      - memory.retract
+      - skill.python.run
+      - skill.shell.run
+    operations:
+      - write_file
+      - create_directory
+      - delete_file
+    approval_required: true  # Phase 0: always required
+    # Phase 1+: conditional (based on path whitelist)
+
+  execute:  # L2 - Runs code/commands
+    tools:
+      - host.execute_command
+      - host.apply_patch
+      - host.restart_service
+    operations:
+      - execute_shell
+      - modify_database
+      - restart_service
+    approval_required: true  # Always required
+    audit_level: detailed  # Log full command + args
+
+  destructive:  # L3 - Cannot be undone easily
+    tools:
+      - host.delete_database
+      - host.force_push
+      - git.reset_hard
+    operations:
+      - drop_table
+      - delete_branch
+      - overwrite_history
+    approval_required: true
+    confirmation_count: 2  # Require double confirmation
+    audit_level: forensic  # Log everything + take snapshot
+
+---
+# WRITEGATE RULES (Phase 1)
+# How AI proposes code modifications
+
+writegate_rules:
+  # When WriteGate is required
+  triggers:
+    - path_matches: "apps/**/*.py"
+    - path_matches: "packages/**/*.py"
+    - path_matches: "apps/**/*.ts"
+    - path_matches: "**/pyproject.toml"
+    - path_matches: "**/package.json"
+    - operation: "modify_code"
+    - operation: "add_dependency"
+    - operation: "change_config"
+
+  # Approval workflow
+  approval_flow:
+    - stage: "plan"
+      required_fields:
+        - objective
+        - affected_files
+        - risk_assessment
+        - rollback_plan
+      reviewer: "user"
+
+    - stage: "diff"
+      required_fields:
+        - old_content
+        - new_content
+        - diff_unified
+      reviewer: "user"
+
+    - stage: "verify"
+      required_fields:
+        - tests_passed
+        - type_check_passed
+        - linter_passed
+      auto_execute: false  # Phase 1: manual trigger
+
+  # Rejection handling
+  on_rejection:
+    - log_reason
+    - archive_changeset
+    - propose_alternative: allowed
+
+  # Auto-approval (disabled in Phase 0-1)
+  auto_approve:
+    enabled: false
+    # Future: confidence_threshold: 0.95
+    # Future: file_categories: ["docs/**/*.md", "tests/**"]
+
+---
+# EXECUTOR RULES (Phase 2)
+# How ChangeSets are executed safely
+
+executor:
+  # Allowed paths (defense in depth - WriteGate already checked, Executor double-checks)
+  allowed_paths:
+    - "apps/**"
+    - "packages/**"
+    - "connectors/**"
+    - "docs/**"
+    - "*.md"
+    - "workspace/**"
+
+  # Executor constraints
+  constraints:
+    max_files_touched: 50  # Single ChangeSet cannot modify more than 50 files
+    max_patch_lines: 5000  # Single ChangeSet cannot exceed 5000 lines of diff
+    max_execution_time: 300  # 5 minutes timeout per execution
+    max_step_time: 60  # 1 minute timeout per step (backup, apply, verify, health)
+
+  # Risk-based requirements
+  require_health_checks_for_risk:
+    - MEDIUM
+    - HIGH
+    - CRITICAL
+
+  require_verification_for_risk:
+    - LOW
+    - MEDIUM
+    - HIGH
+    - CRITICAL
+
+  require_rollback_plan_for_risk:
+    - LOW
+    - MEDIUM
+    - HIGH
+    - CRITICAL
+
+  # Always require human review for these categories
+  always_review_categories:
+    - path_matches: "**/*schema*.py"  # Database schemas
+    - path_matches: "**/*migration*.py"  # Database migrations
+    - path_matches: "**/security/**"  # Security-related code
+    - path_matches: "agent/policies/**"  # Policy files
+    - path_matches: "packages/executor/**"  # Executor itself (self-modification)
+    - path_matches: "packages/governance/**"  # Governance system
+    - path_matches: "packages/planner/**"  # Planner system
+    - operation: "delete_file"  # All file deletions
+    - operation: "modify_critical_config"  # Critical config changes
+
+  # Concurrency control (Phase 2.1)
+  concurrency:
+    enabled: true  # Phase 2.1: enforce ExecutionLock
+    lock_scope: "repository"  # Only one execution per repo at a time
+    lock_timeout: 600  # 10 minutes max wait for lock
+    fail_on_timeout: true  # Fail if cannot acquire lock
+
+  # Idempotency (Phase 2.1)
+  idempotency:
+    enabled: true  # Phase 2.1: prevent duplicate execution
+    key_format: "plan_id + changeset.checksum"
+    cached_result_ttl: 3600  # Cache execution results for 1 hour
+    allow_retry_on_failure: true  # Allow retry if previous execution failed
+
+  # Backup policy
+  backup:
+    always_create: true
+    retention_policy: "delete_on_success"  # Keep only failed execution backups
+    backup_location: ".lonelycat/backups"
+    max_backup_age_days: 7
+
+  # Verification requirements
+  verification:
+    always_run: true
+    fail_fast: true  # Stop on first verification failure
+    timeout_per_step: 60  # 1 minute per verification step
+    required_steps:
+      - "parse_plan"
+      - "execute_steps"
+      - "check_results"
+
+  # Health check requirements
+  health_checks:
+    enabled: true
+    timeout: 30  # 30 seconds per health check
+    required_for_services:
+      - "core-api"
+      - "agent-worker"
+      - "web-console"
+    retry_on_transient_failure: true
+    max_retries: 3
+
+    # Health check specifications (Phase 2.1+: 先定协议)
+    # These define HOW to check health, not just "check health"
+    specs:
+      # HTTP endpoint checks
+      http_get:
+        - name: "core-api-health"
+          url: "http://127.0.0.1:5173/health"
+          expect_status: 200
+          timeout: 5
+          required_for_risk: ["MEDIUM", "HIGH", "CRITICAL"]
+
+        - name: "agent-worker-health"
+          url: "http://127.0.0.1:5174/health"
+          expect_status: 200
+          timeout: 5
+          required_for_risk: ["HIGH", "CRITICAL"]
+
+      # Process alive checks
+      process_alive:
+        - name: "core-api-process"
+          process_name: "uvicorn"  # or PID file
+          required_for_risk: ["HIGH", "CRITICAL"]
+
+        - name: "agent-worker-process"
+          process_name: "python"
+          cmdline_contains: "agent-worker"
+          required_for_risk: ["HIGH", "CRITICAL"]
+
+      # Command profile checks (pre-defined smoke tests)
+      command_profile:
+        - name: "smoke-test-suite"
+          profile: "smoke"  # References pre-defined command set
+          required_for_risk: ["MEDIUM", "HIGH", "CRITICAL"]
+          # Note: Commands are NEVER inline, only profile references
+          # This prevents command injection via policy
+
+      # Database connectivity
+      database:
+        - name: "memory-db-connectivity"
+          db_type: "sqlite"
+          db_path: "lonelycat_memory.db"
+          test_query: "SELECT 1"
+          timeout: 3
+          required_for_risk: ["MEDIUM", "HIGH", "CRITICAL"]
+
+      # File existence checks
+      file_exists:
+        - name: "critical-config-exists"
+          paths:
+            - "agent/policies/default.yaml"
+            - "packages/governance/schema.py"
+          required_for_risk: ["CRITICAL"]
+
+  # Rollback policy
+  rollback:
+    automatic_on_failure: true  # Always rollback if any step fails
+    verify_after_rollback: true  # Run health checks after rollback
+    preserve_rollback_logs: true  # Keep logs even after successful rollback
+
+  # Audit requirements
+  audit:
+    log_level: "detailed"  # Phase 2: detailed logging
+    required_fields:
+      - execution_id
+      - plan_id
+      - changeset_id
+      - decision_id
+      - started_at
+      - completed_at
+      - files_changed
+      - verification_results
+      - health_check_results
+      - rollback_triggered
+    retention_days: 90
+
+  # Forbidden operations (double-check even if WriteGate approved)
+  forbidden_operations:
+    - operation: "modify_git_history"
+      reason: "Cannot rewrite git history"
+    - operation: "force_push"
+      reason: "Cannot force push"
+    - operation: "delete_database"
+      reason: "Cannot drop databases"
+    - operation: "bypass_checksum"
+      reason: "Cannot skip checksum verification"
+    - operation: "skip_rollback"
+      reason: "Cannot skip rollback on failure"
+
+---
+# EXECUTION PERMISSIONS
+# What AI can do at each phase
+
+execution_permissions:
+  phase_0:  # Current - Cognition only
+    can_do:
+      - read_any_file
+      - query_projections
+      - list_facts
+      - propose_facts
+      - run_sandboxed_skills
+    cannot_do:
+      - modify_code
+      - change_config
+      - execute_host_commands
+      - auto_approve_proposals
+
+  phase_1:  # WriteGate enabled
+    can_do:
+      - propose_code_changes  # via WriteGate
+      - generate_diffs
+      - create_changesets
+    cannot_do:
+      - apply_changes_without_approval
+      - modify_policies
+      - bypass_audit
+
+  phase_2:  # Host Executor enabled
+    can_do:
+      - read_local_files  # whitelisted paths
+      - write_local_files  # with approval
+      - apply_patches  # with approval
+      - run_tests  # sandboxed
+    cannot_do:
+      - access_network_unrestricted
+      - modify_system_files
+      - escalate_privileges
+
+  phase_3:  # Reflection enabled
+    can_do:
+      - analyze_past_runs
+      - propose_systemic_improvements
+      - update_agent_capabilities_memory
+    cannot_do:
+      - force_accept_improvements
+      - modify_memory_without_audit
+
+  phase_4:  # SkillOps enabled
+    can_do:
+      - propose_skill_installation
+      - generate_skill_documentation
+      - run_skill_health_checks
+    cannot_do:
+      - auto_install_skills
+      - modify_skill_manifests_without_approval
+
+  phase_5:  # Self-modification enabled
+    can_do:
+      - propose_architectural_changes
+      - run_sandboxed_validation
+      - apply_approved_changes_atomically
+    cannot_do:
+      - autonomous_merge_to_main
+      - disable_safety_checks
+      - modify_this_policy_file
+
+---
+# APPROVAL REQUIREMENTS
+# When human approval is mandatory
+
+approval_required:
+  always:
+    - operation: "modify_code"
+    - operation: "change_database_schema"
+    - operation: "add_dependency"
+    - operation: "delete_file"
+    - operation: "execute_shell_command"
+    - operation: "modify_policies"
+    - operation: "expose_api_externally"
+
+  conditional:
+    - operation: "create_file"
+      condition: "not in workspace/**"
+    - operation: "propose_fact"
+      condition: "confidence < 0.85"
+    - operation: "run_skill"
+      condition: "risk_level >= L2"
+
+  never:
+    - operation: "read_file"
+    - operation: "query_memory"
+    - operation: "search_web"
+
+---
+# FREQUENCY LIMITS
+# Prevent runaway execution
+
+frequency_limits:
+  tool_calls:
+    per_conversation:
+      web.search: 20
+      web.fetch: 30
+      skill.python.run: 10
+      skill.shell.run: 5
+    per_minute:
+      memory.propose: 5
+      memory.retract: 3
+
+  proposals:
+    per_hour: 50
+    per_day: 200
+
+  llm_calls:
+    per_conversation: 100
+    per_minute: 10
+
+---
+# TIME WINDOWS
+# When certain operations are allowed
+
+time_windows:
+  destructive_operations:
+    allowed: false  # Phase 0: always disabled
+    # Future: allowed_hours: "09:00-17:00"
+    # Future: allowed_days: ["Mon", "Tue", "Wed", "Thu", "Fri"]
+
+  auto_accept_proposals:
+    enabled: false  # Phase 0-1: disabled
+    # Future: if confidence >= 0.95 AND hour in [00:00-23:59]
+
+---
+# DEPENDENCY CONSTRAINTS
+# What AI must check before acting
+
+dependencies:
+  before_modifying_code:
+    - check: "tests_exist"
+    - check: "no_uncommitted_changes"  # Optional but recommended
+    - check: "not_in_read_only_paths"
+
+  before_executing_skill:
+    - check: "manifest_valid"
+    - check: "docker_available"
+    - check: "network_isolation_enforced"
+
+  before_accepting_proposal:
+    - check: "no_conflicting_facts"
+    - check: "scope_is_valid"
+    - check: "confidence_is_numeric"
+
+---
+# AUDIT LEVELS
+# How detailed logging should be
+
+audit_levels:
+  minimal:  # Operation name + timestamp
+    operations:
+      - read_file
+      - list_directory
+
+  standard:  # + args summary + result status
+    operations:
+      - web.search
+      - web.fetch
+      - memory.propose
+
+  detailed:  # + full args + full result
+    operations:
+      - skill.python.run
+      - skill.shell.run
+      - memory.accept_proposal
+
+  forensic:  # + snapshot + trace + context
+    operations:
+      - modify_code
+      - delete_file
+      - execute_shell_command
+      - modify_policies
+
+---
+# ROLLBACK POLICIES
+# How to undo changes
+
+rollback:
+  automatic:
+    triggers:
+      - tests_failed_after_change
+      - service_crashed_after_change
+      - type_check_failed
+    max_attempts: 3
+
+  manual:
+    required_for:
+      - database_migrations
+      - dependency_updates
+      - configuration_changes
+
+  snapshot:
+    before_operations:
+      - modify_database_schema
+      - change_critical_config
+      - update_dependencies
+
+---
+# SECURITY BOUNDARIES (Immutable)
+# These CANNOT be changed by AI, only by explicit user command
+
+security_boundaries:
+  - rule: "AI cannot modify agent/policies/default.yaml"
+    reason: "Prevents AI from removing its own constraints"
+    exception: "Explicit user command: 'Claude, edit policies/default.yaml'"
+
+  - rule: "AI cannot bypass WriteGate"
+    reason: "All code changes must be reviewed"
+    exception: "None (even user cannot override in Phase 0-1)"
+
+  - rule: "AI cannot disable audit logging"
+    reason: "Forensic trail required for debugging"
+    exception: "None"
+
+  - rule: "AI cannot expose secrets in logs"
+    reason: "Prevents credential leakage"
+    exception: "None"
+
+  - rule: "Skills must run with --network=none (Phase 1)"
+    reason: "Network isolation for untrusted code"
+    exception: "Phase 2+ with explicit network policy"
+
+---
+# CONFLICT RESOLUTION
+# When policies conflict, use this precedence
+
+conflict_resolution:
+  precedence_order:
+    1: "security_boundaries"
+    2: "forbidden_paths"
+    3: "approval_required"
+    4: "risk_levels"
+    5: "frequency_limits"
+
+  examples:
+    - scenario: "AI wants to modify agent/policies/default.yaml"
+      conflicts:
+        - forbidden_paths: disallowed
+        - read_only_paths: disallowed
+      resolution: "Deny (forbidden_paths has higher precedence)"
+
+    - scenario: "AI wants to read .env"
+      conflicts:
+        - forbidden_paths: disallowed (secrets)
+        - read_only_paths: would allow reading
+      resolution: "Deny (forbidden_paths > read_only_paths)"
+
+---
+# VALIDATION
+# How to check if policies are being followed
+
+validation:
+  pre_execution:
+    - check_path_whitelist
+    - check_risk_level
+    - check_frequency_limit
+    - check_dependencies
+
+  post_execution:
+    - verify_audit_logged
+    - verify_no_forbidden_paths_touched
+    - verify_rollback_possible
+
+  periodic:
+    - audit_log_integrity_check
+    - unused_permissions_review
+    - failed_operations_analysis
+
+---
+# EMERGENCY OVERRIDES (Use Sparingly!)
+# When AI is stuck and user needs to force action
+
+emergency_overrides:
+  enabled: false  # Disabled by default
+  activation_command: "EMERGENCY_OVERRIDE: <reason>"
+  requires_confirmation: true
+  audit_level: forensic
+  auto_expire_after: "1 hour"
+
+  allowed_overrides:
+    - bypass_frequency_limit
+    - force_approve_proposal
+    - skip_single_approval  # NOT skip ALL approvals
+
+  forbidden_overrides:
+    - disable_audit
+    - modify_policies
+    - bypass_security_boundaries
+
+---
+# FUTURE ENHANCEMENTS (Planned)
+
+future:
+  phase_2:
+    - add: "path_adapter_policies"  # Win/WSL path rules
+    - add: "host_executor_whitelist"  # Allowed local commands
+
+  phase_3:
+    - add: "reflection_policies"  # What AI can learn from
+    - add: "self_model_update_rules"  # How AI updates its capabilities memory
+
+  phase_4:
+    - add: "skill_installation_policies"  # Skill marketplace rules
+    - add: "skill_health_check_policies"  # When to disable unhealthy skills
+
+  phase_5:
+    - add: "self_modification_policies"  # Architectural change rules
+    - add: "autonomous_improvement_thresholds"  # When AI can act without approval
+
+---
+# NOTES FOR AI AGENTS
+
+notes_for_ai:
+  - "This file is your Safety Kernel - your operational boundaries"
+  - "If unsure whether an action is allowed, default to asking user"
+  - "Policies exist to prevent accidents, not to limit useful work"
+  - "When policies block you, propose a policy change (via WriteGate Phase 1+)"
+  - "NEVER try to bypass policies - it breaks trust and creates unsafe behavior"
+  - "If you find a policy too restrictive, explain why and propose improvement"
+
+---
+# CHANGELOG
+
+changelog:
+  - version: "0.1.0"
+    date: "2026-02-09"
+    changes:
+      - "Initial policy definition for Phase 0"
+      - "Established forbidden paths and risk levels"
+      - "Defined WriteGate rules for Phase 1"
+      - "Created security boundaries"

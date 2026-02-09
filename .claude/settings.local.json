@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(powershell.exe:*)",
+      "Bash(test:*)",
+      "Bash(python3 -m venv:*)",
+      "Bash(python3:*)",
+      "Bash(python scripts/generate_projections.py:*)",
+      "Bash(python:*)",
+      "Bash(.venv\\\\Scripts\\\\python.exe -m pytest:*)",
+      "Bash(.venv/Scripts/python.exe -m pytest packages/executor/tests/test_executor.py -v)",
+      "Bash(.venv/Scripts/python.exe:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}
