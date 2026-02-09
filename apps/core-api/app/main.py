@@ -53,6 +53,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in offline tests
             self.app = app
 
 from app.api.conversations import router as conversations_router
+from app.api.governance import router as governance_router
 from app.api.internal import router as internal_router
 from app.api.memory import router as memory_router
 from app.api.runs import router as runs_router
@@ -64,6 +65,16 @@ from app.settings import Settings
 
 # 初始化数据库（包括 conversations 和 messages 表）
 init_core_db()
+
+# 初始化 Governance 表
+try:
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "packages"))
+    from governance.schema import init_governance_db
+    init_governance_db()
+except Exception as e:
+    print(f"[governance] Failed to initialize governance DB: {e}")
 
 settings = Settings()
 
@@ -104,6 +115,7 @@ app.include_router(runs_router, prefix="/runs", tags=["runs"])
 app.include_router(settings_router, prefix="/settings", tags=["settings"])
 app.include_router(sandbox_router, prefix="/sandbox")
 app.include_router(skills_router, prefix="/skills")
+app.include_router(governance_router)  # Governance endpoints (WriteGate)
 app.include_router(internal_router)  # 内部 API，无需 prefix（已在 router 中定义）
 
 
