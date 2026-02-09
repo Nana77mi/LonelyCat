@@ -1,11 +1,12 @@
 """
-LonelyCat Execution History API - Phase 2.3-A
+LonelyCat Execution History API - Phase 2.4-A (Updated)
 
 Provides read-only observability endpoints for execution history:
 - GET /executions - List executions with filters
 - GET /executions/{execution_id} - Get execution details with steps
 - GET /executions/{execution_id}/artifacts - Get artifact metadata
 - GET /executions/{execution_id}/replay - Replay execution from artifacts
+- GET /executions/{execution_id}/lineage - Get execution lineage (ancestors, descendants, siblings)
 
 Philosophy:
 - Read-only observability (no mutations)
@@ -122,6 +123,38 @@ class ExecutionListResponse(BaseModel):
     offset: int = 0
 
 
+class LineageExecutionSummary(BaseModel):
+    """Execution summary in lineage context (includes graph fields)."""
+    execution_id: str
+    plan_id: str
+    status: str
+    verdict: str
+    risk_level: str
+    started_at: str
+    ended_at: Optional[str]
+    correlation_id: Optional[str] = None
+    parent_execution_id: Optional[str] = None
+    trigger_kind: Optional[str] = None
+    run_id: Optional[str] = None
+    files_changed: int
+
+
+class ExecutionLineage(BaseModel):
+    """Execution lineage response (Phase 2.4-A)."""
+    execution: LineageExecutionSummary
+    ancestors: List[LineageExecutionSummary]  # From root to immediate parent
+    descendants: List[LineageExecutionSummary]  # All children (BFS order)
+    siblings: List[LineageExecutionSummary]  # Same parent
+
+
+class CorrelationChain(BaseModel):
+    """Correlation chain response (Phase 2.4-A)."""
+    correlation_id: str
+    total_executions: int
+    root_execution_id: Optional[str]
+    executions: List[LineageExecutionSummary]
+
+
 # ==================== Endpoints ====================
 
 @router.get("", response_model=ExecutionListResponse)
@@ -131,7 +164,8 @@ async def list_executions(
     status: Optional[str] = Query(None, description="Filter by status (pending, completed, failed, rolled_back)"),
     verdict: Optional[str] = Query(None, description="Filter by verdict (allow, need_approval, deny)"),
     risk_level: Optional[str] = Query(None, description="Filter by risk level (low, medium, high, critical)"),
-    since: Optional[str] = Query(None, description="ISO timestamp - only show executions after this time")
+    since: Optional[str] = Query(None, description="ISO timestamp - only show executions after this time"),
+    correlation_id: Optional[str] = Query(None, description="Filter by correlation_id (Phase 2.4-A)")
 ):
     """
     List executions with optional filters.
@@ -142,20 +176,27 @@ async def list_executions(
         GET /executions?limit=10
         GET /executions?status=failed&risk_level=high
         GET /executions?verdict=allow&since=2024-01-01T00:00:00Z
+        GET /executions?correlation_id=corr_abc123  (Phase 2.4-A)
     """
     try:
-        # Get filtered executions from store
-        # Note: ExecutionStore doesn't support offset/since yet in Phase 2.2
-        # For MVP, we'll get all matching and slice in memory
-        records = execution_store.list_executions(
-            limit=limit + offset,  # Get more to account for offset
-            status=status,
-            verdict=verdict,
-            risk_level=risk_level
-        )
+        # If correlation_id is specified, use specialized query
+        if correlation_id:
+            records = execution_store.list_executions_by_correlation(correlation_id, limit=limit + offset)
+            # Apply offset
+            records = records[offset:offset + limit]
+        else:
+            # Get filtered executions from store
+            # Note: ExecutionStore doesn't support offset/since yet in Phase 2.2
+            # For MVP, we'll get all matching and slice in memory
+            records = execution_store.list_executions(
+                limit=limit + offset,  # Get more to account for offset
+                status=status,
+                verdict=verdict,
+                risk_level=risk_level
+            )
 
-        # Apply offset
-        records = records[offset:offset + limit]
+            # Apply offset
+            records = records[offset:offset + limit]
 
         # Convert to response model
         executions = []
@@ -408,3 +449,115 @@ async def replay_execution_endpoint(execution_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to replay execution: {str(e)}")
+
+
+@router.get("/{execution_id}/lineage", response_model=ExecutionLineage)
+async def get_execution_lineage(
+    execution_id: str,
+    depth: int = Query(20, ge=1, le=100, description="Maximum traversal depth")
+):
+    """
+    Get execution lineage (Phase 2.4-A).
+
+    Returns:
+        - execution: The target execution with graph fields
+        - ancestors: List of parent executions (root → immediate parent)
+        - descendants: List of child executions (BFS order)
+        - siblings: Executions with same parent
+
+    Examples:
+        GET /executions/exec_123/lineage
+        GET /executions/exec_123/lineage?depth=10
+    """
+    try:
+        # Get lineage from store
+        lineage = execution_store.get_execution_lineage(execution_id, depth=depth)
+
+        if not lineage or not lineage.get("execution"):
+            raise HTTPException(status_code=404, detail=f"Execution {execution_id} not found")
+
+        # Helper to convert ExecutionRecord to LineageExecutionSummary
+        def to_lineage_summary(record) -> LineageExecutionSummary:
+            return LineageExecutionSummary(
+                execution_id=record.execution_id,
+                plan_id=record.plan_id,
+                status=record.status,
+                verdict=record.verdict,
+                risk_level=record.risk_level or "unknown",
+                started_at=record.started_at,
+                ended_at=record.ended_at,
+                correlation_id=record.correlation_id,
+                parent_execution_id=record.parent_execution_id,
+                trigger_kind=record.trigger_kind,
+                run_id=record.run_id,
+                files_changed=record.files_changed
+            )
+
+        # Convert to response model
+        return ExecutionLineage(
+            execution=to_lineage_summary(lineage["execution"]),
+            ancestors=[to_lineage_summary(r) for r in lineage.get("ancestors", [])],
+            descendants=[to_lineage_summary(r) for r in lineage.get("descendants", [])],
+            siblings=[to_lineage_summary(r) for r in lineage.get("siblings", [])]
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get lineage: {str(e)}")
+
+
+@router.get("/correlation/{correlation_id}", response_model=CorrelationChain)
+async def get_correlation_chain(
+    correlation_id: str,
+    limit: int = Query(100, ge=1, le=500, description="Max executions to return")
+):
+    """
+    Get all executions in a correlation chain (Phase 2.4-A).
+
+    A correlation chain represents related executions in the same task context
+    (e.g., original execution + retries + repairs).
+
+    Examples:
+        GET /executions/correlation/corr_abc123
+        GET /executions/correlation/corr_abc123?limit=50
+    """
+    try:
+        # Get all executions with this correlation_id
+        executions = execution_store.list_executions_by_correlation(correlation_id, limit=limit)
+
+        if not executions:
+            raise HTTPException(status_code=404, detail=f"No executions found for correlation_id {correlation_id}")
+
+        # Get root execution
+        root = execution_store.get_root_execution(correlation_id)
+
+        # Convert to response model
+        def to_lineage_summary(record) -> LineageExecutionSummary:
+            return LineageExecutionSummary(
+                execution_id=record.execution_id,
+                plan_id=record.plan_id,
+                status=record.status,
+                verdict=record.verdict,
+                risk_level=record.risk_level or "unknown",
+                started_at=record.started_at,
+                ended_at=record.ended_at,
+                correlation_id=record.correlation_id,
+                parent_execution_id=record.parent_execution_id,
+                trigger_kind=record.trigger_kind,
+                run_id=record.run_id,
+                files_changed=record.files_changed
+            )
+
+        return CorrelationChain(
+            correlation_id=correlation_id,
+            total_executions=len(executions),
+            root_execution_id=root.execution_id if root else None,
+            executions=[to_lineage_summary(r) for r in executions]
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get correlation chain: {str(e)}")
+

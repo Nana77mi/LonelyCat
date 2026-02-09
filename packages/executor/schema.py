@@ -1,11 +1,12 @@
 """
-Executor Database Schema - Phase 2.2-B
+Executor Database Schema - Phase 2.4-A (Updated)
 
 Provides SQLite tables for execution history and step tracking.
 
 Tables:
-- executions: High-level execution records
+- executions: High-level execution records (with graph fields)
 - execution_steps: Step-by-step timing and status
+- schema_migrations: Migration version tracking
 
 Why separate from governance DB?
 - Governance = decision audit trail (immutable, policy-driven)
@@ -102,7 +103,7 @@ CREATE INDEX IF NOT EXISTS idx_execution_steps_status ON execution_steps(status)
 
 def init_executor_db(db_path: Optional[Path] = None):
     """
-    Initialize executor database with tables.
+    Initialize executor database with tables and run migrations.
 
     Args:
         db_path: Path to SQLite database file.
@@ -114,7 +115,7 @@ def init_executor_db(db_path: Optional[Path] = None):
     # Ensure parent directory exists
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Create tables
+    # Create base tables
     conn = sqlite3.connect(str(db_path))
     try:
         conn.executescript(EXECUTIONS_TABLE)
@@ -123,6 +124,10 @@ def init_executor_db(db_path: Optional[Path] = None):
         print(f"[executor] Database initialized: {db_path}")
     finally:
         conn.close()
+
+    # Run migrations
+    from .migrations import run_migrations
+    run_migrations(db_path)
 
 
 def get_db_connection(db_path: Optional[Path] = None) -> sqlite3.Connection:

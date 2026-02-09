@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Production Validation Script - Phase 2.3-D (Extended)
+Production Validation Script - Phase 2.4-A (Extended)
 
 Philosophy: Pre-release smoke test for LonelyCat end-to-end pipeline.
 
@@ -12,6 +12,7 @@ Validates:
 5. Artifact + SQLite records completeness
 6. SQLite direct query (Phase 2.3-D)
 7. API read simulation (Phase 2.3-D)
+8. Execution lineage queries (Phase 2.4-A)
 
 Usage:
     python scripts/prod_validation.py [--workspace PATH] [--skip-services]
@@ -125,7 +126,7 @@ class ProductionValidator:
             True if all tests passed
         """
         self.log("=" * 60)
-        self.log("LonelyCat Production Validation - Phase 2.3-D", "INFO")
+        self.log("LonelyCat Production Validation - Phase 2.4-A", "INFO")
         self.log("=" * 60)
 
         try:
@@ -180,8 +181,13 @@ class ProductionValidator:
             if not self._verify_api_read(exec_result.context.id):
                 return False
 
-            # Step 10: Cleanup test data
-            self.log("Step 10: Cleanup", "STEP")
+            # Step 10: Verify lineage queries (Phase 2.4-A)
+            self.log("Step 10: Verify Lineage Queries", "STEP")
+            if not self._verify_lineage_queries(exec_result.context.id):
+                return False
+
+            # Step 11: Cleanup test data
+            self.log("Step 11: Cleanup", "STEP")
             self._cleanup_test_artifacts()
 
             # Summary
@@ -739,6 +745,125 @@ This is a low-risk documentation change for testing the pipeline.
                 False,
                 f"API read simulation failed: {e}"
             )
+            return False
+
+    def _verify_lineage_queries(self, execution_id: str) -> bool:
+        """
+        Verify execution lineage queries work (Phase 2.4-A).
+
+        Tests:
+        - get_execution_lineage() returns structure
+        - Graph fields are populated (correlation_id, trigger_kind)
+        - Ancestors/descendants/siblings lists exist
+
+        Args:
+            execution_id: Execution ID to verify
+
+        Returns:
+            True if lineage queries work
+        """
+        try:
+            # Get lineage for the execution
+            lineage = self.executor.execution_store.get_execution_lineage(execution_id)
+
+            if not lineage or not lineage.get("execution"):
+                self.record_result(
+                    "Lineage Queries",
+                    False,
+                    f"Failed to get lineage for execution {execution_id}"
+                )
+                return False
+
+            # Verify structure
+            required_keys = ["execution", "ancestors", "descendants", "siblings"]
+            missing_keys = [key for key in required_keys if key not in lineage]
+
+            if missing_keys:
+                self.record_result(
+                    "Lineage Queries",
+                    False,
+                    f"Lineage missing keys: {missing_keys}"
+                )
+                return False
+
+            # Verify graph fields are populated
+            execution = lineage["execution"]
+            if not hasattr(execution, "correlation_id"):
+                self.record_result(
+                    "Lineage Queries",
+                    False,
+                    "ExecutionRecord missing correlation_id field"
+                )
+                return False
+
+            # Verify correlation_id defaults to execution_id for root executions
+            if execution.correlation_id != execution_id:
+                # For smoke test, we expect root execution (no parent)
+                # So correlation_id should equal execution_id
+                self.record_result(
+                    "Lineage Queries",
+                    False,
+                    f"correlation_id mismatch: expected={execution_id}, got={execution.correlation_id}"
+                )
+                return False
+
+            # Verify trigger_kind is set
+            if not execution.trigger_kind:
+                self.record_result(
+                    "Lineage Queries",
+                    False,
+                    "trigger_kind not set"
+                )
+                return False
+
+            # Verify lists are present (should be empty for root execution)
+            ancestors_count = len(lineage.get("ancestors", []))
+            descendants_count = len(lineage.get("descendants", []))
+            siblings_count = len(lineage.get("siblings", []))
+
+            self.record_result(
+                "Lineage Queries",
+                True,
+                f"Lineage query successful: correlation_id={execution.correlation_id}, "
+                f"trigger_kind={execution.trigger_kind}, "
+                f"ancestors={ancestors_count}, descendants={descendants_count}, siblings={siblings_count}"
+            )
+
+            self.log(
+                f"✓ Lineage: correlation_id={execution.correlation_id[:12]}..., "
+                f"trigger={execution.trigger_kind}, "
+                f"graph_depth=(ancestors={ancestors_count}, descendants={descendants_count}, siblings={siblings_count})",
+                "INFO"
+            )
+
+            # Bonus: Test list_executions_by_correlation
+            correlation_executions = self.executor.execution_store.list_executions_by_correlation(
+                execution.correlation_id
+            )
+
+            if len(correlation_executions) < 1:
+                self.record_result(
+                    "Lineage Queries",
+                    False,
+                    f"list_executions_by_correlation returned 0 results for {execution.correlation_id}"
+                )
+                return False
+
+            self.log(
+                f"✓ Correlation chain: {len(correlation_executions)} execution(s) in correlation {execution.correlation_id[:12]}...",
+                "INFO"
+            )
+
+            return True
+
+        except Exception as e:
+            self.record_result(
+                "Lineage Queries",
+                False,
+                f"Lineage query failed: {e}"
+            )
+            import traceback
+            traceback.print_exc()
             return False
 
     def _cleanup_test_artifacts(self):

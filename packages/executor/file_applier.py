@@ -1,5 +1,5 @@
 """
-File Applier - Applies file changes from ChangeSet
+File Applier - Applies file changes from ChangeSet (Phase 2.4-B Updated)
 
 Handles:
 - CREATE: Create new file
@@ -11,10 +11,13 @@ Safety:
 - Parent directory creation
 - Permission preservation
 - Dry-run mode support
+
+Phase 2.4-B: Event Stream Integration
+- Emits file_changed events to events.jsonl
 """
 
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import tempfile
 import shutil
 
@@ -26,16 +29,18 @@ from governance import ChangeSet, FileChange, Operation
 class FileApplier:
     """Applies file changes to the filesystem."""
 
-    def __init__(self, workspace_root: Path, dry_run: bool = False):
+    def __init__(self, workspace_root: Path, dry_run: bool = False, event_writer: Optional[Any] = None):
         """
         Initialize file applier.
 
         Args:
             workspace_root: Root directory for file operations
             dry_run: If True, simulate without actual changes
+            event_writer: Optional EventWriter for event logging (Phase 2.4-B)
         """
         self.workspace_root = workspace_root
         self.dry_run = dry_run
+        self.event_writer = event_writer
 
     def apply_changeset(self, changeset: ChangeSet) -> List[str]:
         """
