@@ -147,3 +147,11 @@ class WebFetchCache:
                     stored_at,
                 ),
             )
+
+    def close(self) -> None:
+        """Release SQLite resources (e.g. before removing cache_dir on Windows). No-op if no long-lived connection."""
+        try:
+            with sqlite3.connect(str(self._db_path), timeout=0.5) as conn:
+                conn.execute("PRAGMA optimize")
+        except Exception:
+            pass

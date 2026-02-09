@@ -69,6 +69,13 @@ from .storage import (
     StepRecord
 )
 
+from .similarity import (
+    SimilarityEngine,
+    SimilarityScore,
+    TextVectorizer,
+    PathSimilarity
+)
+
 __all__ = [
     # Core Executor
     "HostExecutor",
@@ -100,7 +107,13 @@ __all__ = [
     "get_db_connection",
     "ExecutionStore",
     "ExecutionRecord",
-    "StepRecord"
+    "StepRecord",
+
+    # Phase 2.4-D: Similarity Engine
+    "SimilarityEngine",
+    "SimilarityScore",
+    "TextVectorizer",
+    "PathSimilarity"
 ]
 
 __version__ = "1.0.0"
