@@ -52,6 +52,23 @@ from .idempotency import (
     IdempotencyCheck
 )
 
+from .artifacts import (
+    ArtifactManager,
+    ArtifactConfig,
+    replay_execution
+)
+
+from .schema import (
+    init_executor_db,
+    get_db_connection
+)
+
+from .storage import (
+    ExecutionStore,
+    ExecutionRecord,
+    StepRecord
+)
+
 __all__ = [
     # Core Executor
     "HostExecutor",
@@ -71,7 +88,19 @@ __all__ = [
     "LockAcquisitionError",
     "IdempotencyManager",
     "ExecutionRecord",
-    "IdempotencyCheck"
+    "IdempotencyCheck",
+
+    # Phase 2.2-A: Artifact Management
+    "ArtifactManager",
+    "ArtifactConfig",
+    "replay_execution",
+
+    # Phase 2.2-B: Execution History
+    "init_executor_db",
+    "get_db_connection",
+    "ExecutionStore",
+    "ExecutionRecord",
+    "StepRecord"
 ]
 
 __version__ = "1.0.0"

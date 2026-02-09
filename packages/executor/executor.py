@@ -183,6 +183,14 @@ class HostExecutor:
                 allow_retry_on_failure=True
             )
 
+        # Phase 2.2: Artifact management
+        from .artifacts import ArtifactManager
+        self.artifact_manager = ArtifactManager(workspace_root)
+
+        # Phase 2.2-B: Execution history storage
+        from .storage import ExecutionStore
+        self.execution_store = ExecutionStore(workspace_root)
+
     def execute(
         self,
         plan: ChangePlan,
@@ -297,39 +305,78 @@ class HostExecutor:
 
         start_time = datetime.utcnow()
 
+        # Phase 2.2-A: Create artifact directory and write initial JSONs
+        if not self.dry_run:
+            self.artifact_manager.create_execution_dir(exec_id)
+            self.artifact_manager.write_plan(exec_id, plan)
+            self.artifact_manager.write_changeset(exec_id, changeset)
+            self.artifact_manager.write_decision(exec_id, decision)
+
+            # Phase 2.2-B: Record execution start in database
+            artifact_path = str(self.artifact_manager.get_execution_dir(exec_id))
+            self.execution_store.record_execution_start(
+                execution_id=exec_id,
+                plan_id=plan.id,
+                changeset_id=changeset.id,
+                decision_id=decision.id,
+                checksum=changeset.checksum,
+                verdict=decision.verdict.value,
+                risk_level=decision.risk_level_effective.value,
+                affected_paths=plan.affected_paths,
+                artifact_path=artifact_path
+            )
+
         try:
             # Step 1: Validate approval
             context.update_status(ExecutionStatus.VALIDATING, "Validating approval")
+            self._log_step(exec_id, 1, "validate", "Starting approval validation")
             self._validate_approval(decision)
+            self._log_step(exec_id, 1, "validate", "Approval validated successfully")
 
             # Step 2: Verify changeset integrity
+            self._log_step(exec_id, 2, "checksum", f"Verifying checksum: {changeset.checksum}")
             if not changeset.verify_checksum():
                 raise ValueError("ChangeSet checksum verification failed (possible tampering)")
+            self._log_step(exec_id, 2, "checksum", "Checksum verified successfully")
 
             # Step 3: Create backup
             context.update_status(ExecutionStatus.BACKING_UP, "Creating backup")
+            self._log_step(exec_id, 3, "backup", f"Creating backup for {len(changeset.changes)} files")
             context.backup_dir = self._create_backup(changeset)
+            self._log_step(exec_id, 3, "backup", f"Backup created at {context.backup_dir}")
+
+            # Phase 2.2-A: Link backup to artifact
+            if not self.dry_run and context.backup_dir:
+                self.artifact_manager.link_backup(exec_id, context.backup_dir)
 
             # Step 4: Apply changes
             context.update_status(ExecutionStatus.APPLYING, "Applying changes")
+            self._log_step(exec_id, 4, "apply", f"Applying {len(changeset.changes)} file changes")
             applied = self._apply_changes(changeset, context)
             context.applied_changes = applied
+            self._log_step(exec_id, 4, "apply", f"Successfully applied changes to {len(applied)} files")
 
             # Step 5: Run verification
             context.update_status(ExecutionStatus.VERIFYING, "Running verification")
+            self._log_step(exec_id, 5, "verify", f"Running verification: {plan.verification_plan}")
             verification_results = self._run_verification(plan, context)
             context.verification_results = verification_results
 
             if not verification_results.get("passed", False):
+                self._log_step(exec_id, 5, "verify", f"FAILED: {verification_results.get('message')}")
                 raise Exception(f"Verification failed: {verification_results.get('message')}")
+            self._log_step(exec_id, 5, "verify", "Verification passed")
 
             # Step 6: Run health checks
             context.update_status(ExecutionStatus.HEALTH_CHECKING, "Running health checks")
+            self._log_step(exec_id, 6, "health", f"Running {len(plan.health_checks)} health checks")
             health_results = self._run_health_checks(plan, context)
             context.health_check_results = health_results
 
             if not health_results.get("passed", False):
+                self._log_step(exec_id, 6, "health", f"FAILED: {health_results.get('message')}")
                 raise Exception(f"Health checks failed: {health_results.get('message')}")
+            self._log_step(exec_id, 6, "health", "All health checks passed")
 
             # Success!
             context.update_status(ExecutionStatus.COMPLETED, "Execution completed successfully")
@@ -347,6 +394,22 @@ class HostExecutor:
                 duration_seconds=duration
             )
 
+            # Phase 2.2-A: Write final execution.json
+            if not self.dry_run:
+                self.artifact_manager.write_execution(exec_id, result.to_dict())
+                self._log_step(exec_id, 7, "finalize", f"Execution completed in {duration:.2f}s")
+
+                # Phase 2.2-B: Record execution end in database
+                self.execution_store.record_execution_end(
+                    execution_id=exec_id,
+                    status="completed",
+                    duration_seconds=duration,
+                    files_changed=len(context.applied_changes),
+                    verification_passed=True,
+                    health_checks_passed=True,
+                    rolled_back=False
+                )
+
             # Test hook: after_do_execute
             if "after_do_execute" in self.hooks:
                 self.hooks["after_do_execute"](exec_id, plan.id)
@@ -357,15 +420,19 @@ class HostExecutor:
             # Failure - rollback
             context.error_message = str(e)
             context.update_status(ExecutionStatus.FAILED, f"Execution failed: {e}")
+            self._log_step(exec_id, 99, "error", f"ERROR: {e}")
 
             # Attempt rollback
             if context.backup_dir:
                 try:
+                    self._log_step(exec_id, 98, "rollback", f"Starting rollback from {context.backup_dir}")
                     self._rollback(context)
                     context.rolled_back = True
                     context.update_status(ExecutionStatus.ROLLED_BACK, "Changes rolled back")
+                    self._log_step(exec_id, 98, "rollback", "Rollback completed successfully")
                 except Exception as rollback_error:
                     context.error_message += f"; Rollback failed: {rollback_error}"
+                    self._log_step(exec_id, 98, "rollback", f"ROLLBACK FAILED: {rollback_error}")
 
             context.completed_at = datetime.utcnow()
             duration = (context.completed_at - start_time).total_seconds()
@@ -379,6 +446,24 @@ class HostExecutor:
                 health_checks_passed=False,
                 duration_seconds=duration
             )
+
+            # Phase 2.2-A: Write final execution.json (even on failure)
+            if not self.dry_run:
+                self.artifact_manager.write_execution(exec_id, result.to_dict())
+                self._log_step(exec_id, 99, "error", f"Execution failed after {duration:.2f}s")
+
+                # Phase 2.2-B: Record execution end in database (failure)
+                self.execution_store.record_execution_end(
+                    execution_id=exec_id,
+                    status=context.status.value,
+                    duration_seconds=duration,
+                    files_changed=len(context.applied_changes),
+                    verification_passed=False,
+                    health_checks_passed=False,
+                    rolled_back=context.rolled_back,
+                    error_message=context.error_message,
+                    error_step=context.status.value
+                )
 
             # Test hook: after_do_execute (even on failure)
             if "after_do_execute" in self.hooks:
@@ -536,6 +621,76 @@ class HostExecutor:
             self.rollback_handler = RollbackHandler(self.workspace_root, self.dry_run)
 
         self.rollback_handler.rollback(context)
+
+    def _log_step(self, execution_id: str, step_num: int, step_name: str, message: str):
+        """
+        Log a step to artifact (Phase 2.2-A).
+
+        Args:
+            execution_id: Execution ID
+            step_num: Step number
+            step_name: Step name
+            message: Log message
+        """
+        if not self.dry_run:
+            self.artifact_manager.append_step_log(execution_id, step_num, step_name, message)
+
+    def _track_step(self, execution_id: str, step_num: int, step_name: str):
+        """
+        Context manager for tracking step timing in database (Phase 2.2-B).
+
+        Args:
+            execution_id: Execution ID
+            step_num: Step number
+            step_name: Step name
+
+        Usage:
+            with self._track_step(exec_id, 1, "validate"):
+                # Do work
+                pass
+        """
+        from contextlib import contextmanager
+        from time import time
+
+        @contextmanager
+        def step_tracker():
+            step_id = None
+            start_time = time()
+
+            if not self.dry_run:
+                # Record step start in database
+                log_ref = f"steps/{step_num:02d}_{step_name}.log"
+                step_id = self.execution_store.record_step_start(
+                    execution_id=execution_id,
+                    step_num=step_num,
+                    step_name=step_name,
+                    log_ref=log_ref
+                )
+
+            try:
+                yield
+                # Step succeeded
+                if not self.dry_run and step_id:
+                    duration = time() - start_time
+                    self.execution_store.record_step_end(
+                        step_id=step_id,
+                        status="completed",
+                        duration_seconds=duration
+                    )
+            except Exception as e:
+                # Step failed
+                if not self.dry_run and step_id:
+                    duration = time() - start_time
+                    self.execution_store.record_step_end(
+                        step_id=step_id,
+                        status="failed",
+                        duration_seconds=duration,
+                        error_code=type(e).__name__,
+                        error_message=str(e)
+                    )
+                raise
+
+        return step_tracker()
 
 
 def generate_execution_id() -> str:
