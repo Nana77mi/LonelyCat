@@ -218,9 +218,10 @@ def temp_db():
     db = TestSessionLocal()
     yield db, db_path
     db.close()
+    test_engine.dispose()
     try:
         os.unlink(db_path)
-    except Exception:
+    except OSError:
         pass
 
 
