@@ -77,6 +77,10 @@ class ProductionValidator:
         self.skip_services = skip_services
         self.results: List[Tuple[str, bool, str]] = []
 
+        # Track execution for artifact linkage
+        self.execution_id: str = None
+        self.artifact_path: Path = None
+
         # Initialize components
         self.writegate = WriteGate()
         self.executor = HostExecutor(self.workspace_root)
@@ -387,6 +391,10 @@ This is a low-risk documentation change for testing the pipeline.
 
             # Check execution result
             if result.success:
+                # Store execution ID and artifact path for final output
+                self.execution_id = result.context.id
+                self.artifact_path = self.workspace_root / ".lonelycat" / "executions" / self.execution_id
+
                 self.record_result(
                     "Change Execution",
                     True,
@@ -603,6 +611,14 @@ This is a low-risk documentation change for testing the pipeline.
             "SUCCESS" if passed_count == total_count else "ERROR"
         )
         self.log("=" * 60)
+
+        # Print execution ID and artifact path for CI log linkage
+        if self.execution_id:
+            self.log("", "INFO")
+            self.log("EXECUTION DETAILS (for audit/debugging):", "INFO")
+            self.log(f"  execution_id: {self.execution_id}", "INFO")
+            self.log(f"  artifact_dir: {self.artifact_path}", "INFO")
+            self.log(f"  sqlite_query: SELECT * FROM executions WHERE execution_id='{self.execution_id}'", "INFO")
 
 
 def main():
