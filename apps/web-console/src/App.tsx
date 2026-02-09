@@ -7,6 +7,8 @@ import { RunsPanel } from "./components/RunsPanel";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { SettingsDrawer } from "./components/SettingsDrawer";
 import { MemoryPage } from "./pages/MemoryPage";
+import { ExecutionsListPage } from "./pages/ExecutionsListPage";
+import { ExecutionDetailPage } from "./pages/ExecutionDetailPage";
 import { listConversations, createConversation, listMessages, sendMessage, deleteConversation, updateConversation, markConversationRead } from "./api/conversations";
 import { listConversationRuns, createRun, deleteRun, cancelRun, retryRun } from "./api/runs";
 import type { Conversation, Message } from "./api/conversations";
@@ -736,6 +738,8 @@ const App = () => {
                 }
               />
               <Route path="/memory" element={<MemoryPage />} />
+              <Route path="/executions" element={<ExecutionsListPage />} />
+              <Route path="/executions/:executionId" element={<ExecutionDetailPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </div>
