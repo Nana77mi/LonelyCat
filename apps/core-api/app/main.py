@@ -53,6 +53,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised in offline tests
             self.app = app
 
 from app.api.conversations import router as conversations_router
+from app.api.executions import router as executions_router
 from app.api.governance import router as governance_router
 from app.api.internal import router as internal_router
 from app.api.memory import router as memory_router
@@ -116,6 +117,7 @@ app.include_router(settings_router, prefix="/settings", tags=["settings"])
 app.include_router(sandbox_router, prefix="/sandbox")
 app.include_router(skills_router, prefix="/skills")
 app.include_router(governance_router)  # Governance endpoints (WriteGate)
+app.include_router(executions_router)  # Execution history (Phase 2.3-A)
 app.include_router(internal_router)  # 内部 API，无需 prefix（已在 router 中定义）
 
 
