@@ -55,8 +55,12 @@ def temp_workspace():
 
 
 @pytest.fixture
-def sample_execution(temp_workspace):
+def sample_execution():
     """Create a sample execution for testing."""
+    # Use API's WORKSPACE_ROOT instead of temp workspace
+    # so the execution can be found by the API
+    from app.api.executions import WORKSPACE_ROOT
+
     # Create sample plan
     plan = ChangePlan(
         id=generate_plan_id(),
@@ -104,11 +108,22 @@ def sample_execution(temp_workspace):
         evaluator="test"
     )
 
-    # Execute
-    executor = HostExecutor(temp_workspace)
+    # Execute using WORKSPACE_ROOT
+    executor = HostExecutor(WORKSPACE_ROOT)
     result = executor.execute(plan, changeset, decision)
 
-    return result.context.id
+    exec_id = result.context.id
+
+    yield exec_id
+
+    # Cleanup after test
+    import shutil
+    artifact_dir = WORKSPACE_ROOT / ".lonelycat" / "executions" / exec_id
+    if artifact_dir.exists():
+        shutil.rmtree(artifact_dir, ignore_errors=True)
+
+    # Note: SQLite record remains (no cleanup for MVP)
+    # In production, you might want to add a cleanup method
 
 
 # ========== Test 1: List Executions ==========

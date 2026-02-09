@@ -189,6 +189,26 @@ async def list_executions(
         raise HTTPException(status_code=500, detail=f"Failed to list executions: {str(e)}")
 
 
+@router.get("/statistics")
+async def get_execution_statistics():
+    """
+    Get overall execution statistics.
+
+    Returns aggregated metrics:
+    - Total executions
+    - By status breakdown
+    - By verdict breakdown
+    - By risk level breakdown
+    - Success rate
+    - Average duration
+    """
+    try:
+        stats = execution_store.get_statistics()
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get statistics: {str(e)}")
+
+
 @router.get("/{execution_id}", response_model=ExecutionDetail)
 async def get_execution(execution_id: str):
     """
@@ -388,23 +408,3 @@ async def replay_execution_endpoint(execution_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to replay execution: {str(e)}")
-
-
-@router.get("/statistics")
-async def get_execution_statistics():
-    """
-    Get overall execution statistics.
-
-    Returns aggregated metrics:
-    - Total executions
-    - By status breakdown
-    - By verdict breakdown
-    - By risk level breakdown
-    - Success rate
-    - Average duration
-    """
-    try:
-        stats = execution_store.get_statistics()
-        return stats
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get statistics: {str(e)}")
