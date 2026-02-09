@@ -59,11 +59,11 @@ foreach ($p in $packages) {
     }
 }
 
-# Core API
+# Core API (with [test] for pytest, match Makefile setup-py)
 $apiPyproject = Join-Path $RepoRoot "apps\core-api\pyproject.toml"
 if (Test-Path $apiPyproject) {
-    Write-Host "Installing core-api ..."
-    & $Pip install -e "apps/core-api"
+    Write-Host "Installing core-api[test] ..."
+    & $Pip install -e "apps/core-api[test]"
 }
 
 # Agent worker

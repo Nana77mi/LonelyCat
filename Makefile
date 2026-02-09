@@ -205,6 +205,7 @@ down:
 test: test-py test-web
 
 .PHONY: test-py
+# On Windows (no make): run .\scripts\test-py.ps1 for the same test coverage.
 test-py: test-core-api test-agent-worker
 	@echo "Python tests (core-api + agent-worker) done."
 

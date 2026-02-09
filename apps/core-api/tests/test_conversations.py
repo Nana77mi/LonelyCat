@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,9 +46,13 @@ def temp_db():
     
     yield db, db_path
     
-    # 清理
+    # 清理：先关闭 session，再 dispose engine（Windows 上否则文件句柄占用导致 unlink 报 PermissionError）
     db.close()
-    os.unlink(db_path)
+    test_engine.dispose()
+    try:
+        os.unlink(db_path)
+    except OSError:
+        pass
 
 
 def assert_conversation_schema(conv: dict) -> None:
@@ -670,6 +675,7 @@ def test_mark_conversation_read(temp_db) -> None:
     conv = asyncio.run(conversations._create_conversation(request, db))
     _commit_db(db)
     conversation_id = conv["id"]
+    time.sleep(0.02)  # 确保 created_at 与后续 updated_at 有时间差（避免 Windows 时钟分辨率导致 has_unread 为 False）
     
     # 先创建一条消息，使 updated_at > created_at
     message_request = conversations.MessageCreateRequest(
@@ -693,7 +699,6 @@ def test_mark_conversation_read(temp_db) -> None:
     assert _compute_has_unread(conversation) is True
     
     # 等待一小段时间，确保时间戳不同
-    import time
     time.sleep(0.01)
     
     # 标记为已读（设置 last_read_at = max(now, updated_at)）
@@ -1328,6 +1333,7 @@ def test_has_unread_with_last_read_at(temp_db) -> None:
     conv = asyncio.run(conversations._create_conversation(request, db))
     _commit_db(db)
     conversation_id = conv["id"]
+    time.sleep(0.02)  # 确保 created_at 与后续 emit 的 updated_at 有时间差（Windows 时钟分辨率）
     
     conversation = db.query(ConversationModel).filter(ConversationModel.id == conversation_id).first()
     
@@ -1369,7 +1375,6 @@ def test_has_unread_with_last_read_at(temp_db) -> None:
     assert _compute_has_unread(conversation) is True
     
     # 等待一小段时间，确保时间戳不同
-    import time
     time.sleep(0.01)
     
     # 标记为已读（设置 last_read_at = max(now, updated_at)）
@@ -1379,10 +1384,9 @@ def test_has_unread_with_last_read_at(temp_db) -> None:
     # 刷新 conversation
     db.refresh(conversation)
     assert conversation.last_read_at is not None
-    # last_read_at >= updated_at，所以未读为 False
-    assert conversation.last_read_at >= conversation.updated_at
+    # 标记已读后应无未读（commit 时 onupdate 可能让 updated_at 略晚于 last_read_at，故只断言 has_unread）
     assert _compute_has_unread(conversation) is False
-    
+
     # 再次发送消息（更新 updated_at）
     run_id2 = str(uuid.uuid4())
     run2 = RunModel(

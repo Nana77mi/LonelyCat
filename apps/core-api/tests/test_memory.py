@@ -38,9 +38,13 @@ def temp_db():
     
     yield db, db_path
     
-    # 清理
+    # 清理：先关闭 session，再 dispose engine（Windows 上否则文件句柄占用导致 unlink 报 PermissionError）
     db.close()
-    os.unlink(db_path)
+    test_engine.dispose()
+    try:
+        os.unlink(db_path)
+    except OSError:
+        pass
 
 
 def assert_fact_schema(record: dict, status: str) -> None:

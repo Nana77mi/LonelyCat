@@ -7,7 +7,7 @@ and proper unread status management.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Dict, Optional
 
 from sqlalchemy import or_
@@ -344,8 +344,8 @@ def emit_run_message(db: Session, run: RunModel) -> None:
         # 创建新 conversation
         conversation_id = str(uuid.uuid4())
         conversation_title = f"Task completed: {run.title or run.type}"
-        # 使用稍后的时间作为 updated_at，确保 updated_at > created_at（有新消息）
-        message_time = datetime.now(UTC)
+        # 使用 now + 1ms 作为 updated_at，避免时钟分辨率导致 updated_at == created_at（Windows 等）
+        message_time = now + timedelta(milliseconds=1)
         conversation = ConversationModel(
             id=conversation_id,
             title=conversation_title,
