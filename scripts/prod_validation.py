@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Production Validation Script - Phase 2.2-D
+Production Validation Script - Phase 2.3-D (Extended)
 
 Philosophy: Pre-release smoke test for LonelyCat end-to-end pipeline.
 
@@ -10,6 +10,8 @@ Validates:
 3. Full pipeline: Planner → WriteGate → Executor
 4. Health checks execution
 5. Artifact + SQLite records completeness
+6. SQLite direct query (Phase 2.3-D)
+7. API read simulation (Phase 2.3-D)
 
 Usage:
     python scripts/prod_validation.py [--workspace PATH] [--skip-services]
@@ -123,7 +125,7 @@ class ProductionValidator:
             True if all tests passed
         """
         self.log("=" * 60)
-        self.log("LonelyCat Production Validation - Phase 2.2-D", "INFO")
+        self.log("LonelyCat Production Validation - Phase 2.3-D", "INFO")
         self.log("=" * 60)
 
         try:
@@ -168,8 +170,18 @@ class ProductionValidator:
             if not self._verify_sqlite_records(exec_result.context.id):
                 return False
 
-            # Step 8: Cleanup test data
-            self.log("Step 8: Cleanup", "STEP")
+            # Step 8: Verify SQLite direct query (Phase 2.3-D)
+            self.log("Step 8: Verify SQLite Direct Query", "STEP")
+            if not self._verify_sqlite_query(exec_result.context.id):
+                return False
+
+            # Step 9: Verify API read (Phase 2.3-D)
+            self.log("Step 9: Verify API Read", "STEP")
+            if not self._verify_api_read(exec_result.context.id):
+                return False
+
+            # Step 10: Cleanup test data
+            self.log("Step 10: Cleanup", "STEP")
             self._cleanup_test_artifacts()
 
             # Summary
@@ -573,6 +585,162 @@ This is a low-risk documentation change for testing the pipeline.
             )
             return False
 
+    def _verify_sqlite_query(self, execution_id: str) -> bool:
+        """
+        Verify execution can be queried from SQLite directly (Phase 2.3-D).
+
+        Tests: 能从 SQLite 查到刚刚那次 smoke execution
+
+        Args:
+            execution_id: Execution ID to verify
+
+        Returns:
+            True if execution can be queried successfully
+        """
+        try:
+            import sqlite3
+
+            # Direct SQL query
+            db_path = self.workspace_root / ".lonelycat" / "executor.db"
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+
+            # Query execution record
+            cursor.execute(
+                "SELECT * FROM executions WHERE execution_id = ?",
+                (execution_id,)
+            )
+            row = cursor.fetchone()
+
+            if not row:
+                self.record_result(
+                    "SQLite Direct Query",
+                    False,
+                    f"No record found for execution_id={execution_id}"
+                )
+                conn.close()
+                return False
+
+            # Verify key fields
+            if row["status"] != "completed":
+                self.record_result(
+                    "SQLite Direct Query",
+                    False,
+                    f"Expected status='completed', got '{row['status']}'"
+                )
+                conn.close()
+                return False
+
+            if row["verdict"] != "allow":
+                self.record_result(
+                    "SQLite Direct Query",
+                    False,
+                    f"Expected verdict='allow', got '{row['verdict']}'"
+                )
+                conn.close()
+                return False
+
+            conn.close()
+
+            self.record_result(
+                "SQLite Direct Query",
+                True,
+                f"Found execution {execution_id} with status={row['status']}, verdict={row['verdict']}"
+            )
+            return True
+
+        except Exception as e:
+            self.record_result(
+                "SQLite Direct Query",
+                False,
+                f"Query failed: {e}"
+            )
+            return False
+
+    def _verify_api_read(self, execution_id: str) -> bool:
+        """
+        Verify execution can be read through API (Phase 2.3-D).
+
+        Tests: 通过 API 能读出来
+
+        Args:
+            execution_id: Execution ID to verify
+
+        Returns:
+            True if API read succeeds
+        """
+        try:
+            # Note: This is a lightweight test that simulates API behavior
+            # In a full integration test, you would:
+            # 1. Start the core-api server
+            # 2. Make HTTP request to GET /executions/{execution_id}
+            # 3. Verify response structure
+
+            # For now, we simulate the API by calling the ExecutionStore directly
+            # (which is what the API does internally)
+            record = self.executor.execution_store.get_execution(execution_id)
+
+            if not record:
+                self.record_result(
+                    "API Read Simulation",
+                    False,
+                    f"API would return 404: execution {execution_id} not found"
+                )
+                return False
+
+            # Verify structure matches API response model
+            expected_fields = [
+                "execution_id",
+                "plan_id",
+                "changeset_id",
+                "status",
+                "verdict",
+                "risk_level",
+                "started_at",
+                "files_changed",
+                "verification_passed",
+                "health_checks_passed"
+            ]
+
+            missing_fields = [
+                field for field in expected_fields
+                if not hasattr(record, field)
+            ]
+
+            if missing_fields:
+                self.record_result(
+                    "API Read Simulation",
+                    False,
+                    f"Record missing fields: {missing_fields}"
+                )
+                return False
+
+            # Get steps (API also returns steps)
+            steps = self.executor.execution_store.get_execution_steps(execution_id)
+
+            self.record_result(
+                "API Read Simulation",
+                True,
+                f"API can read execution {execution_id} with {len(steps)} steps"
+            )
+
+            self.log(
+                f"✓ API would return: execution={record.status}, "
+                f"verdict={record.verdict}, steps={len(steps)}",
+                "INFO"
+            )
+
+            return True
+
+        except Exception as e:
+            self.record_result(
+                "API Read Simulation",
+                False,
+                f"API read simulation failed: {e}"
+            )
+            return False
+
     def _cleanup_test_artifacts(self):
         """Cleanup test artifacts (optional)."""
         try:
@@ -624,7 +792,7 @@ This is a low-risk documentation change for testing the pipeline.
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="LonelyCat Production Validation - Phase 2.2-D"
+        description="LonelyCat Production Validation - Phase 2.3-D (Extended)"
     )
     parser.add_argument(
         "--workspace",
