@@ -366,8 +366,8 @@ async def replay_execution_endpoint(execution_id: str):
         if not validate_artifact_path(artifact_path):
             raise HTTPException(status_code=403, detail="Access to artifact path forbidden")
 
-        # Replay execution
-        execution_data = replay_execution(WORKSPACE_ROOT, execution_id)
+        # Replay execution from artifact directory
+        execution_data = replay_execution(artifact_path)
 
         if not execution_data:
             raise HTTPException(status_code=404, detail="Failed to replay execution (missing artifacts)")
