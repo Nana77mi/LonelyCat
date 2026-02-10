@@ -3,8 +3,12 @@ import { useParams, useNavigate } from "react-router-dom";
 import {
   ExecutionDetail,
   ArtifactInfo,
+  ExecutionLineage,
+  SimilarExecutionItem,
   getExecution,
   getExecutionArtifacts,
+  getExecutionLineage,
+  getSimilarExecutions,
 } from "../api/executions";
 
 export const ExecutionDetailPage = () => {
@@ -13,6 +17,8 @@ export const ExecutionDetailPage = () => {
 
   const [execution, setExecution] = useState<ExecutionDetail | null>(null);
   const [artifacts, setArtifacts] = useState<ArtifactInfo | null>(null);
+  const [lineage, setLineage] = useState<ExecutionLineage | null>(null);
+  const [similarList, setSimilarList] = useState<SimilarExecutionItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -22,12 +28,16 @@ export const ExecutionDetailPage = () => {
     setLoading(true);
     setError(null);
     try {
-      const [execData, artifactsData] = await Promise.all([
+      const [execData, artifactsData, lineageData, similarData] = await Promise.all([
         getExecution(executionId),
-        getExecutionArtifacts(executionId).catch(() => null), // Artifacts may not exist
+        getExecutionArtifacts(executionId).catch(() => null),
+        getExecutionLineage(executionId).catch(() => null),
+        getSimilarExecutions(executionId, 5).then((r) => r.similar).catch(() => []),
       ]);
       setExecution(execData);
       setArtifacts(artifactsData);
+      setLineage(lineageData);
+      setSimilarList(similarData);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load execution");
     } finally {
@@ -112,13 +122,22 @@ export const ExecutionDetailPage = () => {
     <div className="h-full flex flex-col bg-white dark:bg-gray-900">
       {/* Header */}
       <div className="border-b border-gray-200 dark:border-gray-700 p-4">
-        <div className="flex items-center gap-4 mb-2">
+        <div className="flex items-center gap-4 mb-2 flex-wrap">
           <button
             onClick={() => navigate("/executions")}
             className="text-blue-600 dark:text-blue-400 hover:underline text-sm"
           >
             ← Back to Executions
           </button>
+          {exec.correlation_id && (
+            <button
+              type="button"
+              onClick={() => navigate(`/executions?correlation_id=${encodeURIComponent(exec.correlation_id)}`)}
+              className="text-sm text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400"
+            >
+              View same chain
+            </button>
+          )}
         </div>
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white font-mono">
           {exec.execution_id}
@@ -242,6 +261,126 @@ export const ExecutionDetailPage = () => {
               </div>
             </div>
           </div>
+
+          {/* Lineage (Phase 2.4-A) */}
+          {lineage && (
+            <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                Lineage
+              </h2>
+              <div className="space-y-4">
+                {/* Path: root → … → current */}
+                {(lineage.ancestors.length > 0 || lineage.descendants.length > 0 || lineage.siblings.length > 0) && (
+                  <>
+                    {lineage.ancestors.length > 0 && (
+                      <div>
+                        <div className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
+                          Ancestors (root → current)
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {lineage.ancestors.map((anc) => (
+                            <span key={anc.execution_id} className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => navigate(`/executions/${anc.execution_id}`)}
+                                className="text-xs font-mono px-2 py-1 rounded bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-blue-600 dark:text-blue-400 hover:underline"
+                              >
+                                {anc.execution_id}
+                              </button>
+                              <span className="text-gray-400">→</span>
+                            </span>
+                          ))}
+                          <span className="text-xs font-mono px-2 py-1 rounded bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                            {lineage.execution.execution_id} (current)
+                          </span>
+                        </div>
+                      </div>
+                    )}
+                    {lineage.siblings.length > 0 && (
+                      <div>
+                        <div className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
+                          Siblings
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {lineage.siblings.map((sib) => (
+                            <button
+                              key={sib.execution_id}
+                              type="button"
+                              onClick={() => navigate(`/executions/${sib.execution_id}`)}
+                              className="text-xs font-mono px-2 py-1 rounded bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-blue-600 dark:text-blue-400 hover:underline"
+                            >
+                              {sib.execution_id}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {lineage.descendants.length > 0 && (
+                      <div>
+                        <div className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
+                          Descendants
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {lineage.descendants.map((desc) => (
+                            <button
+                              key={desc.execution_id}
+                              type="button"
+                              onClick={() => navigate(`/executions/${desc.execution_id}`)}
+                              className="text-xs font-mono px-2 py-1 rounded bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 text-blue-600 dark:text-blue-400 hover:underline"
+                            >
+                              {desc.execution_id}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                )}
+                {lineage.ancestors.length === 0 &&
+                  lineage.descendants.length === 0 &&
+                  lineage.siblings.length === 0 && (
+                    <div className="text-sm text-gray-600 dark:text-gray-400">
+                      No parent, siblings, or children. This execution is the only one in its chain.
+                    </div>
+                  )}
+              </div>
+            </div>
+          )}
+
+          {/* Similar Executions (Phase 2.4-D) */}
+          {similarList.length > 0 && (
+            <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+              <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                Similar Executions
+              </h2>
+              <div className="space-y-3">
+                {similarList.map((item) => (
+                  <div
+                    key={item.execution.execution_id}
+                    className="border border-gray-200 dark:border-gray-700 rounded-lg p-4 bg-white dark:bg-gray-900"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/executions/${item.execution.execution_id}`)}
+                          className="text-sm font-mono text-blue-600 dark:text-blue-400 hover:underline truncate block"
+                        >
+                          {item.execution.execution_id}
+                        </button>
+                        <div className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          {item.why_similar.join(" · ")}
+                        </div>
+                      </div>
+                      <span className="text-xs font-mono text-gray-500 dark:text-gray-400 shrink-0">
+                        score {(item.score * 100).toFixed(0)}%
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Steps Timeline */}
           <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">

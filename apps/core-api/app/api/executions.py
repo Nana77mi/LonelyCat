@@ -64,7 +64,7 @@ def validate_artifact_path(artifact_path: Path) -> bool:
 # ==================== Response Models ====================
 
 class ExecutionSummary(BaseModel):
-    """Summary of an execution (list view)."""
+    """Summary of an execution (list view). Phase 2.4-A: includes graph fields."""
     execution_id: str
     plan_id: str
     changeset_id: str
@@ -80,6 +80,11 @@ class ExecutionSummary(BaseModel):
     rolled_back: bool
     error_step: Optional[str] = None
     error_message: Optional[str] = None
+    # Phase 2.4-A: execution graph
+    correlation_id: Optional[str] = None
+    parent_execution_id: Optional[str] = None
+    trigger_kind: Optional[str] = None
+    run_id: Optional[str] = None
 
 
 class StepDetail(BaseModel):
@@ -122,6 +127,31 @@ class ExecutionListResponse(BaseModel):
     offset: int = 0
 
 
+def _record_to_summary(record: ExecutionRecord) -> ExecutionSummary:
+    """Build ExecutionSummary from ExecutionRecord (Phase 2.4-A graph fields)."""
+    return ExecutionSummary(
+        execution_id=record.execution_id,
+        plan_id=record.plan_id,
+        changeset_id=record.changeset_id,
+        status=record.status,
+        verdict=record.verdict,
+        risk_level=record.risk_level or "unknown",
+        started_at=record.started_at,
+        ended_at=record.ended_at,
+        duration_seconds=record.duration_seconds,
+        files_changed=record.files_changed,
+        verification_passed=record.verification_passed,
+        health_checks_passed=record.health_checks_passed,
+        rolled_back=record.rolled_back,
+        error_step=record.error_step,
+        error_message=record.error_message,
+        correlation_id=record.correlation_id,
+        parent_execution_id=record.parent_execution_id,
+        trigger_kind=record.trigger_kind,
+        run_id=record.run_id,
+    )
+
+
 # ==================== Endpoints ====================
 
 @router.get("", response_model=ExecutionListResponse)
@@ -131,52 +161,38 @@ async def list_executions(
     status: Optional[str] = Query(None, description="Filter by status (pending, completed, failed, rolled_back)"),
     verdict: Optional[str] = Query(None, description="Filter by verdict (allow, need_approval, deny)"),
     risk_level: Optional[str] = Query(None, description="Filter by risk level (low, medium, high, critical)"),
-    since: Optional[str] = Query(None, description="ISO timestamp - only show executions after this time")
+    since: Optional[str] = Query(None, description="ISO timestamp - only show executions after this time"),
+    correlation_id: Optional[str] = Query(None, description="Phase 2.4-A: filter by correlation_id (same task chain)")
 ):
     """
     List executions with optional filters.
 
-    Maps directly to ExecutionStore.list_executions().
+    When correlation_id is set, returns executions in that chain only (Phase 2.4-A).
 
     Examples:
         GET /executions?limit=10
+        GET /executions?correlation_id=exec_abc123
         GET /executions?status=failed&risk_level=high
-        GET /executions?verdict=allow&since=2024-01-01T00:00:00Z
     """
     try:
-        # Get filtered executions from store
-        # Note: ExecutionStore doesn't support offset/since yet in Phase 2.2
-        # For MVP, we'll get all matching and slice in memory
-        records = execution_store.list_executions(
-            limit=limit + offset,  # Get more to account for offset
-            status=status,
-            verdict=verdict,
-            risk_level=risk_level
-        )
+        if correlation_id:
+            # Phase 2.4-A: list by correlation chain
+            records = execution_store.list_executions_by_correlation(
+                correlation_id, limit=limit + offset
+            )
+            records = records[offset:offset + limit]
+        else:
+            records = execution_store.list_executions(
+                limit=limit + offset,
+                status=status,
+                verdict=verdict,
+                risk_level=risk_level
+            )
+            records = records[offset:offset + limit]
 
-        # Apply offset
-        records = records[offset:offset + limit]
-
-        # Convert to response model
         executions = []
         for record in records:
-            executions.append(ExecutionSummary(
-                execution_id=record.execution_id,
-                plan_id=record.plan_id,
-                changeset_id=record.changeset_id,
-                status=record.status,
-                verdict=record.verdict,
-                risk_level=record.risk_level or "unknown",
-                started_at=record.started_at,
-                ended_at=record.ended_at,
-                duration_seconds=record.duration_seconds,
-                files_changed=record.files_changed,
-                verification_passed=record.verification_passed,
-                health_checks_passed=record.health_checks_passed,
-                rolled_back=record.rolled_back,
-                error_step=record.error_step,
-                error_message=record.error_message
-            ))
+            executions.append(_record_to_summary(record))
 
         return ExecutionListResponse(
             executions=executions,
@@ -225,24 +241,7 @@ async def get_execution(execution_id: str):
         # Get execution steps
         steps = execution_store.get_execution_steps(execution_id)
 
-        # Convert to response models
-        execution_summary = ExecutionSummary(
-            execution_id=record.execution_id,
-            plan_id=record.plan_id,
-            changeset_id=record.changeset_id,
-            status=record.status,
-            verdict=record.verdict,
-            risk_level=record.risk_level or "unknown",
-            started_at=record.started_at,
-            ended_at=record.ended_at,
-            duration_seconds=record.duration_seconds,
-            files_changed=record.files_changed,
-            verification_passed=record.verification_passed,
-            health_checks_passed=record.health_checks_passed,
-            rolled_back=record.rolled_back,
-            error_step=record.error_step,
-            error_message=record.error_message
-        )
+        execution_summary = _record_to_summary(record)
 
         step_details = []
         for step in steps:
@@ -269,6 +268,210 @@ async def get_execution(execution_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to get execution: {str(e)}")
+
+
+def _suggest_repair(execution_id: str) -> Dict[str, Any]:
+    """Phase 2.4-E: Build repair suggestion from similar successful executions. Writes repair.json."""
+    target = execution_store.get_execution(execution_id)
+    if not target:
+        return None
+    if target.status not in ("failed", "rolled_back"):
+        return {"error": "Repair suggestion is only for failed executions"}
+
+    pairs = execution_store.find_similar_executions(execution_id, limit=10, exclude_same_correlation=True)
+    successful = [(rec, score) for rec, score in pairs if rec.status == "completed"]
+    if not successful:
+        proposal = {
+            "evidence_execution_ids": [],
+            "suggested_plan_id": None,
+            "suggested_changeset_id": None,
+            "summary": "No similar successful execution found.",
+            "pre_check": None,
+        }
+    else:
+        best_rec, best_score = successful[0]
+        artifact_path = Path(best_rec.artifact_path) if best_rec.artifact_path else None
+        suggested_plan_id = None
+        suggested_changeset_id = None
+        if artifact_path and artifact_path.exists():
+            for name, key in [("plan.json", "id"), ("changeset.json", "id")]:
+                f = artifact_path / name
+                if f.exists():
+                    try:
+                        data = json.loads(f.read_text(encoding="utf-8"))
+                        if name == "plan.json":
+                            suggested_plan_id = data.get(key)
+                        else:
+                            suggested_changeset_id = data.get(key)
+                    except Exception:
+                        pass
+        proposal = {
+            "evidence_execution_ids": [best_rec.execution_id],
+            "suggested_plan_id": suggested_plan_id,
+            "suggested_changeset_id": suggested_changeset_id,
+            "summary": f"Similar successful execution {best_rec.execution_id} (score={best_score.total_score:.2f}). Consider reusing as reference.",
+            "pre_check": None,
+        }
+
+    # Write repair.json to target's artifact dir
+    target_artifact = Path(target.artifact_path) if target.artifact_path else (WORKSPACE_ROOT / ".lonelycat" / "executions" / execution_id)
+    if validate_artifact_path(target_artifact):
+        try:
+            from executor.repair import RepairProposal, save_repair
+            save_repair(target_artifact, RepairProposal(**proposal))
+        except Exception:
+            pass
+    return proposal
+
+
+def _why_similar_from_score(score: Any) -> List[str]:
+    """Build human-readable why_similar list from SimilarityScore (Phase 2.4-D)."""
+    reasons = []
+    if getattr(score, "status_match", False):
+        reasons.append("Same status")
+    if getattr(score, "verdict_match", False):
+        reasons.append("Same verdict")
+    err_sim = getattr(score, "error_similarity", 0.0) or 0.0
+    if err_sim > 0.5:
+        reasons.append(f"Similar error message ({err_sim:.2f})")
+    elif err_sim > 0.2:
+        reasons.append(f"Somewhat similar error ({err_sim:.2f})")
+    path_sim = getattr(score, "path_similarity", 0.0) or 0.0
+    if path_sim > 0.5:
+        reasons.append(f"Overlapping paths ({path_sim:.2f})")
+    elif path_sim > 0.2:
+        reasons.append(f"Some path overlap ({path_sim:.2f})")
+    if not reasons:
+        reasons.append("Similar overall score")
+    return reasons
+
+
+@router.post("/{execution_id}/repair/suggest")
+async def suggest_repair(execution_id: str):
+    """
+    Suggest repair for a failed execution (Phase 2.4-E).
+
+    Finds similar successful executions and returns (and writes) repair.json.
+    Does NOT execute the repair.
+    """
+    try:
+        proposal = _suggest_repair(execution_id)
+        if proposal is None:
+            raise HTTPException(status_code=404, detail=f"Execution {execution_id} not found")
+        if proposal.get("error"):
+            raise HTTPException(status_code=400, detail=proposal["error"])
+        return {"repair": proposal}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to suggest repair: {str(e)}")
+
+
+@router.get("/{execution_id}/similar")
+async def get_similar_executions(
+    execution_id: str,
+    limit: int = Query(5, ge=1, le=20, description="Max number of similar executions"),
+    exclude_same_correlation: bool = Query(True, description="Exclude executions from same correlation chain")
+):
+    """
+    Find executions similar to this one (Phase 2.4-D).
+
+    Returns list of similar executions with why_similar (explainable reasons).
+    """
+    try:
+        pairs = execution_store.find_similar_executions(
+            execution_id,
+            limit=limit,
+            exclude_same_correlation=exclude_same_correlation
+        )
+        result = []
+        for record, score in pairs:
+            result.append({
+                "execution": record.to_dict(),
+                "why_similar": _why_similar_from_score(score),
+                "score": score.total_score,
+            })
+        return {"similar": result}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to find similar executions: {str(e)}")
+
+
+@router.get("/{execution_id}/lineage")
+async def get_execution_lineage(
+    execution_id: str,
+    depth: int = Query(20, ge=1, le=100, description="Max depth for ancestors/descendants")
+):
+    """
+    Get execution lineage (Phase 2.4-A): ancestors, descendants, siblings.
+
+    Returns:
+        - execution: The target execution (dict)
+        - ancestors: List of parent executions (root → current)
+        - descendants: List of child executions
+        - siblings: Executions with same parent
+    """
+    try:
+        lineage = execution_store.get_execution_lineage(execution_id, depth=depth)
+        if lineage["execution"] is None:
+            raise HTTPException(status_code=404, detail=f"Execution {execution_id} not found")
+
+        def to_dict_list(records):
+            return [r.to_dict() for r in records] if records else []
+
+        return {
+            "execution": lineage["execution"].to_dict(),
+            "ancestors": to_dict_list(lineage["ancestors"]),
+            "descendants": to_dict_list(lineage["descendants"]),
+            "siblings": to_dict_list(lineage["siblings"]),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get lineage: {str(e)}")
+
+
+@router.get("/{execution_id}/events")
+async def get_execution_events(
+    execution_id: str,
+    tail: int = Query(500, ge=1, le=2000, description="Return last N events (default 500)")
+):
+    """
+    Get machine-readable event stream (Phase 2.4-B): events.jsonl.
+
+    Returns last N events (step_start / step_end). Path validated against whitelist.
+    """
+    try:
+        record = execution_store.get_execution(execution_id)
+        if not record:
+            raise HTTPException(status_code=404, detail=f"Execution {execution_id} not found")
+        if not record.artifact_path:
+            raise HTTPException(status_code=404, detail=f"No artifacts for execution {execution_id}")
+
+        artifact_path = Path(record.artifact_path)
+        if not validate_artifact_path(artifact_path):
+            raise HTTPException(status_code=403, detail="Access to artifact path forbidden")
+
+        events_file = artifact_path / "events.jsonl"
+        if not events_file.exists():
+            return {"events": [], "total": 0}
+
+        events = []
+        with open(events_file, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        total = len(events)
+        events = events[-tail:]
+        return {"events": events, "total": total}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get events: {str(e)}")
 
 
 @router.get("/{execution_id}/artifacts", response_model=ArtifactInfo)

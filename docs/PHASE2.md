@@ -83,6 +83,18 @@
 
 ---
 
+## 2.4 执行谱系与反思（与 Browser/Web 并列）
+
+- **执行谱系**：correlation_id、parent_execution_id、lineage API、UI Lineage 面板
+- **相似执行**：GET /executions/{id}/similar、why_similar、UI Similar Executions
+- **事件流**：events.jsonl（step_start/step_end）、GET /executions/{id}/events
+- **反思注入**：reflection_hints 生成与 WriteGate 只读注入、审计字段
+- **基于案例的修复**：repair.json、POST repair/suggest、suggest_repair.py
+
+详见 [Phase 2.4 执行谱系与反思](PHASE2_4_EXECUTION_LINEAGE.md)。
+
+---
+
 ## 2.4 Browser / Web 真实化
 
 - **web.search**：接稳定 provider（Serper/Brave/Bing/自建）

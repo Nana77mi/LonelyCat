@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { ExecutionSummary, listExecutions } from "../api/executions";
 
 const STATUS_OPTIONS = ["all", "completed", "failed", "rolled_back", "pending"] as const;
@@ -12,6 +12,9 @@ type RiskLevelFilter = (typeof RISK_LEVEL_OPTIONS)[number];
 
 export const ExecutionsListPage = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const correlationIdFromUrl = searchParams.get("correlation_id") ?? undefined;
+
   const [executions, setExecutions] = useState<ExecutionSummary[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -36,6 +39,7 @@ export const ExecutionsListPage = () => {
         status: statusFilter === "all" ? undefined : statusFilter,
         verdict: verdictFilter === "all" ? undefined : verdictFilter,
         risk_level: riskLevelFilter === "all" ? undefined : riskLevelFilter,
+        correlation_id: correlationIdFromUrl,
       });
       setExecutions(response.executions);
       setTotal(response.total);
@@ -44,7 +48,7 @@ export const ExecutionsListPage = () => {
     } finally {
       setLoading(false);
     }
-  }, [limit, offset, statusFilter, verdictFilter, riskLevelFilter]);
+  }, [limit, offset, statusFilter, verdictFilter, riskLevelFilter, correlationIdFromUrl]);
 
   useEffect(() => {
     loadExecutions();
@@ -190,6 +194,27 @@ export const ExecutionsListPage = () => {
             Refresh
           </button>
         </div>
+        {correlationIdFromUrl && (
+          <div className="mt-2 flex items-center gap-2">
+            <span className="text-sm text-gray-600 dark:text-gray-400">
+              Filtering by correlation_id: <span className="font-mono">{correlationIdFromUrl}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setSearchParams((prev) => {
+                  const next = new URLSearchParams(prev);
+                  next.delete("correlation_id");
+                  return next;
+                });
+                setOffset(0);
+              }}
+              className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+            >
+              Clear
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Table */}

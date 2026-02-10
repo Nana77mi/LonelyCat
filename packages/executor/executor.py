@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from datetime import datetime
 from pathlib import Path
+import json
 import shutil
 import tempfile
 
@@ -326,21 +327,58 @@ class HostExecutor:
                 artifact_path=artifact_path
             )
 
+        current_step_start = None  # (exec_id, step_num, step_name, start_time) for step_end on failure
+
+        def _step_start(step_num: int, step_name: str):
+            nonlocal current_step_start
+            t = datetime.utcnow()
+            current_step_start = (exec_id, step_num, step_name, t)
+            self._append_event(exec_id, {
+                "event": "step_start",
+                "step_num": step_num,
+                "step_name": step_name,
+                "timestamp": t.isoformat() + "Z",
+            })
+
+        def _step_end(step_num: int, step_name: str, status: str, duration_seconds: float,
+                      error_code: Optional[str] = None, error_message: Optional[str] = None):
+            nonlocal current_step_start
+            current_step_start = None
+            ev = {
+                "event": "step_end",
+                "step_num": step_num,
+                "step_name": step_name,
+                "status": status,
+                "duration_seconds": round(duration_seconds, 4),
+                "timestamp": (datetime.utcnow().isoformat() + "Z"),
+            }
+            if error_code:
+                ev["error_code"] = error_code
+            if error_message:
+                ev["error_message"] = error_message
+            self._append_event(exec_id, ev)
+
         try:
             # Step 1: Validate approval
             context.update_status(ExecutionStatus.VALIDATING, "Validating approval")
+            _step_start(1, "validate")
             self._log_step(exec_id, 1, "validate", "Starting approval validation")
             self._validate_approval(decision)
+            _step_end(1, "validate", "ok", (datetime.utcnow() - current_step_start[3]).total_seconds())
             self._log_step(exec_id, 1, "validate", "Approval validated successfully")
 
             # Step 2: Verify changeset integrity
+            _step_start(2, "checksum")
             self._log_step(exec_id, 2, "checksum", f"Verifying checksum: {changeset.checksum}")
             if not changeset.verify_checksum():
+                _step_end(2, "checksum", "failed", 0, "ValueError", "ChangeSet checksum verification failed")
                 raise ValueError("ChangeSet checksum verification failed (possible tampering)")
+            _step_end(2, "checksum", "ok", (datetime.utcnow() - current_step_start[3]).total_seconds())
             self._log_step(exec_id, 2, "checksum", "Checksum verified successfully")
 
             # Step 3: Create backup
             context.update_status(ExecutionStatus.BACKING_UP, "Creating backup")
+            _step_start(3, "backup")
             self._log_step(exec_id, 3, "backup", f"Creating backup for {len(changeset.changes)} files")
             context.backup_dir = self._create_backup(changeset)
             self._log_step(exec_id, 3, "backup", f"Backup created at {context.backup_dir}")
@@ -351,31 +389,41 @@ class HostExecutor:
 
             # Step 4: Apply changes
             context.update_status(ExecutionStatus.APPLYING, "Applying changes")
+            _step_start(4, "apply")
             self._log_step(exec_id, 4, "apply", f"Applying {len(changeset.changes)} file changes")
             applied = self._apply_changes(changeset, context)
             context.applied_changes = applied
+            _step_end(4, "apply", "ok", (datetime.utcnow() - current_step_start[3]).total_seconds())
             self._log_step(exec_id, 4, "apply", f"Successfully applied changes to {len(applied)} files")
 
             # Step 5: Run verification
             context.update_status(ExecutionStatus.VERIFYING, "Running verification")
+            _step_start(5, "verify")
             self._log_step(exec_id, 5, "verify", f"Running verification: {plan.verification_plan}")
             verification_results = self._run_verification(plan, context)
             context.verification_results = verification_results
 
             if not verification_results.get("passed", False):
-                self._log_step(exec_id, 5, "verify", f"FAILED: {verification_results.get('message')}")
-                raise Exception(f"Verification failed: {verification_results.get('message')}")
+                msg = verification_results.get("message", "Verification failed")
+                _step_end(5, "verify", "failed", (datetime.utcnow() - current_step_start[3]).total_seconds(), "VerificationFailed", msg)
+                self._log_step(exec_id, 5, "verify", f"FAILED: {msg}")
+                raise Exception(f"Verification failed: {msg}")
+            _step_end(5, "verify", "ok", (datetime.utcnow() - current_step_start[3]).total_seconds())
             self._log_step(exec_id, 5, "verify", "Verification passed")
 
             # Step 6: Run health checks
             context.update_status(ExecutionStatus.HEALTH_CHECKING, "Running health checks")
+            _step_start(6, "health")
             self._log_step(exec_id, 6, "health", f"Running {len(plan.health_checks)} health checks")
             health_results = self._run_health_checks(plan, context)
             context.health_check_results = health_results
 
             if not health_results.get("passed", False):
-                self._log_step(exec_id, 6, "health", f"FAILED: {health_results.get('message')}")
-                raise Exception(f"Health checks failed: {health_results.get('message')}")
+                msg = health_results.get("message", "Health checks failed")
+                _step_end(6, "health", "failed", (datetime.utcnow() - current_step_start[3]).total_seconds(), "HealthCheckFailed", msg)
+                self._log_step(exec_id, 6, "health", f"FAILED: {msg}")
+                raise Exception(f"Health checks failed: {msg}")
+            _step_end(6, "health", "ok", (datetime.utcnow() - current_step_start[3]).total_seconds())
             self._log_step(exec_id, 6, "health", "All health checks passed")
 
             # Success!
@@ -417,6 +465,11 @@ class HostExecutor:
             return result
 
         except Exception as e:
+            # Phase 2.4-B: record step_end(failed) for the step that was running
+            if current_step_start:
+                _eid, _num, _name, _t0 = current_step_start
+                _step_end(_num, _name, "failed", (datetime.utcnow() - _t0).total_seconds(), type(e).__name__, str(e))
+
             # Failure - rollback
             context.error_message = str(e)
             context.update_status(ExecutionStatus.FAILED, f"Execution failed: {e}")
@@ -634,6 +687,20 @@ class HostExecutor:
         """
         if not self.dry_run:
             self.artifact_manager.append_step_log(execution_id, step_num, step_name, message)
+
+    def _append_event(self, execution_id: str, event: Dict) -> None:
+        """
+        Append one JSON line to events.jsonl (Phase 2.4-B). Append-only, machine-readable.
+        """
+        if self.dry_run:
+            return
+        try:
+            artifact_dir = self.artifact_manager.get_execution_dir(execution_id)
+            events_file = artifact_dir / "events.jsonl"
+            with open(events_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(event, ensure_ascii=False) + "\n")
+        except Exception:
+            pass  # Do not fail execution if events write fails
 
     def _track_step(self, execution_id: str, step_num: int, step_name: str):
         """

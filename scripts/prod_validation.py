@@ -180,8 +180,13 @@ class ProductionValidator:
             if not self._verify_api_read(exec_result.context.id):
                 return False
 
-            # Step 10: Cleanup test data
-            self.log("Step 10: Cleanup", "STEP")
+            # Step 10: Phase 2.4 Execution Lineage & Similarity (lightweight)
+            self.log("Step 10: Phase 2.4 Lineage / Events / Similar", "STEP")
+            if not self._verify_phase24_checks(exec_result.context.id):
+                return False
+
+            # Step 11: Cleanup test data
+            self.log("Step 11: Cleanup", "STEP")
             self._cleanup_test_artifacts()
 
             # Summary
@@ -739,6 +744,62 @@ This is a low-risk documentation change for testing the pipeline.
                 False,
                 f"API read simulation failed: {e}"
             )
+            return False
+
+    def _verify_phase24_checks(self, execution_id: str) -> bool:
+        """
+        Phase 2.4-F: Lightweight checks for lineage, events.jsonl, similar endpoint.
+
+        Does not start API server; uses ExecutionStore and artifact dir directly.
+        """
+        try:
+            store = self.executor.execution_store
+
+            # 1. Lineage: structure and 200-equivalent (get_execution_lineage returns dict)
+            lineage = store.get_execution_lineage(execution_id, depth=20)
+            if lineage.get("execution") is None:
+                self.record_result("Phase 2.4 Lineage", False, "get_execution_lineage returned no execution")
+                return False
+            for key in ("execution", "ancestors", "descendants", "siblings"):
+                if key not in lineage:
+                    self.record_result("Phase 2.4 Lineage", False, f"lineage missing key: {key}")
+                    return False
+            self.record_result("Phase 2.4 Lineage", True, "lineage structure OK")
+
+            # 2. events.jsonl exists and contains step_start/step_end
+            record = store.get_execution(execution_id)
+            artifact_path = Path(record.artifact_path) if record and record.artifact_path else (self.workspace_root / ".lonelycat" / "executions" / execution_id)
+            events_file = artifact_path / "events.jsonl"
+            if not events_file.exists():
+                self.record_result("Phase 2.4 Events", False, "events.jsonl not found")
+                return False
+            lines = [l.strip() for l in events_file.read_text(encoding="utf-8").splitlines() if l.strip()]
+            has_step = any("step_start" in l or "step_end" in l for l in lines)
+            if not has_step:
+                self.record_result("Phase 2.4 Events", False, "events.jsonl has no step_start/step_end")
+                return False
+            self.record_result("Phase 2.4 Events", True, f"events.jsonl OK ({len(lines)} lines)")
+
+            # 3. Similar: find_similar_executions returns list (no exception)
+            similar = store.find_similar_executions(execution_id, limit=5)
+            if not isinstance(similar, list):
+                self.record_result("Phase 2.4 Similar", False, "find_similar_executions did not return list")
+                return False
+            self.record_result("Phase 2.4 Similar", True, f"similar endpoint OK ({len(similar)} results)")
+
+            # 4. Repair module loadable (dry-run: repair suggest only for failed; we have completed)
+            try:
+                from executor.repair import RepairProposal, load_repair
+                p = RepairProposal(evidence_execution_ids=[], summary="test")
+                _ = p.to_dict()
+            except Exception as e:
+                self.record_result("Phase 2.4 Repair", False, f"repair module: {e}")
+                return False
+            self.record_result("Phase 2.4 Repair", True, "repair module OK")
+
+            return True
+        except Exception as e:
+            self.record_result("Phase 2.4 Checks", False, str(e))
             return False
 
     def _cleanup_test_artifacts(self):

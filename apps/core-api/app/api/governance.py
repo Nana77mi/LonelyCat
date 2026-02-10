@@ -244,12 +244,16 @@ async def evaluate(req: EvaluateRequest):
     ]
     projection_hash = compute_projection_hash(projection_files)
 
+    # Phase 2.4-C: optional reflection hints (affect reasons only, not verdict)
+    reflection_hints_path = repo_root / ".lonelycat" / "reflection" / "hints_7d.json"
+
     # Evaluate with WriteGate
     decision = writegate.evaluate(
         plan=plan,
         changeset=changeset,
         agent_source_hash=agent_source_hash,
-        projection_hash=projection_hash
+        projection_hash=projection_hash,
+        reflection_hints_path=reflection_hints_path
     )
 
     # Update plan with effective risk level (if escalated)

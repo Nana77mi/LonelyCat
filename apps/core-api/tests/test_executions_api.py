@@ -1,9 +1,10 @@
 """
-Tests for Execution History API - Phase 2.3-A
+Tests for Execution History API - Phase 2.3-A / 2.4-A
 
 Validates:
-- GET /executions - List with filters
-- GET /executions/{id} - Get details with steps
+- GET /executions - List with filters, correlation_id (Phase 2.4-A)
+- GET /executions/{id} - Get details with steps and graph fields
+- GET /executions/{id}/lineage - Execution lineage (Phase 2.4-A)
 - GET /executions/{id}/artifacts - Get artifact metadata
 - GET /executions/{id}/replay - Replay execution
 - Security boundaries (path whitelist)
@@ -178,8 +179,88 @@ def test_get_execution_details(client, sample_execution):
     assert exec_data["execution_id"] == sample_execution
     assert "status" in exec_data
     assert "verdict" in exec_data
+    # Phase 2.4-A: graph fields (optional, may be null)
+    assert "correlation_id" in exec_data
+    assert "parent_execution_id" in exec_data
+    assert "trigger_kind" in exec_data
+    assert "run_id" in exec_data
 
     print(f"[OK] Got execution {sample_execution} with {len(data['steps'])} steps")
+
+
+# ========== Test 3b: GET /executions/{id}/lineage (Phase 2.4-A) ==========
+
+def test_get_execution_lineage(client, sample_execution):
+    """Test GET /executions/{id}/lineage returns execution, ancestors, descendants, siblings."""
+    response = client.get(f"/executions/{sample_execution}/lineage?depth=20")
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert "execution" in data
+    assert "ancestors" in data
+    assert "descendants" in data
+    assert "siblings" in data
+    assert data["execution"]["execution_id"] == sample_execution
+    assert isinstance(data["ancestors"], list)
+    assert isinstance(data["descendants"], list)
+    assert isinstance(data["siblings"], list)
+    # Root execution has no parent
+    assert len(data["ancestors"]) == 0
+
+    print(f"[OK] Lineage for {sample_execution}: ancestors=0, descendants={len(data['descendants'])}, siblings={len(data['siblings'])}")
+
+
+def test_get_execution_lineage_404(client):
+    """Test GET /executions/{id}/lineage returns 404 for non-existent ID."""
+    response = client.get("/executions/exec_nonexistent_lineage_123/lineage")
+    assert response.status_code == 404
+
+
+# ========== Test 3c: List by correlation_id (Phase 2.4-A) ==========
+
+def test_list_executions_by_correlation_id(client, sample_execution):
+    """Test GET /executions?correlation_id= returns executions in that chain."""
+    # Sample execution has correlation_id = execution_id (root)
+    response = client.get(f"/executions?correlation_id={sample_execution}&limit=10")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "executions" in data
+    assert isinstance(data["executions"], list)
+    # Should include at least our sample (same correlation_id)
+    ids = [e["execution_id"] for e in data["executions"]]
+    assert sample_execution in ids
+
+    print(f"[OK] List by correlation_id: {len(data['executions'])} executions")
+
+
+# ========== Test 3d: GET /executions/{id}/similar (Phase 2.4-D) ==========
+
+def test_get_similar_executions(client, sample_execution):
+    """Test GET /executions/{id}/similar returns list with why_similar and score."""
+    response = client.get(f"/executions/{sample_execution}/similar?limit=5")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "similar" in data
+    assert isinstance(data["similar"], list)
+    for item in data["similar"]:
+        assert "execution" in item
+        assert "why_similar" in item
+        assert "score" in item
+        assert isinstance(item["why_similar"], list)
+
+    print(f"[OK] Similar executions: {len(data['similar'])} items")
+
+
+def test_get_similar_executions_404(client):
+    """Test GET /executions/{id}/similar returns 200 with empty list for non-existent (or no similar)."""
+    response = client.get("/executions/exec_nonexistent_similar_123/similar")
+    # API returns 200 with similar=[] when execution not found? Or 404?
+    # find_similar_executions returns [] when target not found, so we return {"similar": []}
+    assert response.status_code == 200
+    assert response.json().get("similar") == []
 
 
 # ========== Test 4: Get Non-Existent Execution ==========
