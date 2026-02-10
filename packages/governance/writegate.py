@@ -91,7 +91,8 @@ class WriteGate:
         plan: ChangePlan,
         changeset: ChangeSet,
         agent_source_hash: Optional[str] = None,
-        projection_hash: Optional[str] = None
+        projection_hash: Optional[str] = None,
+        reflection_hints_path: Optional[Path] = None
     ) -> GovernanceDecision:
         """
         Evaluate ChangePlan + ChangeSet against policies.
@@ -103,11 +104,24 @@ class WriteGate:
             changeset: ChangeSet with actual diffs
             agent_source_hash: Hash of agent/ directory (optional)
             projection_hash: Hash of AGENTS.md/CLAUDE.md (optional)
+            reflection_hints_path: Path to reflection_hints.json (Phase 2.4-C). If provided,
+                hints are appended to reasons only (verdict unchanged).
 
         Returns:
             GovernanceDecision with verdict and reasons
         """
         reasons = []
+        hints_digest = None
+        reflection_hints_used = False
+        if reflection_hints_path and reflection_hints_path.exists():
+            import sys
+            sys.path.insert(0, str(Path(__file__).parent.parent))
+            from executor.reflection_hints import load_hints
+            hints = load_hints(reflection_hints_path)
+            if hints:
+                reasons.extend(hints.to_suggestion_strings())
+                hints_digest = hints.digest()
+                reflection_hints_used = True
         violated_policies = []
         required_actions = []
 
@@ -159,7 +173,9 @@ class WriteGate:
             required_actions=required_actions,
             risk_level_effective=risk_level_effective,
             agent_source_hash=agent_source_hash,
-            projection_hash=projection_hash
+            projection_hash=projection_hash,
+            reflection_hints_used=reflection_hints_used,
+            hints_digest=hints_digest
         )
 
     def _check_forbidden_paths(self, changeset: ChangeSet) -> dict:
@@ -355,7 +371,9 @@ class WriteGate:
         required_actions: List[str],
         risk_level_effective: RiskLevel,
         agent_source_hash: Optional[str],
-        projection_hash: Optional[str]
+        projection_hash: Optional[str],
+        reflection_hints_used: bool = False,
+        hints_digest: Optional[str] = None
     ) -> GovernanceDecision:
         """Create GovernanceDecision with full audit metadata."""
         return GovernanceDecision(
@@ -372,7 +390,9 @@ class WriteGate:
             projection_hash=projection_hash,
             writegate_version=self.VERSION,
             evaluated_at=datetime.utcnow(),
-            evaluator="writegate_engine"
+            evaluator="writegate_engine",
+            reflection_hints_used=reflection_hints_used,
+            hints_digest=hints_digest
         )
 
     def _path_matches(self, path: str, pattern: str) -> bool:

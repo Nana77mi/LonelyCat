@@ -86,6 +86,11 @@ export type ExecutionSummary = {
   rolled_back: boolean;
   error_step: string | null;
   error_message: string | null;
+  /** Phase 2.4-A: execution graph */
+  correlation_id?: string | null;
+  parent_execution_id?: string | null;
+  trigger_kind?: string | null;
+  run_id?: string | null;
 };
 
 export type StepDetail = {
@@ -127,6 +132,23 @@ export type ExecutionListResponse = {
   total: number;
   limit: number;
   offset: number;
+};
+
+/** Phase 2.4-A: lineage record (API returns to_dict()) */
+export type ExecutionLineageRecord = Record<string, unknown> & {
+  execution_id: string;
+  status?: string;
+  verdict?: string;
+  parent_execution_id?: string | null;
+  correlation_id?: string | null;
+  trigger_kind?: string | null;
+};
+
+export type ExecutionLineage = {
+  execution: ExecutionLineageRecord;
+  ancestors: ExecutionLineageRecord[];
+  descendants: ExecutionLineageRecord[];
+  siblings: ExecutionLineageRecord[];
 };
 
 export type ExecutionStatistics = {
@@ -184,6 +206,7 @@ export const listExecutions = async (opts?: {
   verdict?: string;
   risk_level?: string;
   since?: string;
+  correlation_id?: string;
 }): Promise<ExecutionListResponse> => {
   const url = buildUrl("/executions", {
     limit: opts?.limit?.toString(),
@@ -192,6 +215,7 @@ export const listExecutions = async (opts?: {
     verdict: opts?.verdict,
     risk_level: opts?.risk_level,
     since: opts?.since,
+    correlation_id: opts?.correlation_id,
   });
   const response = await fetch(url);
   if (!response.ok) {
@@ -257,4 +281,54 @@ export const getExecutionStatistics = async (): Promise<ExecutionStatistics> => 
     throw new Error(await buildErrorMessage("Failed to fetch execution statistics", response));
   }
   return await parseJson<ExecutionStatistics>(response);
+};
+
+/**
+ * Get execution lineage (Phase 2.4-A): ancestors, descendants, siblings.
+ *
+ * @param executionId 执行ID
+ * @param depth 最大深度，默认 20
+ */
+export const getExecutionLineage = async (
+  executionId: string,
+  depth: number = 20
+): Promise<ExecutionLineage> => {
+  const url = buildUrl(`/executions/${executionId}/lineage`, { depth: depth.toString() });
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to fetch execution lineage", response));
+  }
+  return await parseJson<ExecutionLineage>(response);
+};
+
+/** Phase 2.4-D: similar execution item with explainable why_similar */
+export type SimilarExecutionItem = {
+  execution: ExecutionLineageRecord;
+  why_similar: string[];
+  score: number;
+};
+
+export type SimilarExecutionsResponse = {
+  similar: SimilarExecutionItem[];
+};
+
+/**
+ * Get executions similar to this one (Phase 2.4-D).
+ *
+ * @param executionId 执行ID
+ * @param limit 最多返回条数，默认 5
+ */
+export const getSimilarExecutions = async (
+  executionId: string,
+  limit: number = 5
+): Promise<SimilarExecutionsResponse> => {
+  const url = buildUrl(`/executions/${executionId}/similar`, {
+    limit: limit.toString(),
+    exclude_same_correlation: "true",
+  });
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to fetch similar executions", response));
+  }
+  return await parseJson<SimilarExecutionsResponse>(response);
 };

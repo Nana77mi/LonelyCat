@@ -294,10 +294,13 @@ class GovernanceDecision:
     violated_policies: List[str] = field(default_factory=list)
     required_actions: List[str] = field(default_factory=list)  # ["user_review", "add_tests"]
     projection_hash: Optional[str] = None  # Hash of AGENTS.md etc (optional)
+    # Phase 2.4-C: reflection hints audit (hints affect reasons only, not verdict)
+    reflection_hints_used: bool = False
+    hints_digest: Optional[str] = None
 
     def to_dict(self) -> dict:
         """Serialize to dict."""
-        return {
+        d = {
             "id": self.id,
             "plan_id": self.plan_id,
             "changeset_id": self.changeset_id,
@@ -313,6 +316,10 @@ class GovernanceDecision:
             "evaluated_at": self.evaluated_at.isoformat(),
             "evaluator": self.evaluator
         }
+        if self.reflection_hints_used:
+            d["reflection_hints_used"] = True
+            d["hints_digest"] = self.hints_digest
+        return d
 
     @classmethod
     def from_dict(cls, data: dict) -> "GovernanceDecision":
@@ -331,7 +338,9 @@ class GovernanceDecision:
             projection_hash=data.get("projection_hash"),
             writegate_version=data["writegate_version"],
             evaluated_at=datetime.fromisoformat(data["evaluated_at"]),
-            evaluator=data["evaluator"]
+            evaluator=data["evaluator"],
+            reflection_hints_used=data.get("reflection_hints_used", False),
+            hints_digest=data.get("hints_digest")
         )
 
     def is_approved(self) -> bool:
