@@ -52,6 +52,9 @@ class ExecutionRecord:
     parent_execution_id: Optional[str] = None
     trigger_kind: Optional[str] = None
     run_id: Optional[str] = None
+    # Phase 2.5-D: Repair in graph
+    is_repair: bool = False
+    repair_for_execution_id: Optional[str] = None
 
     @classmethod
     def from_row(cls, row: sqlite3.Row) -> "ExecutionRecord":
@@ -81,6 +84,8 @@ class ExecutionRecord:
             parent_execution_id=row["parent_execution_id"] if "parent_execution_id" in row.keys() else None,
             trigger_kind=row["trigger_kind"] if "trigger_kind" in row.keys() else None,
             run_id=row["run_id"] if "run_id" in row.keys() else None,
+            is_repair=bool(row["is_repair"]) if "is_repair" in row.keys() and row["is_repair"] else False,
+            repair_for_execution_id=row["repair_for_execution_id"] if "repair_for_execution_id" in row.keys() else None,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -110,6 +115,8 @@ class ExecutionRecord:
             "parent_execution_id": self.parent_execution_id,
             "trigger_kind": self.trigger_kind,
             "run_id": self.run_id,
+            "is_repair": self.is_repair,
+            "repair_for_execution_id": self.repair_for_execution_id,
         }
 
 
@@ -189,9 +196,11 @@ class ExecutionStore:
         parent_execution_id: Optional[str] = None,
         trigger_kind: str = "manual",
         run_id: Optional[str] = None,
+        is_repair: bool = False,
+        repair_for_execution_id: Optional[str] = None,
     ):
         """
-        Record execution start (Phase 2.4-A with graph metadata).
+        Record execution start (Phase 2.4-A with graph metadata, 2.5-D repair fields).
 
         Args:
             execution_id: Unique execution ID
@@ -207,6 +216,8 @@ class ExecutionStore:
             parent_execution_id: Parent execution ID (for retry/repair/child)
             trigger_kind: How execution was triggered (manual/agent/retry/repair/child/scheduled)
             run_id: Optional run system ID
+            is_repair: True if this execution is a repair run (Phase 2.5-D)
+            repair_for_execution_id: Failed execution ID this repair is for (Phase 2.5-D)
         """
         # Default correlation_id to execution_id if not provided (root execution)
         if correlation_id is None:
@@ -214,30 +225,39 @@ class ExecutionStore:
 
         conn = get_db_connection(self.db_path)
         try:
-            conn.execute("""
-                INSERT INTO executions (
-                    execution_id, plan_id, changeset_id, decision_id,
-                    checksum, verdict, status, risk_level, affected_paths,
-                    started_at, artifact_path,
-                    correlation_id, parent_execution_id, trigger_kind, run_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                execution_id,
-                plan_id,
-                changeset_id,
-                decision_id,
-                checksum,
-                verdict,
-                "pending",
-                risk_level,
-                json.dumps(affected_paths),
-                datetime.utcnow().isoformat(),
-                artifact_path,
-                correlation_id,
-                parent_execution_id,
-                trigger_kind,
-                run_id,
-            ))
+            columns = [
+                "execution_id", "plan_id", "changeset_id", "decision_id",
+                "checksum", "verdict", "status", "risk_level", "affected_paths",
+                "started_at", "artifact_path",
+                "correlation_id", "parent_execution_id", "trigger_kind", "run_id"
+            ]
+            placeholders = ["?"] * len(columns)
+            values = [
+                execution_id, plan_id, changeset_id, decision_id,
+                checksum, verdict, "pending", risk_level, json.dumps(affected_paths),
+                datetime.utcnow().isoformat(), artifact_path,
+                correlation_id, parent_execution_id, trigger_kind, run_id
+            ]
+            cursor = conn.cursor()
+            cursor.execute("PRAGMA table_info(executions)")
+            cols = [row[1] for row in cursor.fetchall()]
+            if "is_repair" in cols and "repair_for_execution_id" in cols:
+                columns.extend(["is_repair", "repair_for_execution_id"])
+                placeholders.extend(["?", "?"])
+                values.extend([1 if is_repair else 0, repair_for_execution_id])
+            conn.execute(
+                f"INSERT INTO executions ({', '.join(columns)}) VALUES ({', '.join(placeholders)})",
+                tuple(values)
+            )
+            # Phase 2.5-B: dual-write to execution_paths
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='execution_paths'")
+            if cursor.fetchone() and affected_paths:
+                for p in affected_paths:
+                    if p and isinstance(p, str) and p.strip():
+                        cursor.execute(
+                            "INSERT OR IGNORE INTO execution_paths (execution_id, path) VALUES (?, ?)",
+                            (execution_id, p.strip())
+                        )
             conn.commit()
         finally:
             conn.close()
@@ -682,7 +702,25 @@ class ExecutionStore:
         finally:
             conn.close()
 
-    # ==================== Phase 2.4-D: Similarity Queries ====================
+    # ==================== Phase 2.4-D: Similarity Queries (2.5-B: execution_paths) ====================
+
+    def _execution_paths_table_exists(self, cursor: sqlite3.Cursor) -> bool:
+        """Return True if execution_paths table exists (Phase 2.5-B)."""
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='execution_paths'")
+        return cursor.fetchone() is not None
+
+    def _get_paths_for_execution(
+        self, conn: sqlite3.Connection, execution_id: str, fallback_paths: List[str]
+    ) -> List[str]:
+        """Get paths for an execution: prefer execution_paths table, else fallback (Phase 2.5-B)."""
+        cursor = conn.cursor()
+        if not self._execution_paths_table_exists(cursor):
+            return fallback_paths
+        cursor.execute("SELECT path FROM execution_paths WHERE execution_id = ? ORDER BY path", (execution_id,))
+        rows = cursor.fetchall()
+        if rows:
+            return [r[0] for r in rows]
+        return fallback_paths
 
     def find_similar_executions(
         self,
@@ -718,55 +756,65 @@ class ExecutionStore:
         if not target:
             return []
 
-        # Get all candidate executions (exclude self)
         conn = get_db_connection(self.db_path)
         try:
-            query = "SELECT * FROM executions WHERE execution_id != ?"
-            params = [execution_id]
+            cursor = conn.cursor()
+            target_paths = self._get_paths_for_execution(conn, execution_id, target.affected_paths)
 
-            # Optionally exclude same correlation
-            if exclude_same_correlation and target.correlation_id:
-                query += " AND (correlation_id IS NULL OR correlation_id != ?)"
-                params.append(target.correlation_id)
+            # Candidate set: prefer execution_paths (path overlap), else fallback to recent 1000
+            rows = []
+            if target_paths and self._execution_paths_table_exists(cursor):
+                placeholders = ",".join("?" * len(target_paths))
+                q = f"""
+                    SELECT DISTINCT execution_id FROM execution_paths
+                    WHERE path IN ({placeholders}) AND execution_id != ?
+                """
+                params: List[Any] = list(target_paths) + [execution_id]
+                candidate_ids = [r[0] for r in cursor.execute(q, params).fetchall()]
+                if candidate_ids:
+                    in_ph = ",".join("?" * len(candidate_ids))
+                    query = f"SELECT * FROM executions WHERE execution_id IN ({in_ph})"
+                    params_q: List[Any] = list(candidate_ids)
+                    if exclude_same_correlation and target.correlation_id:
+                        query += " AND (correlation_id IS NULL OR correlation_id != ?)"
+                        params_q.append(target.correlation_id)
+                    rows = conn.execute(query, params_q).fetchall()
 
-            # Limit to reasonable number of candidates (last 1000 executions)
-            query += " ORDER BY started_at DESC LIMIT 1000"
+            if not rows:
+                query = "SELECT * FROM executions WHERE execution_id != ?"
+                params = [execution_id]
+                if exclude_same_correlation and target.correlation_id:
+                    query += " AND (correlation_id IS NULL OR correlation_id != ?)"
+                    params.append(target.correlation_id)
+                query += " ORDER BY started_at DESC LIMIT 1000"
+                rows = conn.execute(query, params).fetchall()
 
-            rows = conn.execute(query, params).fetchall()
+            engine = SimilarityEngine()
+            similarities = []
+            for row in rows:
+                candidate = ExecutionRecord.from_row(row)
+                candidate_paths = self._get_paths_for_execution(
+                    conn, candidate.execution_id, candidate.affected_paths
+                )
+                score = engine.compute_similarity_score(
+                    target_execution_id=execution_id,
+                    target_error=target.error_message,
+                    target_paths=target_paths,
+                    target_status=target.status,
+                    target_verdict=target.verdict,
+                    candidate_execution_id=candidate.execution_id,
+                    candidate_error=candidate.error_message,
+                    candidate_paths=candidate_paths,
+                    candidate_status=candidate.status,
+                    candidate_verdict=candidate.verdict
+                )
+                if score.total_score >= min_similarity:
+                    similarities.append((candidate, score))
 
+            similarities.sort(key=lambda x: x[1].total_score, reverse=True)
+            return similarities[:limit]
         finally:
             conn.close()
-
-        # Compute similarity for each candidate
-        engine = SimilarityEngine()
-        similarities: List[Tuple[ExecutionRecord, SimilarityScore]] = []
-
-        for row in rows:
-            candidate = ExecutionRecord.from_row(row)
-
-            # Compute similarity score
-            score = engine.compute_similarity_score(
-                target_execution_id=execution_id,
-                target_error=target.error_message,
-                target_paths=target.affected_paths,
-                target_status=target.status,
-                target_verdict=target.verdict,
-                candidate_execution_id=candidate.execution_id,
-                candidate_error=candidate.error_message,
-                candidate_paths=candidate.affected_paths,
-                candidate_status=candidate.status,
-                candidate_verdict=candidate.verdict
-            )
-
-            # Filter by minimum similarity
-            if score.total_score >= min_similarity:
-                similarities.append((candidate, score))
-
-        # Sort by total score (descending)
-        similarities.sort(key=lambda x: x[1].total_score, reverse=True)
-
-        # Return top N
-        return similarities[:limit]
 
     def find_similar_by_error(
         self,
@@ -832,50 +880,49 @@ class ExecutionStore:
         min_similarity: float = 0.3
     ) -> List[Tuple[ExecutionRecord, float]]:
         """
-        Find executions affecting similar file paths (Phase 2.4-D).
+        Find executions affecting similar file paths (Phase 2.4-D, 2.5-B execution_paths).
 
         Useful for:
         - "What else changed these files?"
         - Finding related changes
-
-        Args:
-            affected_paths: Target file paths
-            limit: Maximum results
-            min_similarity: Minimum Jaccard similarity threshold
-
-        Returns:
-            List of (ExecutionRecord, similarity_score) tuples
         """
-        # Get all executions
+        from .similarity import PathSimilarity
+
         conn = get_db_connection(self.db_path)
         try:
-            rows = conn.execute("""
-                SELECT * FROM executions
-                WHERE affected_paths IS NOT NULL AND affected_paths != '[]'
-                ORDER BY started_at DESC
-                LIMIT 1000
-            """).fetchall()
+            cursor = conn.cursor()
+            rows = []
+            if affected_paths and self._execution_paths_table_exists(cursor):
+                placeholders = ",".join("?" * len(affected_paths))
+                q = f"SELECT DISTINCT execution_id FROM execution_paths WHERE path IN ({placeholders})"
+                candidate_ids = [r[0] for r in cursor.execute(q, affected_paths).fetchall()]
+                if candidate_ids:
+                    in_ph = ",".join("?" * len(candidate_ids))
+                    rows = conn.execute(
+                        f"SELECT * FROM executions WHERE execution_id IN ({in_ph})",
+                        list(candidate_ids)
+                    ).fetchall()
+            if not rows:
+                rows = conn.execute("""
+                    SELECT * FROM executions
+                    WHERE affected_paths IS NOT NULL AND affected_paths != '[]'
+                    ORDER BY started_at DESC
+                    LIMIT 1000
+                """).fetchall()
 
+            similarities = []
+            for row in rows:
+                candidate = ExecutionRecord.from_row(row)
+                candidate_paths = self._get_paths_for_execution(
+                    conn, candidate.execution_id, candidate.affected_paths
+                )
+                if not candidate_paths:
+                    continue
+                sim = PathSimilarity.jaccard_similarity(affected_paths, candidate_paths)
+                if sim >= min_similarity:
+                    similarities.append((candidate, sim))
+            similarities.sort(key=lambda x: x[1], reverse=True)
+            return similarities[:limit]
         finally:
             conn.close()
-
-        # Compute path similarity
-        from .similarity import PathSimilarity
-        similarities: List[Tuple[ExecutionRecord, float]] = []
-
-        for row in rows:
-            candidate = ExecutionRecord.from_row(row)
-
-            if not candidate.affected_paths:
-                continue
-
-            similarity = PathSimilarity.jaccard_similarity(affected_paths, candidate.affected_paths)
-
-            if similarity >= min_similarity:
-                similarities.append((candidate, similarity))
-
-        # Sort by similarity (descending)
-        similarities.sort(key=lambda x: x[1], reverse=True)
-
-        return similarities[:limit]
 

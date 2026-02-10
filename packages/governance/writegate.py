@@ -105,12 +105,13 @@ class WriteGate:
             agent_source_hash: Hash of agent/ directory (optional)
             projection_hash: Hash of AGENTS.md/CLAUDE.md (optional)
             reflection_hints_path: Path to reflection_hints.json (Phase 2.4-C). If provided,
-                hints are appended to reasons only (verdict unchanged).
+                hints are written to suggestions (Phase 2.5-C), not mixed into reasons.
 
         Returns:
-            GovernanceDecision with verdict and reasons
+            GovernanceDecision with verdict, reasons, and suggestions
         """
         reasons = []
+        suggestions: List[str] = []
         hints_digest = None
         reflection_hints_used = False
         if reflection_hints_path and reflection_hints_path.exists():
@@ -119,7 +120,7 @@ class WriteGate:
             from executor.reflection_hints import load_hints
             hints = load_hints(reflection_hints_path)
             if hints:
-                reasons.extend(hints.to_suggestion_strings())
+                suggestions.extend(hints.to_suggestion_strings())
                 hints_digest = hints.digest()
                 reflection_hints_used = True
         violated_policies = []
@@ -169,6 +170,7 @@ class WriteGate:
             changeset=changeset,
             verdict=verdict,
             reasons=reasons,
+            suggestions=suggestions,
             violated_policies=violated_policies,
             required_actions=required_actions,
             risk_level_effective=risk_level_effective,
@@ -373,7 +375,8 @@ class WriteGate:
         agent_source_hash: Optional[str],
         projection_hash: Optional[str],
         reflection_hints_used: bool = False,
-        hints_digest: Optional[str] = None
+        hints_digest: Optional[str] = None,
+        suggestions: Optional[List[str]] = None
     ) -> GovernanceDecision:
         """Create GovernanceDecision with full audit metadata."""
         return GovernanceDecision(
@@ -382,6 +385,7 @@ class WriteGate:
             changeset_id=changeset.id,
             verdict=verdict,
             reasons=reasons,
+            suggestions=suggestions or [],
             violated_policies=violated_policies,
             required_actions=required_actions,
             risk_level_effective=risk_level_effective,

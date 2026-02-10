@@ -91,6 +91,9 @@ export type ExecutionSummary = {
   parent_execution_id?: string | null;
   trigger_kind?: string | null;
   run_id?: string | null;
+  /** Phase 2.5-D: repair in graph */
+  is_repair?: boolean;
+  repair_for_execution_id?: string | null;
 };
 
 export type StepDetail = {
@@ -149,6 +152,8 @@ export type ExecutionLineage = {
   ancestors: ExecutionLineageRecord[];
   descendants: ExecutionLineageRecord[];
   siblings: ExecutionLineageRecord[];
+  /** Phase 2.5-A2: same correlation, latest by started_at */
+  latest_in_correlation?: ExecutionLineageRecord | null;
 };
 
 export type ExecutionStatistics = {
@@ -178,6 +183,9 @@ export type ExecutionReplay = {
     verdict: string;
     risk_level_effective: string;
     reasons: string[];
+    reflection_hints_used?: boolean;
+    hints_digest?: string;
+    suggestions?: string[];
   };
   execution: {
     status: string;
@@ -187,6 +195,41 @@ export type ExecutionReplay = {
     verification_passed: boolean;
     health_checks_passed: boolean;
   };
+};
+
+/** Phase 2.4-B: single event from events.jsonl */
+export type ExecutionEvent = {
+  event?: string;
+  step_num?: number;
+  step_name?: string;
+  status?: string;
+  duration_seconds?: number;
+  timestamp?: string;
+  error_code?: string;
+  error_message?: string;
+};
+
+export type ExecutionEventsResponse = {
+  events: ExecutionEvent[];
+  total: number;
+};
+
+/**
+ * Get execution events stream (Phase 2.4-B).
+ *
+ * @param executionId 执行ID
+ * @param tail 最后 N 条，默认 500
+ */
+export const getExecutionEvents = async (
+  executionId: string,
+  tail: number = 500
+): Promise<ExecutionEventsResponse> => {
+  const url = buildUrl(`/executions/${executionId}/events`, { tail: tail.toString() });
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to fetch execution events", response));
+  }
+  return await parseJson<ExecutionEventsResponse>(response);
 };
 
 // ============================================================================
@@ -331,4 +374,23 @@ export const getSimilarExecutions = async (
     throw new Error(await buildErrorMessage("Failed to fetch similar executions", response));
   }
   return await parseJson<SimilarExecutionsResponse>(response);
+};
+
+/** Phase 2.5-C2: reflection hints (hints_7d.json) */
+export type ReflectionHintsResponse = {
+  hot_error_steps: string[];
+  false_allow_patterns: string[];
+  slow_steps: string[];
+  suggested_policy: string[];
+  evidence_execution_ids: string[];
+  window: string | null;
+};
+
+export const getReflectionHints = async (): Promise<ReflectionHintsResponse> => {
+  const url = buildUrl("/reflection/hints");
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(await buildErrorMessage("Failed to fetch reflection hints", response));
+  }
+  return await parseJson<ReflectionHintsResponse>(response);
 };

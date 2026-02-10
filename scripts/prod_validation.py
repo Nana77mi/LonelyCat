@@ -185,6 +185,11 @@ class ProductionValidator:
             if not self._verify_phase24_checks(exec_result.context.id):
                 return False
 
+            # Step 10b: Phase 2.5 repair execution write (minimal assertion)
+            self.log("Step 10b: Phase 2.5 Repair Write Assertion", "STEP")
+            if not self._verify_phase25_repair_write(exec_result.context.id):
+                return False
+
             # Step 11: Cleanup test data
             self.log("Step 11: Cleanup", "STEP")
             self._cleanup_test_artifacts()
@@ -800,6 +805,52 @@ This is a low-risk documentation change for testing the pipeline.
             return True
         except Exception as e:
             self.record_result("Phase 2.4 Checks", False, str(e))
+            return False
+
+    def _verify_phase25_repair_write(self, execution_id: str) -> bool:
+        """
+        Phase 2.5: Minimal assertion that repair execution can be written with
+        is_repair=True and repair_for_execution_id, and read back correctly.
+        Does not run a real repair; only storage write + read.
+        """
+        try:
+            store = self.executor.execution_store
+            existing = store.get_execution(execution_id)
+            if not existing:
+                self.record_result("Phase 2.5 Repair Write", False, "original execution not found")
+                return False
+            repair_exec_id = f"{execution_id}_phase25_repair"
+            artifact_path = str(self.workspace_root / ".lonelycat" / "executions" / repair_exec_id)
+            store.record_execution_start(
+                execution_id=repair_exec_id,
+                plan_id=existing.plan_id,
+                changeset_id=existing.changeset_id,
+                decision_id=existing.decision_id,
+                checksum=existing.checksum,
+                verdict=existing.verdict,
+                risk_level=existing.risk_level or "low",
+                affected_paths=existing.affected_paths or [],
+                artifact_path=artifact_path,
+                correlation_id=existing.correlation_id or execution_id,
+                parent_execution_id=execution_id,
+                trigger_kind="repair",
+                is_repair=True,
+                repair_for_execution_id=execution_id,
+            )
+            rec = store.get_execution(repair_exec_id)
+            if not rec:
+                self.record_result("Phase 2.5 Repair Write", False, "repair execution not found after write")
+                return False
+            if not rec.is_repair:
+                self.record_result("Phase 2.5 Repair Write", False, "is_repair not True")
+                return False
+            if rec.repair_for_execution_id != execution_id:
+                self.record_result("Phase 2.5 Repair Write", False, f"repair_for_execution_id mismatch: {rec.repair_for_execution_id}")
+                return False
+            self.record_result("Phase 2.5 Repair Write", True, "repair execution fields OK")
+            return True
+        except Exception as e:
+            self.record_result("Phase 2.5 Repair Write", False, str(e))
             return False
 
     def _cleanup_test_artifacts(self):

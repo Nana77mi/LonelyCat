@@ -120,6 +120,84 @@ def migration_001_down(conn: sqlite3.Connection):
     print("[migration] 001: Rolled back (testing only)")
 
 
+# ==================== Migration 002: Repair in Graph (Phase 2.5-D) ====================
+
+def migration_002_up(conn: sqlite3.Connection):
+    """Add is_repair and repair_for_execution_id to executions."""
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(executions)")
+    columns = [row[1] for row in cursor.fetchall()]
+
+    if "is_repair" not in columns:
+        cursor.execute("""
+            ALTER TABLE executions
+            ADD COLUMN is_repair INTEGER DEFAULT 0
+        """)
+        cursor.execute("""
+            ALTER TABLE executions
+            ADD COLUMN repair_for_execution_id TEXT
+        """)
+        print("[migration] 002: Added is_repair, repair_for_execution_id")
+    else:
+        print("[migration] 002: Already applied, skipping")
+
+
+def migration_002_down(conn: sqlite3.Connection):
+    """Rollback 002 (testing only): SQLite cannot DROP COLUMN; no-op or recreate table."""
+    print("[migration] 002: Rollback not implemented (SQLite limitation)")
+
+
+# ==================== Migration 003: execution_paths (Phase 2.5-B) ====================
+
+def migration_003_up(conn: sqlite3.Connection):
+    """Create execution_paths table and backfill from executions.affected_paths."""
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS execution_paths (
+            execution_id TEXT NOT NULL,
+            path TEXT NOT NULL,
+            PRIMARY KEY (execution_id, path)
+        )
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_execution_paths_execution_id
+        ON execution_paths(execution_id)
+    """)
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_execution_paths_path
+        ON execution_paths(path)
+    """)
+    # Backfill from executions.affected_paths (JSON array)
+    cursor.execute("SELECT execution_id, affected_paths FROM executions WHERE affected_paths IS NOT NULL AND affected_paths != '[]'")
+    rows = cursor.fetchall()
+    inserted = 0
+    skipped = 0
+    for row in rows:
+        exec_id = row[0]
+        raw = row[1]
+        try:
+            paths = json.loads(raw) if isinstance(raw, str) else raw
+            if not isinstance(paths, list):
+                skipped += 1
+                continue
+            for p in paths:
+                if isinstance(p, str) and p.strip():
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO execution_paths (execution_id, path) VALUES (?, ?)",
+                        (exec_id, p.strip())
+                    )
+                    inserted += cursor.rowcount
+        except Exception:
+            skipped += 1
+    print(f"[migration] 003: execution_paths created and backfilled (inserted={inserted}, skipped_rows={skipped})")
+
+
+def migration_003_down(conn: sqlite3.Connection):
+    """Drop execution_paths table."""
+    conn.execute("DROP TABLE IF EXISTS execution_paths")
+    print("[migration] 003: execution_paths dropped")
+
+
 # ==================== Migration Registry ====================
 
 MIGRATIONS: List[Migration] = [
@@ -128,6 +206,18 @@ MIGRATIONS: List[Migration] = [
         description="Add execution graph fields (correlation_id, parent_execution_id, trigger_kind, run_id)",
         up=migration_001_up,
         down=migration_001_down
+    ),
+    Migration(
+        version=2,
+        description="Add is_repair, repair_for_execution_id (Phase 2.5-D)",
+        up=migration_002_up,
+        down=migration_002_down
+    ),
+    Migration(
+        version=3,
+        description="execution_paths table + backfill (Phase 2.5-B)",
+        up=migration_003_up,
+        down=migration_003_down
     ),
 ]
 

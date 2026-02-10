@@ -5,10 +5,16 @@ import {
   ArtifactInfo,
   ExecutionLineage,
   SimilarExecutionItem,
+  ExecutionReplay,
+  ExecutionEvent,
+  ReflectionHintsResponse,
   getExecution,
   getExecutionArtifacts,
   getExecutionLineage,
   getSimilarExecutions,
+  replayExecution,
+  getExecutionEvents,
+  getReflectionHints,
 } from "../api/executions";
 
 export const ExecutionDetailPage = () => {
@@ -22,28 +28,124 @@ export const ExecutionDetailPage = () => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // 2.5-A1: Compare modal (left = current execution, right = similar)
+  const [compareModalOpen, setCompareModalOpen] = useState(false);
+  const [compareRightId, setCompareRightId] = useState<string | null>(null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareError, setCompareError] = useState<string | null>(null);
+  const [compareData, setCompareData] = useState<{
+    plan_diff: { left: Record<string, unknown>; right: Record<string, unknown> };
+    decision_diff: { left: Record<string, unknown>; right: Record<string, unknown> };
+    step_duration_comparison: { step_name: string; left_seconds: number; right_seconds: number; delta_seconds: number }[];
+  } | null>(null);
+
+  // 2.5-C2: replay for current execution (decision/suggestions) + reflection hints modal
+  const [replayData, setReplayData] = useState<ExecutionReplay | null>(null);
+  const [hintsModalOpen, setHintsModalOpen] = useState(false);
+  const [hintsData, setHintsData] = useState<ReflectionHintsResponse | null>(null);
+  const [hintsLoading, setHintsLoading] = useState(false);
+  const [hintsError, setHintsError] = useState<string | null>(null);
+
   const loadExecutionData = useCallback(async () => {
     if (!executionId) return;
 
     setLoading(true);
     setError(null);
+    setReplayData(null);
     try {
-      const [execData, artifactsData, lineageData, similarData] = await Promise.all([
+      const [execData, artifactsData, lineageData, similarData, replayResp] = await Promise.all([
         getExecution(executionId),
         getExecutionArtifacts(executionId).catch(() => null),
         getExecutionLineage(executionId).catch(() => null),
         getSimilarExecutions(executionId, 5).then((r) => r.similar).catch(() => []),
+        replayExecution(executionId).catch(() => null),
       ]);
       setExecution(execData);
       setArtifacts(artifactsData);
       setLineage(lineageData);
       setSimilarList(similarData);
+      setReplayData(replayResp);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load execution");
     } finally {
       setLoading(false);
     }
   }, [executionId]);
+
+  const openCompare = useCallback(
+    async (rightId: string) => {
+      if (!executionId) return;
+      setCompareRightId(rightId);
+      setCompareModalOpen(true);
+      setCompareLoading(true);
+      setCompareError(null);
+      setCompareData(null);
+      try {
+        const [replayLeft, replayRight, eventsLeft, eventsRight] = await Promise.all([
+          replayExecution(executionId),
+          replayExecution(rightId),
+          getExecutionEvents(executionId, 500),
+          getExecutionEvents(rightId, 500),
+        ]);
+        const plan_diff = {
+          left: {
+            intent: replayLeft.plan?.intent ?? "—",
+            affected_paths: replayLeft.plan?.affected_paths ?? [],
+            risk_level: replayLeft.plan?.risk_level ?? "—",
+            files_changed: replayLeft.execution?.files_changed ?? 0,
+          },
+          right: {
+            intent: replayRight.plan?.intent ?? "—",
+            affected_paths: replayRight.plan?.affected_paths ?? [],
+            risk_level: replayRight.plan?.risk_level ?? "—",
+            files_changed: replayRight.execution?.files_changed ?? 0,
+          },
+        };
+        const decision_diff = {
+          left: {
+            reasons: replayLeft.decision?.reasons ?? [],
+            suggestions: (replayLeft.decision as { suggestions?: string[] })?.suggestions ?? [],
+            reflection_hints_used: (replayLeft.decision as { reflection_hints_used?: boolean })?.reflection_hints_used,
+            hints_digest: (replayLeft.decision as { hints_digest?: string })?.hints_digest,
+          },
+          right: {
+            reasons: replayRight.decision?.reasons ?? [],
+            suggestions: (replayRight.decision as { suggestions?: string[] })?.suggestions ?? [],
+            reflection_hints_used: (replayRight.decision as { reflection_hints_used?: boolean })?.reflection_hints_used,
+            hints_digest: (replayRight.decision as { hints_digest?: string })?.hints_digest,
+          },
+        };
+        const stepDurations = (events: ExecutionEvent[]) => {
+          const byStep: Record<string, number> = {};
+          for (const e of events) {
+            if (e.event === "step_end" && e.step_name != null && e.duration_seconds != null) {
+              byStep[e.step_name] = e.duration_seconds;
+            }
+          }
+          return byStep;
+        };
+        const leftSteps = stepDurations(eventsLeft.events ?? []);
+        const rightSteps = stepDurations(eventsRight.events ?? []);
+        const allStepNames = Array.from(new Set([...Object.keys(leftSteps), ...Object.keys(rightSteps)]));
+        const step_duration_comparison = allStepNames.map((step_name) => {
+          const left_seconds = leftSteps[step_name] ?? 0;
+          const right_seconds = rightSteps[step_name] ?? 0;
+          return {
+            step_name,
+            left_seconds,
+            right_seconds,
+            delta_seconds: right_seconds - left_seconds,
+          };
+        });
+        setCompareData({ plan_diff, decision_diff, step_duration_comparison });
+      } catch (err) {
+        setCompareError(err instanceof Error ? err.message : "Compare failed");
+      } finally {
+        setCompareLoading(false);
+      }
+    },
+    [executionId]
+  );
 
   useEffect(() => {
     loadExecutionData();
@@ -142,6 +244,25 @@ export const ExecutionDetailPage = () => {
         <h1 className="text-2xl font-bold text-gray-900 dark:text-white font-mono">
           {exec.execution_id}
         </h1>
+        {(exec.is_repair || exec.repair_for_execution_id) && (
+          <div className="flex items-center gap-2 mt-2">
+            <span className="text-xs px-2 py-1 rounded bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300 border border-amber-300 dark:border-amber-700">
+              Repair
+            </span>
+            {exec.repair_for_execution_id && (
+              <span className="text-xs">
+                for{" "}
+                <button
+                  type="button"
+                  onClick={() => navigate(`/executions/${exec.repair_for_execution_id}`)}
+                  className="font-mono text-blue-600 dark:text-blue-400 hover:underline"
+                >
+                  {exec.repair_for_execution_id}
+                </button>
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Content */}
@@ -262,12 +383,93 @@ export const ExecutionDetailPage = () => {
             </div>
           </div>
 
-          {/* Lineage (Phase 2.4-A) */}
-          {lineage && (
+          {/* Governance decision & suggestions (Phase 2.5-C2) */}
+          {replayData?.decision && (
             <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
               <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Lineage
+                Governance Decision
               </h2>
+              <div className="space-y-3 text-sm">
+                <div>
+                  <span className="text-gray-500 dark:text-gray-400">Verdict:</span>{" "}
+                  <span className="font-medium text-gray-900 dark:text-white">
+                    {replayData.decision.verdict}
+                  </span>
+                </div>
+                {(replayData.decision.reasons as string[])?.length > 0 && (
+                  <div>
+                    <span className="text-gray-500 dark:text-gray-400">Reasons:</span>{" "}
+                    <span className="text-gray-900 dark:text-white">
+                      {(replayData.decision.reasons as string[]).join("; ")}
+                    </span>
+                  </div>
+                )}
+                {(replayData.decision as { suggestions?: string[] }).suggestions?.length > 0 && (
+                  <div>
+                    <span className="text-gray-500 dark:text-gray-400">Suggestions:</span>{" "}
+                    <ul className="list-disc list-inside mt-1 text-gray-900 dark:text-white">
+                      {(replayData.decision as { suggestions?: string[] }).suggestions!.map((s, i) => (
+                        <li key={i}>{s}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      setHintsModalOpen(true);
+                      setHintsLoading(true);
+                      setHintsError(null);
+                      setHintsData(null);
+                      try {
+                        const h = await getReflectionHints();
+                        setHintsData(h);
+                      } catch (e) {
+                        setHintsError(e instanceof Error ? e.message : "Failed to load hints");
+                      } finally {
+                        setHintsLoading(false);
+                      }
+                    }}
+                    className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                  >
+                    View reflection hints
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Lineage (Phase 2.4-A, 2.5-A2 Jump) */}
+          {lineage && (
+            <div className="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Lineage
+                </h2>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const rootId = lineage.ancestors?.length ? lineage.ancestors[0].execution_id : executionId;
+                      if (rootId) navigate(`/executions/${rootId}`);
+                    }}
+                    className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                  >
+                    Jump to root
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const latestId = lineage.latest_in_correlation?.execution_id ?? executionId;
+                      if (latestId) navigate(`/executions/${latestId}`);
+                    }}
+                    className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                  >
+                    Jump to latest
+                  </button>
+                </div>
+              </div>
               <div className="space-y-4">
                 {/* Path: root → … → current */}
                 {(lineage.ancestors.length > 0 || lineage.descendants.length > 0 || lineage.siblings.length > 0) && (
@@ -372,9 +574,18 @@ export const ExecutionDetailPage = () => {
                           {item.why_similar.join(" · ")}
                         </div>
                       </div>
-                      <span className="text-xs font-mono text-gray-500 dark:text-gray-400 shrink-0">
-                        score {(item.score * 100).toFixed(0)}%
-                      </span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => openCompare(item.execution.execution_id)}
+                          className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                        >
+                          Compare
+                        </button>
+                        <span className="text-xs font-mono text-gray-500 dark:text-gray-400">
+                          score {(item.score * 100).toFixed(0)}%
+                        </span>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -548,6 +759,177 @@ export const ExecutionDetailPage = () => {
           )}
         </div>
       </div>
+
+      {/* 2.5-A1: Compare modal */}
+      {compareModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setCompareModalOpen(false)}
+        >
+          <div
+            className="bg-white dark:bg-gray-900 rounded-lg shadow-xl max-w-4xl w-full max-h-[90vh] overflow-auto m-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                Compare: {executionId} vs {compareRightId}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setCompareModalOpen(false)}
+                className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+              >
+                Close
+              </button>
+            </div>
+            <div className="p-4 space-y-6">
+              {compareLoading && (
+                <div className="text-gray-600 dark:text-gray-400">Loading compare data...</div>
+              )}
+              {compareError && (
+                <div className="text-red-600 dark:text-red-400">{compareError}</div>
+              )}
+              {compareData && !compareLoading && (
+                <>
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Plan</h4>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div className="border border-gray-200 dark:border-gray-700 rounded p-3">
+                        <div className="font-mono text-xs text-gray-500 dark:text-gray-400 mb-1">Current (left)</div>
+                        <div><span className="text-gray-500 dark:text-gray-400">intent:</span> {String(compareData.plan_diff.left.intent)}</div>
+                        <div><span className="text-gray-500 dark:text-gray-400">risk_level:</span> {String(compareData.plan_diff.left.risk_level)}</div>
+                        <div><span className="text-gray-500 dark:text-gray-400">files_changed:</span> {String(compareData.plan_diff.left.files_changed)}</div>
+                        <div><span className="text-gray-500 dark:text-gray-400">affected_paths:</span> {(compareData.plan_diff.left.affected_paths as string[])?.join(", ") || "—"}</div>
+                      </div>
+                      <div className="border border-gray-200 dark:border-gray-700 rounded p-3">
+                        <div className="font-mono text-xs text-gray-500 dark:text-gray-400 mb-1">Similar (right)</div>
+                        <div><span className="text-gray-500 dark:text-gray-400">intent:</span> {String(compareData.plan_diff.right.intent)}</div>
+                        <div><span className="text-gray-500 dark:text-gray-400">risk_level:</span> {String(compareData.plan_diff.right.risk_level)}</div>
+                        <div><span className="text-gray-500 dark:text-gray-400">files_changed:</span> {String(compareData.plan_diff.right.files_changed)}</div>
+                        <div><span className="text-gray-500 dark:text-gray-400">affected_paths:</span> {(compareData.plan_diff.right.affected_paths as string[])?.join(", ") || "—"}</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Decision</h4>
+                    <div className="grid grid-cols-2 gap-4 text-sm">
+                      <div className="border border-gray-200 dark:border-gray-700 rounded p-3">
+                        <div className="font-mono text-xs text-gray-500 dark:text-gray-400 mb-1">Current (left)</div>
+                        <div><span className="text-gray-500 dark:text-gray-400">reasons:</span> {(compareData.decision_diff.left.reasons as string[])?.join("; ") || "—"}</div>
+                        {(compareData.decision_diff.left.suggestions as string[])?.length > 0 && (
+                          <div><span className="text-gray-500 dark:text-gray-400">suggestions:</span> {(compareData.decision_diff.left.suggestions as string[]).join("; ")}</div>
+                        )}
+                      </div>
+                      <div className="border border-gray-200 dark:border-gray-700 rounded p-3">
+                        <div className="font-mono text-xs text-gray-500 dark:text-gray-400 mb-1">Similar (right)</div>
+                        <div><span className="text-gray-500 dark:text-gray-400">reasons:</span> {(compareData.decision_diff.right.reasons as string[])?.join("; ") || "—"}</div>
+                        {(compareData.decision_diff.right.suggestions as string[])?.length > 0 && (
+                          <div><span className="text-gray-500 dark:text-gray-400">suggestions:</span> {(compareData.decision_diff.right.suggestions as string[]).join("; ")}</div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div>
+                    <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Step duration (s)</h4>
+                    <table className="w-full text-sm border border-gray-200 dark:border-gray-700">
+                      <thead>
+                        <tr className="bg-gray-50 dark:bg-gray-800">
+                          <th className="text-left p-2">step_name</th>
+                          <th className="text-right p-2">Left</th>
+                          <th className="text-right p-2">Right</th>
+                          <th className="text-right p-2">Δ (right−left)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {compareData.step_duration_comparison.map((row) => (
+                          <tr key={row.step_name} className="border-t border-gray-200 dark:border-gray-700">
+                            <td className="p-2 font-mono">{row.step_name}</td>
+                            <td className="p-2 text-right font-mono">{row.left_seconds.toFixed(3)}</td>
+                            <td className="p-2 text-right font-mono">{row.right_seconds.toFixed(3)}</td>
+                            <td className={`p-2 text-right font-mono ${row.delta_seconds >= 0 ? "text-orange-600 dark:text-orange-400" : "text-green-600 dark:text-green-400"}`}>
+                              {row.delta_seconds >= 0 ? "+" : ""}{row.delta_seconds.toFixed(3)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 2.5-C2: Reflection hints modal */}
+      {hintsModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+          onClick={() => setHintsModalOpen(false)}
+        >
+          <div
+            className="bg-white dark:bg-gray-900 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-auto m-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Reflection hints</h3>
+              <button
+                type="button"
+                onClick={() => setHintsModalOpen(false)}
+                className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
+              >
+                Close
+              </button>
+            </div>
+            <div className="p-4 space-y-4 text-sm">
+              {hintsLoading && <div className="text-gray-600 dark:text-gray-400">Loading…</div>}
+              {hintsError && <div className="text-red-600 dark:text-red-400">{hintsError}</div>}
+              {hintsData && !hintsLoading && (
+                <>
+                  {hintsData.window && (
+                    <div><span className="text-gray-500 dark:text-gray-400">Window:</span> {hintsData.window}</div>
+                  )}
+                  {hintsData.suggested_policy?.length > 0 && (
+                    <div>
+                      <div className="font-medium text-gray-700 dark:text-gray-300 mb-1">Suggested policy</div>
+                      <ul className="list-disc list-inside text-gray-900 dark:text-white">{hintsData.suggested_policy.map((s, i) => <li key={i}>{s}</li>)}</ul>
+                    </div>
+                  )}
+                  {hintsData.false_allow_patterns?.length > 0 && (
+                    <div>
+                      <div className="font-medium text-gray-700 dark:text-gray-300 mb-1">False allow patterns</div>
+                      <ul className="list-disc list-inside text-gray-900 dark:text-white">{hintsData.false_allow_patterns.map((s, i) => <li key={i}>{s}</li>)}</ul>
+                    </div>
+                  )}
+                  {hintsData.hot_error_steps?.length > 0 && (
+                    <div><span className="text-gray-500 dark:text-gray-400">Hot error steps:</span> {hintsData.hot_error_steps.join(", ")}</div>
+                  )}
+                  {hintsData.slow_steps?.length > 0 && (
+                    <div><span className="text-gray-500 dark:text-gray-400">Slow steps:</span> {hintsData.slow_steps.join(", ")}</div>
+                  )}
+                  {hintsData.evidence_execution_ids?.length > 0 && (
+                    <div>
+                      <div className="font-medium text-gray-700 dark:text-gray-300 mb-1">Evidence (executions)</div>
+                      <div className="flex flex-wrap gap-2">
+                        {hintsData.evidence_execution_ids.map((id) => (
+                          <button
+                            key={id}
+                            type="button"
+                            onClick={() => { setHintsModalOpen(false); navigate(`/executions/${id}`); }}
+                            className="text-xs font-mono px-2 py-1 rounded border border-gray-300 dark:border-gray-600 text-blue-600 dark:text-blue-400 hover:underline"
+                          >
+                            {id}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

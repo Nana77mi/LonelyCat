@@ -278,6 +278,7 @@ class GovernanceDecision:
     # Verdict
     verdict: Verdict
     reasons: List[str]         # Machine-readable reasons
+    suggestions: List[str] = field(default_factory=list)  # Phase 2.5-C: reflection hints (not mixed into reasons)
 
     # Effective Risk (computed by WriteGate)
     risk_level_effective: RiskLevel
@@ -306,6 +307,7 @@ class GovernanceDecision:
             "changeset_id": self.changeset_id,
             "verdict": self.verdict.value,
             "reasons": self.reasons,
+            "suggestions": self.suggestions,
             "violated_policies": self.violated_policies,
             "required_actions": self.required_actions,
             "risk_level_effective": self.risk_level_effective.value,
@@ -330,6 +332,7 @@ class GovernanceDecision:
             changeset_id=data["changeset_id"],
             verdict=Verdict(data["verdict"]),
             reasons=data["reasons"],
+            suggestions=data.get("suggestions", []),
             violated_policies=data.get("violated_policies", []),
             required_actions=data.get("required_actions", []),
             risk_level_effective=RiskLevel(data["risk_level_effective"]),

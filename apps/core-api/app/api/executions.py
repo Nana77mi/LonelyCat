@@ -85,6 +85,9 @@ class ExecutionSummary(BaseModel):
     parent_execution_id: Optional[str] = None
     trigger_kind: Optional[str] = None
     run_id: Optional[str] = None
+    # Phase 2.5-D: repair in graph
+    is_repair: Optional[bool] = False
+    repair_for_execution_id: Optional[str] = None
 
 
 class StepDetail(BaseModel):
@@ -149,6 +152,8 @@ def _record_to_summary(record: ExecutionRecord) -> ExecutionSummary:
         parent_execution_id=record.parent_execution_id,
         trigger_kind=record.trigger_kind,
         run_id=record.run_id,
+        is_repair=record.is_repair,
+        repair_for_execution_id=record.repair_for_execution_id,
     )
 
 
@@ -418,11 +423,21 @@ async def get_execution_lineage(
         def to_dict_list(records):
             return [r.to_dict() for r in records] if records else []
 
+        # Phase 2.5-A2: latest in same correlation (started_at max)
+        latest_in_correlation = None
+        corr_id = lineage["execution"].correlation_id
+        if corr_id:
+            chain = execution_store.list_executions_by_correlation(corr_id, limit=500)
+            if chain:
+                # list is ORDER BY started_at ASC, so last is latest
+                latest_in_correlation = chain[-1].to_dict()
+
         return {
             "execution": lineage["execution"].to_dict(),
             "ancestors": to_dict_list(lineage["ancestors"]),
             "descendants": to_dict_list(lineage["descendants"]),
             "siblings": to_dict_list(lineage["siblings"]),
+            "latest_in_correlation": latest_in_correlation,
         }
     except HTTPException:
         raise
@@ -593,7 +608,10 @@ async def replay_execution_endpoint(execution_id: str):
                 "id": execution_data["decision"].get("id"),
                 "verdict": execution_data["decision"].get("verdict"),
                 "risk_level_effective": execution_data["decision"].get("risk_level_effective"),
-                "reasons": execution_data["decision"].get("reasons", [])
+                "reasons": execution_data["decision"].get("reasons", []),
+                "suggestions": execution_data["decision"].get("suggestions", []),
+                "reflection_hints_used": execution_data["decision"].get("reflection_hints_used", False),
+                "hints_digest": execution_data["decision"].get("hints_digest"),
             },
             "execution": {
                 "status": execution_data["execution"].get("status"),

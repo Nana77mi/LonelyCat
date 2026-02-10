@@ -61,6 +61,7 @@ from app.api.runs import router as runs_router
 from app.api.sandbox import router as sandbox_router
 from app.api.settings import router as settings_router, get_current_settings
 from app.api.skills import router as skills_router
+from app.api.reflection import router as reflection_router
 from app.db import SessionLocal, init_db as init_core_db
 from app.settings import Settings
 
@@ -118,6 +119,7 @@ app.include_router(sandbox_router, prefix="/sandbox")
 app.include_router(skills_router, prefix="/skills")
 app.include_router(governance_router)  # Governance endpoints (WriteGate)
 app.include_router(executions_router)  # Execution history (Phase 2.3-A)
+app.include_router(reflection_router)  # Reflection hints (Phase 2.5-C2)
 app.include_router(internal_router)  # 内部 API，无需 prefix（已在 router 中定义）
 
 
