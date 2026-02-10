@@ -54,3 +54,17 @@
 - repair suggest：可选 dry-run（只生成不执行）返回 200 或 400（非失败执行）。
 
 每完成 A/B/C/D/E 之一，即在 prod_validation 或 pytest 中加对应轻量检查，避免回归。
+
+---
+
+## Phase 2.5-D：Repair 进入图谱（写入规则）
+
+当**执行 repair**（非 suggest repair）时，在 `record_execution_start` 中必须传入：
+
+- `parent_execution_id` = \<failed_execution_id\>
+- `trigger_kind` = `"repair"`
+- `is_repair` = `True`（存为 1）
+- `repair_for_execution_id` = \<failed_execution_id\>
+- `correlation_id` = 与失败 exec 一致（保持同链）
+
+这样 repair 执行会出现在 lineage 的 descendants 中，并可被 lineage/similar/analytics 覆盖，系统自洽。
